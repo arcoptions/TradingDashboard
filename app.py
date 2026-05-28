@@ -9,7 +9,6 @@ from datetime import datetime
 st.set_page_config(page_title="ARC Trading Dashboard", layout="wide")
 st.title("📈 ARC Trading Dashboard & Journal")
 
-# --- INITIALIZE SESSION STATE FOR NAVIGATION ---
 if "viewing_trade" not in st.session_state:
     st.session_state.viewing_trade = None
 
@@ -101,7 +100,6 @@ try:
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    # Primary Trades Sheet
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     required_cols = ["Live Price", "Exit Price"]
@@ -110,13 +108,12 @@ try:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
             
-    # Secondary Scanners Sheet (Auto-creates if missing)
     worksheet_list = [ws.title for ws in sh.worksheets()]
     if "Scanners" in worksheet_list:
         scanner_sheet = sh.worksheet("Scanners")
     else:
         scanner_sheet = sh.add_worksheet(title="Scanners", rows="1000", cols="10")
-        scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Close", "% Change", "Volume", "Status", "Notes / Analysis"])
+        scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis"])
     scanner_headers = scanner_sheet.row_values(1)
     
 except Exception as e:
@@ -226,9 +223,7 @@ elif current_page == "📡 Chartink Scanners":
         if st.button("Save Scanned Stocks", type="primary"):
             if chartink_data:
                 try:
-                    # Parse the Tab-Separated Values from Chartink's copy button
                     df_pasted = pd.read_csv(io.StringIO(chartink_data), sep='\t')
-                    
                     if 'Symbol' in df_pasted.columns:
                         rows_to_add = []
                         for _, row in df_pasted.iterrows():
@@ -239,11 +234,10 @@ elif current_page == "📡 Chartink Scanners":
                             set_sv("Date Added", datetime.today().strftime("%Y-%m-%d"))
                             set_sv("Scanner", scan_type)
                             set_sv("Symbol", str(row.get('Symbol', '')))
-                            set_sv("Close", str(row.get('Close', '')))
-                            set_sv("% Change", str(row.get('%_change', '')))
-                            set_sv("Volume", str(row.get('Volume', '')))
+                            set_sv("Trigger Price", str(row.get('Close', '')))
+                            set_sv("Trigger Time", datetime.now().strftime("%I:%M %p"))
                             set_sv("Status", "Monitoring")
-                            set_sv("Notes / Analysis", "")
+                            set_sv("Notes / Analysis", f"Manual Copy | Vol: {row.get('Volume', 'N/A')}")
                             rows_to_add.append(new_row)
                         
                         if rows_to_add:
@@ -253,7 +247,7 @@ elif current_page == "📡 Chartink Scanners":
                     else:
                         st.sidebar.error("Could not find a 'Symbol' column in pasted data.")
                 except Exception as e:
-                    st.sidebar.error("Failed to parse Chartink data. Make sure to use the Copy button.")
+                    st.sidebar.error("Failed to parse data. Make sure to use Chartink's Copy button.")
 
 # --- 5. AUTOMATED BACKGROUND DATA SYNC ENGINES ---
 def run_background_sync(df_filtered, state_key):
@@ -329,7 +323,6 @@ if current_page == "📈 Options Tracker":
         }
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
 
-        # DRILL-DOWN JOURNAL
         if st.session_state.viewing_trade:
             st.button("⬅️ Back to Dashboard", on_click=close_journal, type="secondary")
             st.header(f"🧠 Journal: {st.session_state.viewing_trade}")
@@ -365,27 +358,26 @@ if current_page == "📈 Options Tracker":
                         worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
                         st.success("Notes synchronized successfully!")
                         st.rerun()
-        # MASTER TABLES
         else:
             tab1, tab2, tab3 = st.tabs(["📋 Watchlist Ideas", "💼 Active Trades", "🔒 Closed Trades"])
             
             with tab1:
                 st.caption("Check the **🔍** box next to any Option to instantly open its Deep Dive Journal.")
-                df_wl = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Watchlist"].copy().reset_index(drop=True)
+                df_wl = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor"}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("Watchlist is currently empty.")
 
             with tab2:
-                df_act = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Active"].copy().reset_index(drop=True)
+                df_act = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
                     st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor"}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No active trades tracking right now.")
                     
             with tab3:
-                df_cls = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Closed"].copy().reset_index(drop=True)
+                df_cls = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
                     st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                         on_change=run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor"}, column_config=table_column_config, 
@@ -407,15 +399,17 @@ elif current_page == "📡 Chartink Scanners":
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
         
-        scan_view_cols = ["Date Added", "Symbol", "Close", "% Change", "Volume", "Status", "Notes / Analysis", "_Sheet_Row"]
+        # CLEANED VIEW COLUMNS (Removed old placeholders)
+        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
             "_Sheet_Row": None,
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True),
+            "Trigger Price": st.column_config.TextColumn("Trigger Price"),
+            "Trigger Time": st.column_config.TextColumn("Trigger Time"),
             "Notes / Analysis": st.column_config.TextColumn("Notes / Analysis")
         }
         
-        # Clean null values
-        for col in ["Notes / Analysis", "Close", "% Change", "Volume"]:
+        for col in ["Notes / Analysis", "Trigger Price", "Trigger Time"]:
             if col in df_scan.columns:
                 df_scan[col] = df_scan[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
@@ -428,7 +422,7 @@ elif current_page == "📡 Chartink Scanners":
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
                         on_change=run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}"},
                         column_config=scan_col_config,
-                        disabled=["Date Added", "Symbol", "Close", "% Change", "Volume"]
+                        disabled=["Date Added", "Symbol", "Trigger Price", "Trigger Time"]
                     )
                 else:
                     st.info(f"No stocks currently sitting in {filter_name}.")
@@ -437,4 +431,4 @@ elif current_page == "📡 Chartink Scanners":
         render_scanner_tab(tab_ce2, "CE2")
         render_scanner_tab(tab_pos, "Positional")
     else:
-        st.info("Scanner database is empty. Copy and Paste a table from Chartink to begin!")
+        st.info("Scanner database is empty. Waiting for automatic webhooks to fire!")
