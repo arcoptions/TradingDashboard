@@ -1,6 +1,15 @@
 [theme]
-primaryColor = "#D4AF37"
-backgroundColor = "#0B101A"
-secondaryBackgroundColor = "#131A26"
-textColor = "#FAFAFA"
+# A rich, deep gold pulled from your logo that contrasts perfectly against white
+primaryColor = "#B58B22"
+
+# Pure crisp white for the main data tables
+backgroundColor = "#FFFFFF"
+
+# A very subtle, cool slate-gray for the sidebar to separate navigation
+secondaryBackgroundColor = "#F4F6F9"
+
+# Deep charcoal/navy text (much easier on the eyes than pure #000000 black)
+textColor = "#111827"
+
+# Clean, modern font to match your logo
 font = "sans serif"
