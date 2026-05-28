@@ -212,7 +212,6 @@ def run_background_sync(df_filtered, state_key):
         edited_rows = editor_state.get("edited_rows", {})
         for idx, changes in list(edited_rows.items()):
             if "🔍 View" in changes and changes["🔍 View"] is True:
-                # User clicked the journal button. Set state and ignore this "edit"
                 sym = df_filtered.iloc[idx]['Symbol / Asset']
                 st.session_state.viewing_trade = sym
                 del changes["🔍 View"]
@@ -240,20 +239,21 @@ def run_background_sync(df_filtered, state_key):
 if not initial_df.empty:
     initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
     
-    # Inject the UI-Only Action Column
     initial_df["🔍 View"] = False
     
-    view_cols = ["🔍 View", "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
+    # REORDERED COLUMNS: The 🔍 button is now grouped tightly with the Option string
+    view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "🔍 View", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
     for col in view_cols:
         if col not in initial_df.columns: initial_df[col] = ""
         elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
             initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
-    # Centralized column formatting
+    # UI RENAMING AND FORMATTING
     table_column_config = {
-        "🔍 View": st.column_config.CheckboxColumn("🔍 View", help="Check box to open Journal", default=False),
-        "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Idea Source"), # Cleaned UI Header
+        "🔍 View": st.column_config.CheckboxColumn("🔍", help="Check box to open Journal", default=False),
+        "Symbol / Asset": st.column_config.TextColumn("Option"), # UI RENAME 
+        "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Idea Source"), 
         "_Sheet_Row": None, 
         "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
@@ -315,7 +315,7 @@ if not initial_df.empty:
         
         # TAB 1: WATCHLIST
         with tab1:
-            st.caption("Check the **🔍 View** box in any row to instantly open its Deep Dive Journal.")
+            st.caption("Check the **🔍** box next to any Option to instantly open its Deep Dive Journal.")
             df_watchlist = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Watchlist"].copy().reset_index(drop=True)
             
             if not df_watchlist.empty:
@@ -331,7 +331,7 @@ if not initial_df.empty:
 
         # TAB 2: ACTIVE TRADES
         with tab2:
-            st.caption("Check the **🔍 View** box in any row to instantly open its Deep Dive Journal.")
+            st.caption("Check the **🔍** box next to any Option to instantly open its Deep Dive Journal.")
             df_active = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Active"].copy().reset_index(drop=True)
             
             if not df_active.empty:
@@ -347,7 +347,7 @@ if not initial_df.empty:
                 
         # TAB 3: CLOSED TRADES
         with tab3:
-            st.caption("Check the **🔍 View** box in any row to instantly review your historical executions.")
+            st.caption("Check the **🔍** box next to any Option to instantly review your historical executions.")
             df_closed = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Closed"].copy().reset_index(drop=True)
             
             if not df_closed.empty:
@@ -356,7 +356,6 @@ if not initial_df.empty:
                     use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                     on_change=run_background_sync, kwargs={"df_filtered": df_closed, "state_key": "cls_editor"},
                     column_config=table_column_config,
-                    # Lock everything in closed trades except the View Journal checkbox
                     disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"]
                 )
             else:
