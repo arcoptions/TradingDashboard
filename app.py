@@ -12,9 +12,6 @@ st.title("📈 ARC Trading Dashboard & Journal")
 if "viewing_trade" not in st.session_state:
     st.session_state.viewing_trade = None
 
-def open_journal(trade_sym):
-    st.session_state.viewing_trade = trade_sym
-
 def close_journal():
     st.session_state.viewing_trade = None
 
@@ -117,7 +114,6 @@ except Exception as e:
 # --- 4. SIDEBAR PANEL: DATA ENTRY ---
 st.sidebar.header("📝 Data Entry Hub")
 
-# BULK IMPORT ENGINE
 with st.sidebar.expander("📥 Bulk Import (Multiple Lines)"):
     bulk_text = st.text_area("Raw Text Block:")
     bulk_source = st.selectbox("Source for all:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"], key="bulk_src")
@@ -150,7 +146,6 @@ with st.sidebar.expander("📥 Bulk Import (Multiple Lines)"):
             st.sidebar.success(f"Logged {len(rows_to_insert)} items successfully!")
             st.rerun()
 
-# SINGLE LOG ENTRY
 with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
     raw_tip = st.text_area("⚡ Quick Paste Single:")
     parsed_data = parse_telegram_tip(raw_tip)
@@ -209,11 +204,22 @@ initial_data = worksheet.get_all_records()
 initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
 def run_background_sync(df_filtered, state_key):
-    """Saves to Google Sheets instantly. Warning removed because Streamlit auto-reruns."""
+    """Intercepts UI clicks to open the journal, and syncs standard edits to Google Sheets."""
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
         
-        # Row Deletions
+        # 1. INTERCEPT JOURNAL 'VIEW' CLICKS
+        edited_rows = editor_state.get("edited_rows", {})
+        for idx, changes in list(edited_rows.items()):
+            if "🔍 View" in changes and changes["🔍 View"] is True:
+                # User clicked the journal button. Set state and ignore this "edit"
+                sym = df_filtered.iloc[idx]['Symbol / Asset']
+                st.session_state.viewing_trade = sym
+                del changes["🔍 View"]
+                if not changes:
+                    del editor_state["edited_rows"][idx]
+        
+        # 2. PROCESS ROW DELETIONS
         deleted_indices = editor_state.get("deleted_rows", [])
         if deleted_indices:
             rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
@@ -221,10 +227,9 @@ def run_background_sync(df_filtered, state_key):
             for r in rows_to_delete:
                 worksheet.delete_rows(r)
             
-        # Inline Cell Edits
-        edited_rows = editor_state.get("edited_rows", {})
-        if edited_rows:
-            for idx, changes in edited_rows.items():
+        # 3. PROCESS INLINE CELL EDITS
+        if editor_state.get("edited_rows"):
+            for idx, changes in editor_state["edited_rows"].items():
                 sheet_row = df_filtered.iloc[idx]['_Sheet_Row']
                 for col_name, new_val in changes.items():
                     if col_name in sheet_headers:
@@ -234,22 +239,38 @@ def run_background_sync(df_filtered, state_key):
 # --- 6. MAIN ENGINE: MASTER-DETAIL VIEW ---
 if not initial_df.empty:
     initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
-    view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
+    
+    # Inject the UI-Only Action Column
+    initial_df["🔍 View"] = False
+    
+    view_cols = ["🔍 View", "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
     for col in view_cols:
         if col not in initial_df.columns: initial_df[col] = ""
         elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
             initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
+    # Centralized column formatting
+    table_column_config = {
+        "🔍 View": st.column_config.CheckboxColumn("🔍 View", help="Check box to open Journal", default=False),
+        "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Idea Source"), # Cleaned UI Header
+        "_Sheet_Row": None, 
+        "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+        "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
+        "Target 1": st.column_config.TextColumn("Target 1"),
+        "Target 2": st.column_config.TextColumn("Target 2"),
+        "Live Price": st.column_config.TextColumn("Live Price"),
+        "Exit Price": st.column_config.TextColumn("Exit Price"),
+    }
+    disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
+
     # ==========================================
     # DRILL-DOWN VIEW: JOURNAL DEEP DIVE
     # ==========================================
     if st.session_state.viewing_trade:
-        # Top Navigation Bar
         st.button("⬅️ Back to Dashboard", on_click=close_journal, type="secondary")
         st.header(f"🧠 Journal: {st.session_state.viewing_trade}")
         
-        # Pull latest data for this specific trade
         trade_data = initial_df[initial_df['Symbol / Asset'] == st.session_state.viewing_trade].iloc[0]
         sheet_row_id = int(trade_data['_Sheet_Row'])
         
@@ -260,7 +281,6 @@ if not initial_df.empty:
             col3.metric("Live Price", trade_data.get('Live Price', '-'))
             col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
             
-            # PNL Engine
             try:
                 entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
                 exit_val = float(str(trade_data['Exit Price']))
@@ -295,7 +315,7 @@ if not initial_df.empty:
         
         # TAB 1: WATCHLIST
         with tab1:
-            st.caption("Double-click cells to edit. Select the checkbox on the far left and click the Trash icon to delete.")
+            st.caption("Check the **🔍 View** box in any row to instantly open its Deep Dive Journal.")
             df_watchlist = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Watchlist"].copy().reset_index(drop=True)
             
             if not df_watchlist.empty:
@@ -303,23 +323,15 @@ if not initial_df.empty:
                     df_watchlist[view_cols],
                     use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                     on_change=run_background_sync, kwargs={"df_filtered": df_watchlist, "state_key": "wl_editor"},
-                    column_config={"_Sheet_Row": None, "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True)},
-                    disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
+                    column_config=table_column_config,
+                    disabled=disabled_cols
                 )
-                
-                st.markdown("##### 🔍 Deep Dive")
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    wl_sel = st.selectbox("Select Idea to Journal:", df_watchlist['Symbol / Asset'].tolist(), key="wl_select", label_visibility="collapsed")
-                with c2:
-                    # FIX: ADDED UNIQUE KEY HERE
-                    st.button("View Trade Details", key="btn_view_wl", on_click=open_journal, args=(wl_sel,), use_container_width=True)
             else:
                 st.info("Watchlist is currently empty.")
 
         # TAB 2: ACTIVE TRADES
         with tab2:
-            st.caption("Double-click cells to edit. Select the checkbox on the far left and click the Trash icon to delete.")
+            st.caption("Check the **🔍 View** box in any row to instantly open its Deep Dive Journal.")
             df_active = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Active"].copy().reset_index(drop=True)
             
             if not df_active.empty:
@@ -327,35 +339,26 @@ if not initial_df.empty:
                     df_active[view_cols],
                     use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                     on_change=run_background_sync, kwargs={"df_filtered": df_active, "state_key": "act_editor"},
-                    column_config={"_Sheet_Row": None, "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True)},
-                    disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
+                    column_config=table_column_config,
+                    disabled=disabled_cols
                 )
-                
-                st.markdown("##### 🔍 Deep Dive")
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    act_sel = st.selectbox("Select Trade to Journal:", df_active['Symbol / Asset'].tolist(), key="act_select", label_visibility="collapsed")
-                with c2:
-                    # FIX: ADDED UNIQUE KEY HERE
-                    st.button("View Trade Details", key="btn_view_act", on_click=open_journal, args=(act_sel,), use_container_width=True)
             else:
                 st.info("No active trades tracking right now.")
                 
         # TAB 3: CLOSED TRADES
         with tab3:
-            st.caption("Review your historical executions.")
+            st.caption("Check the **🔍 View** box in any row to instantly review your historical executions.")
             df_closed = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Closed"].copy().reset_index(drop=True)
             
             if not df_closed.empty:
-                st.dataframe(df_closed[view_cols], use_container_width=True, hide_index=True, column_config={"_Sheet_Row": None})
-                
-                st.markdown("##### 🔍 Deep Dive")
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    cls_sel = st.selectbox("Select Past Trade to Review:", df_closed['Symbol / Asset'].tolist(), key="cls_select", label_visibility="collapsed")
-                with c2:
-                    # FIX: ADDED UNIQUE KEY HERE
-                    st.button("View Post-Trade Analysis", key="btn_view_cls", on_click=open_journal, args=(cls_sel,), use_container_width=True)
+                st.data_editor(
+                    df_closed[view_cols],
+                    use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
+                    on_change=run_background_sync, kwargs={"df_filtered": df_closed, "state_key": "cls_editor"},
+                    column_config=table_column_config,
+                    # Lock everything in closed trades except the View Journal checkbox
+                    disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"]
+                )
             else:
                 st.info("No closed trades logged yet.")
                 
