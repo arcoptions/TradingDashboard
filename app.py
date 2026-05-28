@@ -113,7 +113,16 @@ auto_sec_id = ""
 auto_exch = "NSE_EQ"
 
 if search_query and not scrip_df.empty:
-    mask = scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.contains(search_query.upper(), case=False)
+    # 1. Split the search query into individual words (e.g., ["UPL", "660", "CE"])
+    search_terms = search_query.upper().split()
+    
+    # 2. Create a base mask that is True for everything
+    mask = pd.Series([True] * len(scrip_df))
+    
+    # 3. Iteratively filter down to rows that contain ALL the typed words
+    for term in search_terms:
+        mask = mask & scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.upper().str.contains(term, regex=False)
+    
     results = scrip_df[mask].head(30)
     
     if not results.empty:
