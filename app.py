@@ -15,18 +15,15 @@ def parse_telegram_tip(text):
     if not text:
         return data
         
-    # Extract Symbol & Trade Type (Looks for patterns like "UPL 660 ce")
     option_match = re.search(r'([A-Z\&]+)\s+(\d+)\s+(ce|pe|CE|PE)', text)
     if option_match:
         data["symbol"] = f"{option_match.group(1)} {option_match.group(2)} {option_match.group(3).upper()}"
         data["trade_type"] = "Option"
     else:
-        # Fallback for Equity (Looks for the first ALL CAPS word, e.g., "SPARC")
         equity_match = re.search(r'^([A-Z\&]+)\b', text)
         if equity_match:
             data["symbol"] = equity_match.group(1)
             
-    # Extract Entry Range or CMP
     range_match = re.search(r'range\s+([\d\.-]+)', text, re.IGNORECASE)
     if range_match:
         data["entry"] = range_match.group(1)
@@ -35,17 +32,14 @@ def parse_telegram_tip(text):
         if cmp_match:
             data["entry"] = cmp_match.group(1)
             
-    # Extract Add-on Levels
     add_match = re.search(r'add more\s*(?:levels?)?[-\s]*([\d\.\s-]+?)(?:\s+if comes|\.|\s+SL)', text, re.IGNORECASE)
     if add_match:
         data["add_levels"] = add_match.group(1).strip('- ')
         
-    # Extract Stop Loss (Grabs the number and terms like 'clsb')
     sl_match = re.search(r'SL\s+([\d\.]+\s*(?:clsb)?)', text, re.IGNORECASE)
     if sl_match:
         data["sl"] = sl_match.group(1)
         
-    # Extract Targets (Grabs the first two numbers after the word "Target")
     target_match = re.search(r'Target\s+([\d\.\s-]+)', text, re.IGNORECASE)
     if target_match:
         targets = re.findall(r'([\d\.]+)', target_match.group(1))
@@ -57,16 +51,20 @@ def parse_telegram_tip(text):
     return data
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER ---
+# Adding version=2 breaks the old broken cache and forces a fresh download
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master():
+def get_dhan_scrip_master(version=2):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
+        if df.empty:
+            st.error("Dhan CSV downloaded empty. Retrying...")
         return df
     except Exception as e:
+        st.error(f"Failed to download instrument list: {e}")
         return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master()
+scrip_df = get_dhan_scrip_master(version=2)
 
 # --- 3. AUTHENTICATION VAULT ---
 try:
@@ -87,24 +85,22 @@ except Exception as e:
 # --- 4. LIVE MARKET DATA FUNCTION ---
 def get_live_price(exchange, security_id):
     if not security_id or str(security_id).strip() == "":
-        return 0.0
+        return "No ID"
     try:
-        req_dict = {str(exchange): [int(str(security_id).strip())]}
-        quote = dhan.ticker_data(req_dict)
-        ltp = quote.get('data', {}).get(str(exchange), {}).get(str(security_id).strip(), {}).get('last_price', 0.0)
-        return float(ltp)
+        req_dict = {str(exchange): [int(float(str(security_id).strip()))]}
+        quote = dhan.ticker_data(securities=req_dict)
+        ltp = quote.get('data', {}).get(str(exchange), {}).get(str(security_id).strip(), {}).get('last_price', "API Error")
+        return ltp if ltp != "API Error" else "Check ID"
     except Exception as e:
-        return 0.0
+        return "Error"
 
 # --- 5. SIDEBAR: QUICK PASTE & LOGGING ---
 st.sidebar.header("📝 Log a New Tip or Trade")
 
-# A. The Quick Paste Text Box
 st.sidebar.markdown("### ⚡ Quick Paste Tip")
 raw_tip = st.sidebar.text_area("Paste raw Telegram text here:")
 parsed_data = parse_telegram_tip(raw_tip)
 
-# B. Search Engine (Automatically uses parsed symbol if available)
 st.sidebar.markdown("### 🔍 Find Instrument")
 search_query = st.sidebar.text_input("Search (e.g., GMRINFRA 100 CE)", value=parsed_data["symbol"])
 
@@ -113,13 +109,8 @@ auto_sec_id = ""
 auto_exch = "NSE_EQ"
 
 if search_query and not scrip_df.empty:
-    # 1. Split the search query into individual words (e.g., ["UPL", "660", "CE"])
     search_terms = search_query.upper().split()
-    
-    # 2. Create a base mask that is True for everything
     mask = pd.Series([True] * len(scrip_df))
-    
-    # 3. Iteratively filter down to rows that contain ALL the typed words
     for term in search_terms:
         mask = mask & scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.upper().str.contains(term, regex=False)
     
@@ -140,13 +131,11 @@ if search_query and not scrip_df.empty:
     else:
         st.sidebar.warning("No instruments found. Try tweaking the search.")
 
-# C. The Auto-Populating Form
 with st.sidebar.form("entry_form"):
     date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
     source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
     
     st.markdown("### Trade Details")
-    # Uses the Dhan formatted symbol if found, otherwise uses the parsed raw symbol
     symbol = st.text_input("Symbol / Asset", value=auto_symbol if auto_symbol else parsed_data["symbol"])
     
     trade_options = ["Option", "Equity"]
@@ -169,7 +158,6 @@ with st.sidebar.form("entry_form"):
     status = st.selectbox("Status", ["Watchlist", "Active", "Closed"])
     
     st.markdown("### Execution Plan")
-    # Auto-filling the execution fields from the regex parser
     entry_range = st.text_input("Entry CMP / Range", value=parsed_data["entry"])
     add_levels = st.text_input("Add-On / Dip Levels", value=parsed_data["add_levels"])
     sl = st.text_input("Stop Loss (SL)", value=parsed_data["sl"])
