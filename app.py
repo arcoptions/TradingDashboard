@@ -15,14 +15,18 @@ def parse_telegram_tip(text):
     if not text:
         return data
         
-    option_match = re.search(r'([A-Z\&]+)\s+(\d+)\s+(ce|pe|CE|PE)', text)
+    # Upgraded to handle 'Call' and 'Put' and convert to CE/PE automatically
+    option_match = re.search(r'([A-Z\&]+)\s+(\d+)\s+(ce|pe|call|put)', text, re.IGNORECASE)
     if option_match:
-        data["symbol"] = f"{option_match.group(1)} {option_match.group(2)} {option_match.group(3).upper()}"
+        opt_type = option_match.group(3).upper()
+        if opt_type == 'CALL': opt_type = 'CE'
+        if opt_type == 'PUT': opt_type = 'PE'
+        data["symbol"] = f"{option_match.group(1).upper()} {option_match.group(2)} {opt_type}"
         data["trade_type"] = "Option"
     else:
         equity_match = re.search(r'^([A-Z\&]+)\b', text)
         if equity_match:
-            data["symbol"] = equity_match.group(1)
+            data["symbol"] = equity_match.group(1).upper()
             
     range_match = re.search(r'range\s+([\d\.-]+)', text, re.IGNORECASE)
     if range_match:
@@ -51,20 +55,23 @@ def parse_telegram_tip(text):
     return data
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER ---
-# Adding version=2 breaks the old broken cache and forces a fresh download
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(version=2):
+def get_dhan_scrip_master(version=4):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
         if df.empty:
             st.error("Dhan CSV downloaded empty. Retrying...")
+            return df
+        
+        # NEW: Strictly filter out BSE to prevent API errors on illiquid contracts
+        df = df[df['SEM_EXM_EXCH_ID'] == 'NSE']
         return df
     except Exception as e:
         st.error(f"Failed to download instrument list: {e}")
         return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(version=2)
+scrip_df = get_dhan_scrip_master(version=4)
 
 # --- 3. AUTHENTICATION VAULT ---
 try:
@@ -84,13 +91,24 @@ except Exception as e:
 
 # --- 4. LIVE MARKET DATA FUNCTION ---
 def get_live_price(exchange, security_id):
-    if not security_id or str(security_id).strip() == "":
+    if pd.isna(security_id) or str(security_id).strip() == "":
         return "No ID"
     try:
-        req_dict = {str(exchange): [int(float(str(security_id).strip()))]}
-        quote = dhan.ticker_data(securities=req_dict)
-        ltp = quote.get('data', {}).get(str(exchange), {}).get(str(security_id).strip(), {}).get('last_price', "API Error")
-        return ltp if ltp != "API Error" else "Check ID"
+        sec_id_int = int(float(str(security_id).strip()))
+        req_dict = {str(exchange): [sec_id_int]}
+        
+        quote = dhan.ticker_data(req_dict)
+        
+        # Bulletproof check for malformed API responses
+        if not isinstance(quote, dict) or 'data' not in quote:
+            return "API Issue"
+            
+        ltp = quote.get('data', {}).get(str(exchange), {}).get(str(sec_id_int), {}).get('last_price', 0.0)
+        
+        if float(ltp) == 0.0:
+            return "Market Closed/No Vol"
+            
+        return float(ltp)
     except Exception as e:
         return "Error"
 
@@ -102,7 +120,7 @@ raw_tip = st.sidebar.text_area("Paste raw Telegram text here:")
 parsed_data = parse_telegram_tip(raw_tip)
 
 st.sidebar.markdown("### 🔍 Find Instrument")
-search_query = st.sidebar.text_input("Search (e.g., GMRINFRA 100 CE)", value=parsed_data["symbol"])
+search_query = st.sidebar.text_input("Search (e.g., GMRAIRPORT 100 CE)", value=parsed_data["symbol"])
 
 auto_symbol = ""
 auto_sec_id = ""
@@ -110,26 +128,29 @@ auto_exch = "NSE_EQ"
 
 if search_query and not scrip_df.empty:
     search_terms = search_query.upper().split()
+    
+    if 'SEARCH_STRING' not in scrip_df.columns:
+        scrip_df['SEARCH_STRING'] = scrip_df['SEM_TRADING_SYMBOL'].fillna('') + " " + scrip_df['SEM_CUSTOM_SYMBOL'].fillna('')
+        
     mask = pd.Series([True] * len(scrip_df))
     for term in search_terms:
-        mask = mask & scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.upper().str.contains(term, regex=False)
+        mask = mask & scrip_df['SEARCH_STRING'].str.upper().str.contains(term, regex=False)
     
     results = scrip_df[mask].head(30)
     
     if not results.empty:
-        selected_display = st.sidebar.selectbox("Select Exact Contract expiry:", results['SEM_CUSTOM_SYMBOL'].tolist())
-        row = results[results['SEM_CUSTOM_SYMBOL'] == selected_display].iloc[0]
-        auto_symbol = str(row['SEM_CUSTOM_SYMBOL'])
+        selected_display = st.sidebar.selectbox("Select Exact Contract expiry:", results['SEM_TRADING_SYMBOL'].tolist())
+        row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
+        
+        auto_symbol = str(row['SEM_TRADING_SYMBOL'])
         auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
         
         exch = str(row['SEM_EXM_EXCH_ID'])
         seg = str(row['SEM_SEGMENT'])
         if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
         elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
-        elif exch == "BSE" and seg == "E": auto_exch = "BSE_EQ"
-        elif exch == "BSE" and seg == "D": auto_exch = "BSE_FNO"
     else:
-        st.sidebar.warning("No instruments found. Try tweaking the search.")
+        st.sidebar.warning("No instruments found on NSE. Try tweaking the search.")
 
 with st.sidebar.form("entry_form"):
     date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
@@ -146,7 +167,7 @@ with st.sidebar.form("entry_form"):
     trade_type = st.selectbox("Trade Type", trade_options, index=tt_idx)
     
     st.markdown("### Backend API Details")
-    exch_options = ["NSE_EQ", "NSE_FNO", "BSE_EQ", "BSE_FNO"]
+    exch_options = ["NSE_EQ", "NSE_FNO"]
     try:
         default_exch_index = exch_options.index(auto_exch)
     except:
