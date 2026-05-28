@@ -46,7 +46,7 @@ def parse_telegram_tip(text):
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER & RESOLVER ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master():
+def get_dhan_scrip_master(v=9): # Bumped version to flush the old cache
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -54,24 +54,40 @@ def get_dhan_scrip_master():
         return df[df['SEM_EXM_EXCH_ID'] == 'NSE']
     except: return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master()
+scrip_df = get_dhan_scrip_master(v=9)
 
-def resolve_instrument(parsed_sym):
-    """Automatically finds the closest matching expiry and Security ID in the background."""
-    if not parsed_sym or scrip_df.empty:
-        return parsed_sym, "", "NSE_EQ"
+def search_instruments(query):
+    """Core search engine that sorts results by nearest expiry date."""
+    if not query or scrip_df.empty: return pd.DataFrame()
     
-    terms = parsed_sym.upper().split()
+    terms = query.upper().split()
     if 'SEARCH_STRING' not in scrip_df.columns:
         scrip_df['SEARCH_STRING'] = scrip_df['SEM_TRADING_SYMBOL'].fillna('') + " " + scrip_df['SEM_CUSTOM_SYMBOL'].fillna('')
-    
+        
     mask = pd.Series([True] * len(scrip_df))
     for term in terms:
         mask = mask & scrip_df['SEARCH_STRING'].str.upper().str.contains(term, regex=False)
         
-    results = scrip_df[mask]
+    results = scrip_df[mask].copy()
+    
+    if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
+        # Convert raw text dates into mathematical datetime objects
+        results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
+        
+        # Filter out anything that has already expired
+        today = pd.Timestamp.today().normalize()
+        results = results[(results['Parsed_Expiry'] >= today) | (results['Parsed_Expiry'].isna())]
+        
+        # Sort chronologically so the nearest upcoming month is always #1
+        results = results.sort_values(by='Parsed_Expiry', ascending=True)
+        
+    return results.head(30)
+
+def resolve_instrument(parsed_sym):
+    """Automatically finds the closest matching expiry and Security ID in the background."""
+    results = search_instruments(parsed_sym)
     if not results.empty:
-        row = results.iloc[0] # Auto-selects the first closest match
+        row = results.iloc[0] # Safely grabs the nearest active month
         sym = str(row['SEM_TRADING_SYMBOL'])
         sec = str(row['SEM_SMST_SECURITY_ID'])
         exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
@@ -102,25 +118,23 @@ except Exception as e:
 # --- 4. SIDEBAR: DATA ENTRY HUB ---
 st.sidebar.header("📝 Data Entry Hub")
 
-# FEATURE: BULK IMPORT PIPELINE
+# BULK IMPORT PIPELINE
 with st.sidebar.expander("📥 Bulk Import (Paste Multiple)", expanded=False):
     st.caption("Paste multiple lines of text. All valid tips will be processed and sent to your Watchlist instantly.")
     bulk_text = st.text_area("Raw Text Block:", height=150)
     bulk_source = st.selectbox("Source for all:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"], key="bulk_src")
     
     if st.button("🚀 Process & Send to Watchlist", type="primary"):
-        # Split text into lines, strip white space, and remove exact duplicates!
         raw_lines = [line.strip() for line in bulk_text.split('\n') if line.strip()]
         unique_lines = list(dict.fromkeys(raw_lines)) 
         
         rows_to_insert = []
         for line in unique_lines:
             p_data = parse_telegram_tip(line)
-            if not p_data['symbol']: continue # Skip lines that don't look like tips
+            if not p_data['symbol']: continue 
             
             t_sym, t_sec, t_exch = resolve_instrument(p_data['symbol'])
             
-            # Map to exact Google Sheets columns
             row = [""] * len(sheet_headers)
             def set_v(col_name, val):
                 if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
@@ -131,7 +145,7 @@ with st.sidebar.expander("📥 Bulk Import (Paste Multiple)", expanded=False):
             set_v("Trade Type (Eq/Option)", p_data['trade_type'])
             set_v("Exchange", t_exch)
             set_v("Security ID", t_sec)
-            set_v("Status (Watch/Active/Closed)", "Watchlist") # Forces Watchlist status
+            set_v("Status (Watch/Active/Closed)", "Watchlist") 
             set_v("Entry CMP / Range", p_data['entry'])
             set_v("Add-On / Dip Levels", p_data['add_levels'])
             set_v("Stop Loss (SL)", p_data['sl'])
@@ -141,7 +155,7 @@ with st.sidebar.expander("📥 Bulk Import (Paste Multiple)", expanded=False):
             rows_to_insert.append(row)
             
         if rows_to_insert:
-            worksheet.append_rows(rows_to_insert) # One API call for all rows
+            worksheet.append_rows(rows_to_insert) 
             st.sidebar.success(f"Successfully processed {len(rows_to_insert)} unique trades!")
             st.rerun()
         else:
@@ -157,23 +171,16 @@ with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
     search_query = st.text_input("🔍 Find Instrument", value=parsed_data["symbol"])
     auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
 
-    if search_query and not scrip_df.empty:
-        search_terms = search_query.upper().split()
-        if 'SEARCH_STRING' not in scrip_df.columns:
-            scrip_df['SEARCH_STRING'] = scrip_df['SEM_TRADING_SYMBOL'].fillna('') + " " + scrip_df['SEM_CUSTOM_SYMBOL'].fillna('')
-        mask = pd.Series([True] * len(scrip_df))
-        for term in search_terms:
-            mask = mask & scrip_df['SEARCH_STRING'].str.upper().str.contains(term, regex=False)
-        results = scrip_df[mask].head(30)
-        
-        if not results.empty:
-            selected_display = st.selectbox("Select Exact Contract expiry:", results['SEM_TRADING_SYMBOL'].tolist())
-            row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
-            auto_symbol = str(row['SEM_TRADING_SYMBOL'])
-            auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
-            exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
-            if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
-            elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
+    results = search_instruments(search_query)
+    
+    if not results.empty:
+        selected_display = st.selectbox("Select Exact Contract expiry:", results['SEM_TRADING_SYMBOL'].tolist())
+        row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
+        auto_symbol = str(row['SEM_TRADING_SYMBOL'])
+        auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
+        exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
+        if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
+        elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
 
     with st.form("entry_form"):
         date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
