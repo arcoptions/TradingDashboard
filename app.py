@@ -4,7 +4,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-from dhanhq import dhanhq, DhanContext
+import requests # Replaced dhanhq with native requests
 
 st.set_page_config(page_title="ARC Trading Dashboard", layout="wide")
 st.title("📈 ARC Trading Dashboard & Journal")
@@ -55,20 +55,19 @@ def parse_telegram_tip(text):
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(version=7): # Bumped version for cache clearance
+def get_dhan_scrip_master(version=8): # Bumped version for cache clearance
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
         if df.empty:
             return df
         
-        # Strictly filter out BSE to prevent API errors on illiquid contracts
         df = df[df['SEM_EXM_EXCH_ID'] == 'NSE']
         return df
     except Exception as e:
         return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(version=7)
+scrip_df = get_dhan_scrip_master(version=8)
 
 # --- 3. AUTHENTICATION VAULT ---
 try:
@@ -78,40 +77,51 @@ try:
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
     
-    client_id = st.secrets["dhan"]["client_id"]
-    access_token = st.secrets["dhan"]["access_token"]
-    dhan_context = DhanContext(client_id, access_token)
-    dhan = dhanhq(dhan_context)
+    # Verify Dhan credentials exist in Streamlit secrets
+    dhan_client_id = st.secrets["dhan"]["client_id"]
+    dhan_access_token = st.secrets["dhan"]["access_token"]
 except Exception as e:
     st.error(f"System Connection Failed: {e}")
     st.stop()
 
-# --- 4. LIVE MARKET DATA FUNCTION ---
+# --- 4. DIRECT HTTP LIVE MARKET DATA FUNCTION ---
 def get_live_price(exchange, security_id):
     if pd.isna(security_id) or str(security_id).strip() == "":
         return "No ID"
     try:
         sec_id_int = int(float(str(security_id).strip()))
-        req_dict = {str(exchange): [sec_id_int]}
         
-        quote = dhan.ticker_data(req_dict)
+        # Bypassing the library entirely to use native Dhan API endpoints
+        url = "https://api.dhan.co/v2/marketfeed/ltp"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "access-token": st.secrets["dhan"]["access_token"],
+            "client-id": st.secrets["dhan"]["client_id"]
+        }
+        payload = {str(exchange): [sec_id_int]}
         
-        if not isinstance(quote, dict):
-            return "API Resp Err"
+        # Make the direct HTTP request
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        
+        if response.status_code != 200:
+            try:
+                err_data = response.json()
+                err_msg = err_data.get("errorMessage", err_data.get("remarks", f"HTTP {response.status_code}"))
+                return f"API: {err_msg}"[:20]
+            except:
+                return f"HTTP {response.status_code}"
             
-        # THE FIX: Safely unpack the API response. 
-        # If the token expires or Dhan throws an error, the 'data' field becomes a string/empty.
-        data_obj = quote.get('data')
+        quote = response.json()
         
-        if not isinstance(data_obj, dict):
-            # Extract the actual API error message string (e.g. "Invalid Token")
-            error_msg = str(data_obj) if data_obj else quote.get('remarks', 'Unknown API Error')
-            return f"API: {error_msg}"[:20]
+        if "data" not in quote:
+            err = quote.get("errorMessage", quote.get("remarks", "Unknown Error"))
+            return f"API: {err}"[:20]
             
-        exch_obj = data_obj.get(str(exchange), {})
-        sec_obj = exch_obj.get(str(sec_id_int), {})
+        exch_data = quote["data"].get(str(exchange), {})
+        sec_data = exch_data.get(str(sec_id_int), {})
         
-        ltp = sec_obj.get('last_price', 0.0)
+        ltp = sec_data.get("last_price", 0.0)
         
         if float(ltp) == 0.0:
             return "Market Closed"
