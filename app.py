@@ -120,134 +120,142 @@ except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR PANEL: NAVIGATION & DATA ENTRY ---
-st.sidebar.markdown("## 🧭 Navigation")
-current_page = st.sidebar.radio("Go to Page:", ["📈 Options Tracker", "📡 Chartink Scanners"])
-st.sidebar.markdown("---")
+# --- 4. SIDEBAR PANEL: PREMIUM NAVIGATION LAYOUT ---
+with st.sidebar:
+    st.markdown("### 🧭 Navigation Portal")
+    current_page = st.radio(
+        "Navigation Links", 
+        ["📈 Options Tracker", "📡 Chartink Scanners"], 
+        label_visibility="collapsed" # Clean look: removes ugly header gap
+    )
+    st.divider() # Native sleek UI line
 
-if current_page == "📈 Options Tracker":
-    st.sidebar.header("📝 Options Data Entry")
+    # ==========================================
+    # DYNAMIC VISIBILITY CONDITIONALS
+    # ==========================================
+    if current_page == "📈 Options Tracker":
+        st.markdown("### 📝 Options Data Entry")
 
-    with st.sidebar.expander("📥 Bulk Import (Multiple Lines)"):
-        bulk_text = st.text_area("Raw Text Block:")
-        bulk_source = st.selectbox("Source for all:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"], key="bulk_src")
-        if st.button("🚀 Send to Watchlist", type="primary"):
-            raw_lines = [line.strip() for line in bulk_text.split('\n') if line.strip()]
-            unique_lines = list(dict.fromkeys(raw_lines))
-            rows_to_insert = []
-            for line in unique_lines:
-                p_data = parse_telegram_tip(line)
-                if not p_data['symbol']: continue
-                t_sym, t_sec, t_exch = resolve_instrument(p_data['symbol'])
-                row = [""] * len(sheet_headers)
-                def set_v(col_name, val):
-                    if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
-                set_v("Trade Date", datetime.today().strftime("%Y-%m-%d"))
-                set_v("Idea Source (Chartink/Telegram/X/Self)", bulk_source)
-                set_v("Symbol / Asset", t_sym)
-                set_v("Trade Type (Eq/Option)", p_data['trade_type'])
-                set_v("Exchange", t_exch)
-                set_v("Security ID", t_sec)
-                set_v("Status (Watch/Active/Closed)", "Watchlist")
-                set_v("Entry CMP / Range", p_data['entry'])
-                set_v("Add-On / Dip Levels", p_data['add_levels'])
-                set_v("Stop Loss (SL)", p_data['sl'])
-                set_v("Target 1", p_data['t1'])
-                set_v("Target 2", p_data['t2'])
-                rows_to_insert.append(row)
-            if rows_to_insert:
-                worksheet.append_rows(rows_to_insert)
-                st.sidebar.success(f"Logged {len(rows_to_insert)} items successfully!")
-                st.rerun()
+        with st.expander("📥 Bulk Import (Multiple Lines)"):
+            bulk_text = st.text_area("Raw Text Block:")
+            bulk_source = st.selectbox("Source for all:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"], key="bulk_src")
+            if st.button("🚀 Send to Watchlist", type="primary"):
+                raw_lines = [line.strip() for line in bulk_text.split('\n') if line.strip()]
+                unique_lines = list(dict.fromkeys(raw_lines))
+                rows_to_insert = []
+                for line in unique_lines:
+                    p_data = parse_telegram_tip(line)
+                    if not p_data['symbol']: continue
+                    t_sym, t_sec, t_exch = resolve_instrument(p_data['symbol'])
+                    row = [""] * len(sheet_headers)
+                    def set_v(col_name, val):
+                        if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
+                    set_v("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+                    set_v("Idea Source (Chartink/Telegram/X/Self)", bulk_source)
+                    set_v("Symbol / Asset", t_sym)
+                    set_v("Trade Type (Eq/Option)", p_data['trade_type'])
+                    set_v("Exchange", t_exch)
+                    set_v("Security ID", t_sec)
+                    set_v("Status (Watch/Active/Closed)", "Watchlist")
+                    set_v("Entry CMP / Range", p_data['entry'])
+                    set_v("Add-On / Dip Levels", p_data['add_levels'])
+                    set_v("Stop Loss (SL)", p_data['sl'])
+                    set_v("Target 1", p_data['t1'])
+                    set_v("Target 2", p_data['t2'])
+                    rows_to_insert.append(row)
+                if rows_to_insert:
+                    worksheet.append_rows(rows_to_insert)
+                    st.success(f"Logged {len(rows_to_insert)} items successfully!")
+                    st.rerun()
 
-    with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
-        raw_tip = st.text_area("⚡ Quick Paste Single:")
-        parsed_data = parse_telegram_tip(raw_tip)
-        search_query = st.text_input("🔍 Find Instrument", value=parsed_data["symbol"])
-        auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
-        results = search_instruments(search_query)
-        if not results.empty:
-            selected_display = st.selectbox("Select Exact Contract expiry:", results['SEM_TRADING_SYMBOL'].tolist())
-            row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
-            auto_symbol = str(row['SEM_TRADING_SYMBOL'])
-            auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
-            exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
-            if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
-            elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
+        with st.expander("✍️ Single Trade (Manual Entry)", expanded=True):
+            raw_tip = st.text_area("⚡ Quick Paste Single:")
+            parsed_data = parse_telegram_tip(raw_tip)
+            search_query = st.text_input("🔍 Find Instrument", value=parsed_data["symbol"])
+            auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
+            results = search_instruments(search_query)
+            if not results.empty:
+                selected_display = st.selectbox("Select Exact Contract expiry:", results['SEM_TRADING_SYMBOL'].tolist())
+                row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
+                auto_symbol = str(row['SEM_TRADING_SYMBOL'])
+                auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
+                exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
+                if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
+                elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
 
-        with st.form("entry_form"):
-            date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
-            source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
-            symbol = st.text_input("Symbol / Asset", value=auto_symbol if auto_symbol else parsed_data["symbol"])
-            trade_type = st.selectbox("Trade Type", ["Option", "Equity"], index=0 if parsed_data["trade_type"] == "Option" else 1)
-            exchange = st.selectbox("Exchange", ["NSE_EQ", "NSE_FNO"], index=0 if auto_exch == "NSE_EQ" else 1)
-            sec_id = st.text_input("Security ID (Number only)", value=auto_sec_id)
-            status = st.selectbox("Status", ["Watchlist", "Active", "Closed"])
-            entry_range = st.text_input("Entry CMP / Range", value=parsed_data["entry"])
-            add_levels = st.text_input("Add-On / Dip Levels", value=parsed_data["add_levels"])
-            sl = st.text_input("Stop Loss (SL)", value=parsed_data["sl"])
-            t1 = st.text_input("Target 1", value=parsed_data["t1"])
-            t2 = st.text_input("Target 2", value=parsed_data["t2"])
-            rationale = st.text_area("Why are you taking this trade?")
-            emotions = st.text_input("Emotions right now")
+            with st.form("entry_form"):
+                date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
+                source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
+                symbol = st.text_input("Symbol / Asset", value=auto_symbol if auto_symbol else parsed_data["symbol"])
+                trade_type = st.selectbox("Trade Type", ["Option", "Equity"], index=0 if parsed_data["trade_type"] == "Option" else 1)
+                exchange = st.selectbox("Exchange", ["NSE_EQ", "NSE_FNO"], index=0 if auto_exch == "NSE_EQ" else 1)
+                sec_id = st.text_input("Security ID (Number only)", value=auto_sec_id)
+                status = st.selectbox("Status", ["Watchlist", "Active", "Closed"])
+                entry_range = st.text_input("Entry CMP / Range", value=parsed_data["entry"])
+                add_levels = st.text_input("Add-On / Dip Levels", value=parsed_data["add_levels"])
+                sl = st.text_input("Stop Loss (SL)", value=parsed_data["sl"])
+                t1 = st.text_input("Target 1", value=parsed_data["t1"])
+                t2 = st.text_input("Target 2", value=parsed_data["t2"])
+                rationale = st.text_area("Why are you taking this trade?")
+                emotions = st.text_input("Emotions right now")
+                
+                if st.form_submit_button("Log Trade"):
+                    new_row = [""] * len(sheet_headers)
+                    def set_val(col_name, val):
+                        if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
+                    set_val("Trade Date", date)
+                    set_val("Idea Source (Chartink/Telegram/X/Self)", source)
+                    set_val("Symbol / Asset", symbol)
+                    set_val("Trade Type (Eq/Option)", trade_type)
+                    set_val("Exchange", exchange)
+                    set_val("Security ID", sec_id)
+                    set_val("Status (Watch/Active/Closed)", status)
+                    set_val("Entry CMP / Range", entry_range)
+                    set_val("Add-On / Dip Levels", add_levels)
+                    set_val("Stop Loss (SL)", sl)
+                    set_val("Target 1", t1)
+                    set_val("Target 2", t2)
+                    set_val("Strategic Rationale (Why I took it)", rationale)
+                    set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
+                    worksheet.append_row(new_row)
+                    st.success("Logged successfully!")
+                    st.rerun()
+
+    elif current_page == "📡 Chartink Scanners":
+        st.markdown("### 📥 Manual Sync Tools")
+        with st.expander("Paste Scanner Backup Data", expanded=True):
+            st.caption("Optional backup. Click the blue 'Copy' button in Chartink and dump here.")
+            scan_type = st.selectbox("Scanner Source:", ["CE1", "CE2", "Positional"])
+            chartink_data = st.text_area("Paste Data Here:", height=150)
             
-            if st.form_submit_button("Log Trade"):
-                new_row = [""] * len(sheet_headers)
-                def set_val(col_name, val):
-                    if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
-                set_val("Trade Date", date)
-                set_val("Idea Source (Chartink/Telegram/X/Self)", source)
-                set_val("Symbol / Asset", symbol)
-                set_val("Trade Type (Eq/Option)", trade_type)
-                set_val("Exchange", exchange)
-                set_val("Security ID", sec_id)
-                set_val("Status (Watch/Active/Closed)", status)
-                set_val("Entry CMP / Range", entry_range)
-                set_val("Add-On / Dip Levels", add_levels)
-                set_val("Stop Loss (SL)", sl)
-                set_val("Target 1", t1)
-                set_val("Target 2", t2)
-                set_val("Strategic Rationale (Why I took it)", rationale)
-                set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
-                worksheet.append_row(new_row)
-                st.sidebar.success("Logged successfully!")
-                st.rerun()
-
-elif current_page == "📡 Chartink Scanners":
-    st.sidebar.header("📥 Chartink Importer")
-    with st.sidebar.expander("Paste Scanner Results", expanded=True):
-        st.caption("Click the blue 'Copy' button in Chartink and paste the text below.")
-        scan_type = st.selectbox("Scanner Source:", ["CE1", "CE2", "Positional"])
-        chartink_data = st.text_area("Paste Data Here:", height=150)
-        
-        if st.button("Save Scanned Stocks", type="primary"):
-            if chartink_data:
-                try:
-                    df_pasted = pd.read_csv(io.StringIO(chartink_data), sep='\t')
-                    if 'Symbol' in df_pasted.columns:
-                        rows_to_add = []
-                        for _, row in df_pasted.iterrows():
-                            new_row = [""] * len(scanner_headers)
-                            def set_sv(col, val):
-                                if col in scanner_headers: new_row[scanner_headers.index(col)] = val
+            if st.button("Save Scanned Stocks", type="primary"):
+                if chartink_data:
+                    try:
+                        df_pasted = pd.read_csv(io.StringIO(chartink_data), sep='\t')
+                        if 'Symbol' in df_pasted.columns:
+                            rows_to_add = []
+                            for _, row in df_pasted.iterrows():
+                                new_row = [""] * len(scanner_headers)
+                                def set_sv(col, val):
+                                    if col in scanner_headers: new_row[scanner_headers.index(col)] = val
+                                
+                                set_sv("Date Added", datetime.today().strftime("%Y-%m-%d"))
+                                set_sv("Scanner", scan_type)
+                                set_sv("Symbol", str(row.get('Symbol', '')))
+                                set_sv("Trigger Price", str(row.get('Close', '')))
+                                set_sv("Trigger Time", datetime.now().strftime("%I:%M %p"))
+                                set_sv("Status", "Monitoring")
+                                set_sv("Notes / Analysis", f"Manual Copy | Vol: {row.get('Volume', 'N/A')}")
+                                rows_to_add.append(new_row)
                             
-                            set_sv("Date Added", datetime.today().strftime("%Y-%m-%d"))
-                            set_sv("Scanner", scan_type)
-                            set_sv("Symbol", str(row.get('Symbol', '')))
-                            set_sv("Trigger Price", str(row.get('Close', '')))
-                            set_sv("Trigger Time", datetime.now().strftime("%I:%M %p"))
-                            set_sv("Status", "Monitoring")
-                            set_sv("Notes / Analysis", f"Manual Copy | Vol: {row.get('Volume', 'N/A')}")
-                            rows_to_add.append(new_row)
-                        
-                        if rows_to_add:
-                            scanner_sheet.append_rows(rows_to_add)
-                            st.sidebar.success(f"Saved {len(rows_to_add)} stocks to {scan_type}!")
-                            st.rerun()
-                    else:
-                        st.sidebar.error("Could not find a 'Symbol' column in pasted data.")
-                except Exception as e:
-                    st.sidebar.error("Failed to parse data. Make sure to use Chartink's Copy button.")
+                            if rows_to_add:
+                                scanner_sheet.append_rows(rows_to_add)
+                                st.success(f"Saved {len(rows_to_add)} stocks to {scan_type}!")
+                                st.rerun()
+                        else:
+                            st.error("Could not find a 'Symbol' column in pasted data.")
+                    except Exception as e:
+                        st.error("Failed to parse data. Make sure to use Chartink's Copy button.")
 
 # --- 5. AUTOMATED BACKGROUND DATA SYNC ENGINES ---
 def run_background_sync(df_filtered, state_key):
@@ -399,7 +407,6 @@ elif current_page == "📡 Chartink Scanners":
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
         
-        # CLEANED VIEW COLUMNS (Removed old placeholders)
         scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
             "_Sheet_Row": None,
