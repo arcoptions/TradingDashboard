@@ -6,18 +6,18 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# PAGE CONFIG MUST BE FIRST
+# --- PAGE CONFIG MUST BE FIRST ---
 st.set_page_config(
     page_title="ARC Trading Terminal", 
     layout="wide",
-    initial_sidebar_state="expanded" # Forces the sidebar to stay open!
+    initial_sidebar_state="expanded" 
 )
 
-# CUSTOM CSS: Hides Streamlit branding but keeps the sidebar toggle safe!
+# --- CUSTOM CSS: Hides branding but protects the sidebar toggle ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
-        [data-testid="stToolbar"] {visibility: hidden;} /* Hides the Deploy/GitHub icons */
+        [data-testid="stToolbar"] {visibility: hidden;} 
         footer {visibility: hidden;}
         .block-container {padding-top: 2rem; padding-bottom: 0rem;}
     </style>
@@ -138,11 +138,11 @@ except Exception as e:
 
 # --- 4. SIDEBAR PANEL: NAVIGATION ---
 with st.sidebar:
-    # LOADS BRANDING LOGO
+    # LOADS BRANDING LOGO (use_container_width fixes the warning!)
     try:
-        st.image("logo.png", use_column_width=True)
+        st.image("logo.png", use_container_width=True)
     except:
-        pass # Silently skips if logo.png hasn't been uploaded yet
+        pass 
         
     st.subheader("Navigation")
     current_page = st.radio(
