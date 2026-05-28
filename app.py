@@ -56,7 +56,7 @@ def parse_telegram_tip(text):
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER & RESOLVER ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=11):
+def get_dhan_scrip_master(v=12):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -64,7 +64,7 @@ def get_dhan_scrip_master(v=11):
         return df[df['SEM_EXM_EXCH_ID'] == 'NSE']
     except: return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(v=11)
+scrip_df = get_dhan_scrip_master(v=12)
 
 def search_instruments(query):
     if not query or scrip_df.empty: return pd.DataFrame()
@@ -312,7 +312,8 @@ if not initial_df.empty:
                 with c1:
                     wl_sel = st.selectbox("Select Idea to Journal:", df_watchlist['Symbol / Asset'].tolist(), key="wl_select", label_visibility="collapsed")
                 with c2:
-                    st.button("View Trade Details", on_click=open_journal, args=(wl_sel,), use_container_width=True)
+                    # FIX: ADDED UNIQUE KEY HERE
+                    st.button("View Trade Details", key="btn_view_wl", on_click=open_journal, args=(wl_sel,), use_container_width=True)
             else:
                 st.info("Watchlist is currently empty.")
 
@@ -335,7 +336,8 @@ if not initial_df.empty:
                 with c1:
                     act_sel = st.selectbox("Select Trade to Journal:", df_active['Symbol / Asset'].tolist(), key="act_select", label_visibility="collapsed")
                 with c2:
-                    st.button("View Trade Details", on_click=open_journal, args=(act_sel,), use_container_width=True)
+                    # FIX: ADDED UNIQUE KEY HERE
+                    st.button("View Trade Details", key="btn_view_act", on_click=open_journal, args=(act_sel,), use_container_width=True)
             else:
                 st.info("No active trades tracking right now.")
                 
@@ -352,7 +354,8 @@ if not initial_df.empty:
                 with c1:
                     cls_sel = st.selectbox("Select Past Trade to Review:", df_closed['Symbol / Asset'].tolist(), key="cls_select", label_visibility="collapsed")
                 with c2:
-                    st.button("View Post-Trade Analysis", on_click=open_journal, args=(cls_sel,), use_container_width=True)
+                    # FIX: ADDED UNIQUE KEY HERE
+                    st.button("View Post-Trade Analysis", key="btn_view_cls", on_click=open_journal, args=(cls_sel,), use_container_width=True)
             else:
                 st.info("No closed trades logged yet.")
                 
