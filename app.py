@@ -16,7 +16,7 @@ st.set_page_config(
 # --- CUSTOM CSS: Hides branding but protects the sidebar toggle ---
 st.markdown("""
     <style>
-        #MainMenu {visibility: hidden;}
+        #MainMenu {visibility: true;}
         [data-testid="stToolbar"] {visibility: hidden;} 
         footer {visibility: hidden;}
         .block-container {padding-top: 2rem; padding-bottom: 0rem;}
