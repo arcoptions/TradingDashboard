@@ -14,12 +14,17 @@ st.set_page_config(
 )
 
 # --- CUSTOM CSS: Hides branding but protects the sidebar toggle ---
+# --- CUSTOM CSS: Safest way to hide branding without breaking the sidebar ---
 st.markdown("""
     <style>
-        #MainMenu {visibility: true;}
-        [data-testid="stToolbar"] {visibility: hidden;} 
-        footer {visibility: hidden;}
-        .block-container {padding-top: 2rem; padding-bottom: 0rem;}
+        /* Hide the Deploy button */
+        .stAppDeployButton {display:none !important;}
+        /* Hide the Main Menu (Hamburger/Three dots) */
+        #MainMenu {visibility: hidden !important;}
+        /* Hide the footer */
+        footer {visibility: hidden !important;}
+        /* Force the sidebar toggle to stay visible and on top */
+        [data-testid="collapsedControl"] {z-index: 999999 !important;}
     </style>
 """, unsafe_allow_html=True)
 
