@@ -56,14 +56,22 @@ def get_dhan_scrip_master():
 
 scrip_df = get_dhan_scrip_master()
 
-# --- 3. AUTHENTICATION VAULT ---
+# --- 3. AUTHENTICATION & GOOGLE SHEETS SYNC ---
 try:
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
-    sheet_headers = worksheet.row_values(1) # Used to find exact columns later
+    
+    # Safely ensure required columns exist in the Google Sheet
+    sheet_headers = worksheet.row_values(1)
+    required_cols = ["Live Price", "Exit Price"]
+    for col in required_cols:
+        if col not in sheet_headers:
+            worksheet.update_cell(1, len(sheet_headers) + 1, col)
+            sheet_headers.append(col)
+            
 except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
@@ -112,82 +120,120 @@ with st.sidebar.form("entry_form"):
     emotions = st.text_input("Emotions right now")
     
     if st.form_submit_button("Log Trade"):
-        new_row = [date, source, symbol, trade_type, exchange, sec_id, status, entry_range, add_levels, sl, t1, t2, "", "", "", rationale, emotions, ""]
+        # Safely map inputs directly to their precise columns, preventing shifted data
+        new_row = [""] * len(sheet_headers)
+        def set_val(col_name, val):
+            if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
+            
+        set_val("Trade Date", date)
+        set_val("Idea Source (Chartink/Telegram/X/Self)", source)
+        set_val("Symbol / Asset", symbol)
+        set_val("Trade Type (Eq/Option)", trade_type)
+        set_val("Exchange", exchange)
+        set_val("Security ID", sec_id)
+        set_val("Status (Watch/Active/Closed)", status)
+        set_val("Entry CMP / Range", entry_range)
+        set_val("Add-On / Dip Levels", add_levels)
+        set_val("Stop Loss (SL)", sl)
+        set_val("Target 1", t1)
+        set_val("Target 2", t2)
+        set_val("Strategic Rationale (Why I took it)", rationale)
+        set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
+        
         worksheet.append_row(new_row)
         st.sidebar.success(f"Successfully logged {symbol}!")
         st.rerun()
 
-# --- 5. MAIN DASHBOARD: TABS ---
+# --- 5. MAIN DASHBOARD: INTERACTIVE TRACKER ---
 data = worksheet.get_all_records()
 df = pd.DataFrame(data) if data else pd.DataFrame()
 
 if not df.empty:
-    # Append the actual Google Sheets row number for precise targeting later
+    # Append the actual Google Sheets row number for precise deletion/editing
     df['_Sheet_Row'] = range(2, len(df) + 2) 
     
-    tab1, tab2, tab3 = st.tabs(["📊 Active Tracker", "🧠 Deep Dive & Journal", "⚙️ Manage Data"])
+    st.markdown("### Monitor & Update Active Positions")
+    st.caption("1. **To Edit:** Double-click SL, Targets, Live Price, or Exit Price. \n2. **To Delete:** Click the checkbox on the far left of a row, then click the **Trash Can icon** that appears in the top right. \n3. Click **Save Changes** when done.")
     
-    # === TAB 1: ACTIVE TRACKER (INLINE EDITING) ===
-    with tab1:
-        st.markdown("### Monitor & Update Active Positions")
-        st.caption("Double-click cells in the table to edit Targets, SL, Exit Prices, or change Status. Click Save to push to Database.")
-        
-        # Filter for active dashboard
-        if 'Status (Watch/Active/Closed)' in df.columns:
-            df_active = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy()
-            
-            if "Exit Price" not in df_active.columns: df_active["Exit Price"] = ""
-                
-            view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
-            
-            # Form required to batch edits and save API calls
-            with st.form("edit_table_form"):
-                edited_df = st.data_editor(
-                    df_active[view_cols],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "_Sheet_Row": None, # Hidden from user
-                        "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
-                    },
-                    disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] # Locked columns
-                )
-                
-                if st.form_submit_button("💾 Save Changes to Database", type="primary"):
-                    updates_made = 0
-                    for idx, updated_row in edited_df.iterrows():
-                        orig_row = df_active.loc[idx]
-                        editable_cols = ["Status (Watch/Active/Closed)", "Stop Loss (SL)", "Target 1", "Target 2", "Exit Price"]
-                        
-                        for col in editable_cols:
-                            # If the user changed the value in the UI
-                            if str(updated_row[col]) != str(orig_row[col]):
-                                col_idx = sheet_headers.index(col) + 1
-                                worksheet.update_cell(updated_row['_Sheet_Row'], col_idx, updated_row[col])
-                                updates_made += 1
-                                
-                    if updates_made > 0:
-                        st.success(f"Successfully pushed {updates_made} updates to Google Sheets!")
-                        st.rerun()
-                    else:
-                        st.info("No changes detected.")
+    df_active = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy()
+    df_active = df_active.reset_index(drop=True) # Reset index to align with data_editor precisely
+    
+    view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
+    
+    # Ensure all view columns exist to prevent errors
+    for col in view_cols:
+        if col not in df_active.columns: df_active[col] = ""
 
-    # === TAB 2: DEEP DIVE & JOURNAL ===
-    with tab2:
-        st.markdown("### Post-Trade Analysis")
-        trade_list = df['Symbol / Asset'].tolist()
-        selected_trade = st.selectbox("Select a trade to review:", reversed(trade_list)) # Reversed shows newest first
+    # The Interactive Editor
+    edited_df = st.data_editor(
+        df_active[view_cols],
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic", # ENABLES THE TOP-RIGHT DELETE BUTTON
+        key="trade_editor",
+        column_config={
+            "_Sheet_Row": None, # Hides the tracking row from the user
+            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+            "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
+            "Target 1": st.column_config.TextColumn("Target 1"),
+            "Target 2": st.column_config.TextColumn("Target 2"),
+            "Live Price": st.column_config.TextColumn("Live Price"),
+            "Exit Price": st.column_config.TextColumn("Exit Price"),
+        },
+        disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] # Locked columns
+    )
+    
+    # Save Engine for Edits & Deletions
+    if st.button("💾 Save Changes & Deletions", type="primary"):
+        editor_state = st.session_state.trade_editor
+        updates_made = False
         
-        if selected_trade:
-            # Extract row data
-            trade_data = df[df['Symbol / Asset'] == selected_trade].iloc[0]
-            
-            col1, col2, col3 = st.columns(3)
+        # 1. Process Deletions First
+        deleted_indices = editor_state.get("deleted_rows", [])
+        if deleted_indices:
+            # Map index to actual sheet row and sort descending so deletion doesn't shift remaining rows
+            rows_to_delete = df_active.iloc[deleted_indices]['_Sheet_Row'].tolist()
+            rows_to_delete.sort(reverse=True)
+            for r in rows_to_delete:
+                worksheet.delete_row(r)
+            updates_made = True
+                
+        # 2. Process Edits
+        edited_rows = editor_state.get("edited_rows", {})
+        if edited_rows:
+            for idx, changes in edited_rows.items():
+                sheet_row = df_active.iloc[idx]['_Sheet_Row']
+                for col_name, new_val in changes.items():
+                    if col_name in sheet_headers:
+                        col_idx = sheet_headers.index(col_name) + 1
+                        worksheet.update_cell(sheet_row, col_idx, str(new_val))
+            updates_made = True
+                        
+        if updates_made:
+            st.success("Database successfully synchronized!")
+            st.rerun()
+        else:
+            st.info("No changes or deletions detected.")
+
+    st.markdown("---")
+
+    # --- 6. DEEP DIVE JOURNAL PORTAL ---
+    st.markdown("### 🧠 Deep Dive Journal Portal")
+    trade_list = df['Symbol / Asset'].tolist()
+    selected_trade = st.selectbox("Select a trade to view its background and performance:", reversed(trade_list))
+    
+    if selected_trade:
+        # Extract specific row data
+        trade_data = df[df['Symbol / Asset'] == selected_trade].iloc[0]
+        
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
             col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
-            col3.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
+            col3.metric("Live Price", trade_data.get('Live Price', '-'))
+            col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
             
-            st.markdown("#### Performance Calculation")
+            # Auto-Calculation Engine
             try:
                 # Basic regex to pull the first number from the entry string (e.g. "160 - 170" becomes 160)
                 entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
@@ -195,29 +241,15 @@ if not df.empty:
                 pnl = exit_val - entry_val
                 
                 if pnl > 0:
-                    st.success(f"🏆 Winning Trade! Net Points: +{round(pnl, 2)}")
+                    st.success(f"🏆 Winning Trade! Net Points Captured: +{round(pnl, 2)}")
                 else:
-                    st.error(f"📉 Losing Trade. Net Points: {round(pnl, 2)}")
+                    st.error(f"📉 Losing Trade. Net Points Lost: {round(pnl, 2)}")
             except:
-                st.info("Performance will calculate automatically once an Exit Price is recorded.")
+                st.info("💡 Performance will calculate automatically once an Exit Price is recorded.")
             
-            st.markdown("---")
-            st.markdown("#### Journal Logs")
+            st.markdown("#### Trading Psychology")
             st.text_area("Pre-Trade Rationale", trade_data.get('Strategic Rationale (Why I took it)', 'No rationale logged.'), disabled=True)
             st.text_area("Emotional State", trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', 'No emotions logged.'), disabled=True)
 
-    # === TAB 3: MANAGE DATA ===
-    with tab3:
-        st.markdown("### 🗑️ Delete Trades")
-        st.caption("Select a trade below to permanently remove it from your Google Sheet.")
-        
-        delete_options = [(row['_Sheet_Row'], f"{row['Trade Date']} | {row['Symbol / Asset']} ({row['Status (Watch/Active/Closed)']})") for _, row in df.iterrows()]
-        
-        if delete_options:
-            selected_del = st.selectbox("Select Trade to Delete", delete_options, format_func=lambda x: x[1])
-            if st.button("Delete Trade", type="primary"):
-                worksheet.delete_row(selected_del[0])
-                st.success("Trade deleted successfully!")
-                st.rerun()
 else:
     st.info("Your database is currently empty. Use the sidebar to log your first trade!")
