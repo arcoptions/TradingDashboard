@@ -7,7 +7,7 @@ from datetime import datetime
 from dhanhq import dhanhq, DhanContext
 
 st.set_page_config(page_title="Master Trading Journal", layout="wide")
-st.title("📈 Master Trading Dashboard & Journal")
+st.title("📈 ARC Trading Dashboard & Journal")
 
 # --- 1. NLP PARSER: EXTRACT DATA FROM RAW TEXT ---
 def parse_telegram_tip(text):
