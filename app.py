@@ -31,9 +31,14 @@ def get_live_price(exchange, security_id):
     if not security_id or str(security_id).strip() == "":
         return 0.0
     try:
-        quote = dhan.get_market_quote(str(exchange), str(security_id))
-        return quote.get('data', {}).get('LTP', 0.0)
-    except:
+        # DhanHQ v2 requires a dictionary format for the request
+        req_dict = {str(exchange): [int(str(security_id).strip())]}
+        quote = dhan.ticker_data(req_dict)
+        
+        # Parse the JSON response
+        ltp = quote.get('data', {}).get(str(exchange), {}).get(str(security_id).strip(), {}).get('last_price', 0.0)
+        return float(ltp)
+    except Exception as e:
         return 0.0
 
 # --- SIDEBAR: LOG A NEW TRADE ---
