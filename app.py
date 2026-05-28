@@ -85,23 +85,27 @@ except Exception as e:
     st.stop()
 
 # --- 4. DIRECT HTTP LIVE MARKET DATA FUNCTION ---
+# --- 4. DIRECT HTTP LIVE MARKET DATA FUNCTION ---
 def get_live_price(exchange, security_id):
     if pd.isna(security_id) or str(security_id).strip() == "":
         return "No ID"
     try:
         sec_id_int = int(float(str(security_id).strip()))
         
-        # Bypassing the library entirely to use native Dhan API endpoints
         url = "https://api.dhan.co/v2/marketfeed/ltp"
+        
+        # DEFENSIVE PATCH: Force string conversion and strip all accidental blank spaces
+        clean_token = str(st.secrets["dhan"]["access_token"]).strip()
+        clean_client_id = str(st.secrets["dhan"]["client_id"]).strip()
+        
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "access-token": st.secrets["dhan"]["access_token"],
-            "client-id": st.secrets["dhan"]["client_id"]
+            "access-token": clean_token,
+            "client-id": clean_client_id
         }
         payload = {str(exchange): [sec_id_int]}
         
-        # Make the direct HTTP request
         response = requests.post(url, headers=headers, json=payload, timeout=5)
         
         if response.status_code != 200:
