@@ -7,13 +7,17 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # PAGE CONFIG MUST BE FIRST
-st.set_page_config(page_title="ARC Trading Terminal", layout="wide")
+st.set_page_config(
+    page_title="ARC Trading Terminal", 
+    layout="wide",
+    initial_sidebar_state="expanded" # Forces the sidebar to stay open!
+)
 
-# CUSTOM CSS: Hides Streamlit branding and tightens the layout
+# CUSTOM CSS: Hides Streamlit branding but keeps the sidebar toggle safe!
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
-        header {visibility: hidden;}
+        [data-testid="stToolbar"] {visibility: hidden;} /* Hides the Deploy/GitHub icons */
         footer {visibility: hidden;}
         .block-container {padding-top: 2rem; padding-bottom: 0rem;}
     </style>
