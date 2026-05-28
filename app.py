@@ -56,7 +56,7 @@ def get_dhan_scrip_master():
 
 scrip_df = get_dhan_scrip_master()
 
-# --- 3. AUTHENTICATION & GOOGLE SHEETS SYNC ---
+# --- 3. GOOGLE SHEETS SETUP ---
 try:
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
@@ -64,7 +64,6 @@ try:
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
     
-    # Safely ensure required columns exist in the Google Sheet
     sheet_headers = worksheet.row_values(1)
     required_cols = ["Live Price", "Exit Price"]
     for col in required_cols:
@@ -76,7 +75,7 @@ except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR: QUICK PASTE & LOGGING ---
+# --- 4. SIDEBAR: LOG NEW TRADES ---
 st.sidebar.header("📝 Log a New Tip or Trade")
 raw_tip = st.sidebar.text_area("⚡ Quick Paste Tip:")
 parsed_data = parse_telegram_tip(raw_tip)
@@ -120,7 +119,6 @@ with st.sidebar.form("entry_form"):
     emotions = st.text_input("Emotions right now")
     
     if st.form_submit_button("Log Trade"):
-        # Safely map inputs directly to their precise columns, preventing shifted data
         new_row = [""] * len(sheet_headers)
         def set_val(col_name, val):
             if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
@@ -149,30 +147,33 @@ data = worksheet.get_all_records()
 df = pd.DataFrame(data) if data else pd.DataFrame()
 
 if not df.empty:
-    # Append the actual Google Sheets row number for precise deletion/editing
     df['_Sheet_Row'] = range(2, len(df) + 2) 
     
     st.markdown("### Monitor & Update Active Positions")
-    st.caption("1. **To Edit:** Double-click SL, Targets, Live Price, or Exit Price. \n2. **To Delete:** Click the checkbox on the far left of a row, then click the **Trash Can icon** that appears in the top right. \n3. Click **Save Changes** when done.")
+    st.caption("1. **To Edit:** Double-click Status, Live Price, Exit Price, SL, or Targets. \n2. **To Delete:** Check the row's box on the far left, then click the **Trash Can icon** on the top right. \n3. Click **Save Changes & Deletions** when done.")
     
     df_active = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy()
-    df_active = df_active.reset_index(drop=True) # Reset index to align with data_editor precisely
+    df_active = df_active.reset_index(drop=True) 
     
     view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
-    # Ensure all view columns exist to prevent errors
+    # FIX: Explicitly enforce string types across all editable columns to unlock them completely
     for col in view_cols:
-        if col not in df_active.columns: df_active[col] = ""
+        if col not in df_active.columns: 
+            df_active[col] = ""
+        elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
+            # Clean up default empty markers ('nan') and force everything to an editable text block
+            df_active[col] = df_active[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
-    # The Interactive Editor
+    # Render data editor
     edited_df = st.data_editor(
         df_active[view_cols],
         use_container_width=True,
         hide_index=True,
-        num_rows="dynamic", # ENABLES THE TOP-RIGHT DELETE BUTTON
+        num_rows="dynamic", 
         key="trade_editor",
         column_config={
-            "_Sheet_Row": None, # Hides the tracking row from the user
+            "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
             "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
             "Target 1": st.column_config.TextColumn("Target 1"),
@@ -180,25 +181,23 @@ if not df.empty:
             "Live Price": st.column_config.TextColumn("Live Price"),
             "Exit Price": st.column_config.TextColumn("Exit Price"),
         },
-        disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] # Locked columns
+        disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
     )
     
-    # Save Engine for Edits & Deletions
     if st.button("💾 Save Changes & Deletions", type="primary"):
         editor_state = st.session_state.trade_editor
         updates_made = False
         
-        # 1. Process Deletions First
+        # Process Deletions
         deleted_indices = editor_state.get("deleted_rows", [])
         if deleted_indices:
-            # Map index to actual sheet row and sort descending so deletion doesn't shift remaining rows
             rows_to_delete = df_active.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
             for r in rows_to_delete:
                 worksheet.delete_row(r)
             updates_made = True
                 
-        # 2. Process Edits
+        # Process Edits
         edited_rows = editor_state.get("edited_rows", {})
         if edited_rows:
             for idx, changes in edited_rows.items():
@@ -223,7 +222,6 @@ if not df.empty:
     selected_trade = st.selectbox("Select a trade to view its background and performance:", reversed(trade_list))
     
     if selected_trade:
-        # Extract specific row data
         trade_data = df[df['Symbol / Asset'] == selected_trade].iloc[0]
         
         with st.container(border=True):
@@ -233,9 +231,7 @@ if not df.empty:
             col3.metric("Live Price", trade_data.get('Live Price', '-'))
             col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
             
-            # Auto-Calculation Engine
             try:
-                # Basic regex to pull the first number from the entry string (e.g. "160 - 170" becomes 160)
                 entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
                 exit_val = float(str(trade_data['Exit Price']))
                 pnl = exit_val - entry_val
@@ -250,6 +246,5 @@ if not df.empty:
             st.markdown("#### Trading Psychology")
             st.text_area("Pre-Trade Rationale", trade_data.get('Strategic Rationale (Why I took it)', 'No rationale logged.'), disabled=True)
             st.text_area("Emotional State", trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', 'No emotions logged.'), disabled=True)
-
 else:
     st.info("Your database is currently empty. Use the sidebar to log your first trade!")
