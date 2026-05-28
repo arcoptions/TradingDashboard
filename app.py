@@ -4,7 +4,6 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import requests # Replaced dhanhq with native requests
 
 st.set_page_config(page_title="ARC Trading Dashboard", layout="wide")
 st.title("📈 ARC Trading Dashboard & Journal")
@@ -53,10 +52,11 @@ def parse_telegram_tip(text):
             
     return data
 
-# --- 2. AUTO-DOWNLOAD SCRIP MASTER ---
+# --- 2. AUTO-DOWNLOAD SCRIP MASTER (Kept for the Search Engine) ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(version=8): # Bumped version for cache clearance
+def get_dhan_scrip_master():
     try:
+        # This downloads a public CSV without needing authentication keys
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
         if df.empty:
@@ -67,75 +67,20 @@ def get_dhan_scrip_master(version=8): # Bumped version for cache clearance
     except Exception as e:
         return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(version=8)
+scrip_df = get_dhan_scrip_master()
 
-# --- 3. AUTHENTICATION VAULT ---
+# --- 3. AUTHENTICATION VAULT (Google Sheets Only) ---
 try:
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
-    
-    # Verify Dhan credentials exist in Streamlit secrets
-    dhan_client_id = st.secrets["dhan"]["client_id"]
-    dhan_access_token = st.secrets["dhan"]["access_token"]
 except Exception as e:
-    st.error(f"System Connection Failed: {e}")
+    st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. DIRECT HTTP LIVE MARKET DATA FUNCTION ---
-# --- 4. DIRECT HTTP LIVE MARKET DATA FUNCTION ---
-def get_live_price(exchange, security_id):
-    if pd.isna(security_id) or str(security_id).strip() == "":
-        return "No ID"
-    try:
-        sec_id_int = int(float(str(security_id).strip()))
-        
-        url = "https://api.dhan.co/v2/marketfeed/ltp"
-        
-        # DEFENSIVE PATCH: Force string conversion and strip all accidental blank spaces
-        clean_token = str(st.secrets["dhan"]["access_token"]).strip()
-        clean_client_id = str(st.secrets["dhan"]["client_id"]).strip()
-        
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "access-token": clean_token,
-            "client-id": clean_client_id
-        }
-        payload = {str(exchange): [sec_id_int]}
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
-        
-        if response.status_code != 200:
-            try:
-                err_data = response.json()
-                err_msg = err_data.get("errorMessage", err_data.get("remarks", f"HTTP {response.status_code}"))
-                return f"API: {err_msg}"[:20]
-            except:
-                return f"HTTP {response.status_code}"
-            
-        quote = response.json()
-        
-        if "data" not in quote:
-            err = quote.get("errorMessage", quote.get("remarks", "Unknown Error"))
-            return f"API: {err}"[:20]
-            
-        exch_data = quote["data"].get(str(exchange), {})
-        sec_data = exch_data.get(str(sec_id_int), {})
-        
-        ltp = sec_data.get("last_price", 0.0)
-        
-        if float(ltp) == 0.0:
-            return "Market Closed"
-            
-        return float(ltp)
-    except Exception as e:
-        err_msg = str(e).replace("\n", " ")
-        return f"Err: {err_msg}"[:20]
-
-# --- 5. SIDEBAR: QUICK PASTE & LOGGING ---
+# --- 4. SIDEBAR: QUICK PASTE & LOGGING ---
 st.sidebar.header("📝 Log a New Tip or Trade")
 
 st.sidebar.markdown("### ⚡ Quick Paste Tip")
@@ -222,7 +167,7 @@ with st.sidebar.form("entry_form"):
         st.sidebar.success(f"Successfully logged {symbol}!")
         st.rerun()
 
-# --- 6. MAIN DASHBOARD: ACTIVE TRADES ---
+# --- 5. MAIN DASHBOARD: ACTIVE TRADES ---
 st.header("Active Watchlist & Trades")
 
 data = worksheet.get_all_records()
@@ -233,15 +178,39 @@ if data:
         df_active = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy()
         
         if not df_active.empty:
-            df_active["Live Price (CMP)"] = df_active.apply(
-                lambda row: get_live_price(row.get("Exchange", "NSE_EQ"), row.get("Security ID", "")), axis=1
-            )
-            
+            # Replaced live API price with manual Exit Price column from Google Sheets
+            if "Exit Price" not in df_active.columns:
+                df_active["Exit Price"] = ""
+                
             view_cols = [
                 "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", 
                 "Status (Watch/Active/Closed)", "Entry CMP / Range", 
-                "Live Price (CMP)", "Stop Loss (SL)", "Target 1", "Target 2"
+                "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"
             ]
             st.dataframe(df_active[view_cols], use_container_width=True)
         else:
             st.info("No active trades. Take a breather!")
+            
+    # --- 6. DELETE TRADE FEATURE ---
+    st.markdown("---")
+    with st.expander("🗑️ Manage & Delete Trades"):
+        st.caption("Select a trade below to permanently remove it from your Google Sheet.")
+        
+        delete_options = []
+        for i, row in df.iterrows():
+            # Google Sheets rows start at 1, and row 1 is the header. So data index 0 = sheet row 2
+            sheet_row = i + 2 
+            display_str = f"Row {sheet_row}: {row.get('Trade Date', '')} | {row.get('Symbol / Asset', '')} ({row.get('Status (Watch/Active/Closed)', '')})"
+            delete_options.append((sheet_row, display_str))
+            
+        if delete_options:
+            # Create a dropdown to select which row to delete
+            selected_del = st.selectbox("Select Trade to Delete", delete_options, format_func=lambda x: x[1])
+            
+            if st.button("Delete Trade", type="primary"):
+                # Delete the specific row from the Google Sheet
+                worksheet.delete_row(selected_del[0])
+                st.success("Trade deleted successfully!")
+                st.rerun()
+        else:
+            st.write("No trades available to delete.")
