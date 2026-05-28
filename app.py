@@ -134,6 +134,12 @@ except Exception as e:
 
 # --- 4. SIDEBAR PANEL: NAVIGATION ---
 with st.sidebar:
+    # LOADS BRANDING LOGO
+    try:
+        st.image("logo.png", use_column_width=True)
+    except:
+        pass # Silently skips if logo.png hasn't been uploaded yet
+        
     st.subheader("Navigation")
     current_page = st.radio(
         "Navigation Links", 
