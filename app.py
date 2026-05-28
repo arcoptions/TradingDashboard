@@ -55,7 +55,7 @@ def parse_telegram_tip(text):
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(version=6): # Restored and bumped version
+def get_dhan_scrip_master(version=7): # Bumped version for cache clearance
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -68,7 +68,7 @@ def get_dhan_scrip_master(version=6): # Restored and bumped version
     except Exception as e:
         return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(version=6)
+scrip_df = get_dhan_scrip_master(version=7)
 
 # --- 3. AUTHENTICATION VAULT ---
 try:
@@ -78,7 +78,6 @@ try:
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
     
-    # RESTORED: The correct DhanContext initialization for v2 API
     client_id = st.secrets["dhan"]["client_id"]
     access_token = st.secrets["dhan"]["access_token"]
     dhan_context = DhanContext(client_id, access_token)
@@ -93,15 +92,26 @@ def get_live_price(exchange, security_id):
         return "No ID"
     try:
         sec_id_int = int(float(str(security_id).strip()))
-        
-        # RESTORED: The correct ticker_data request format for v2 API
         req_dict = {str(exchange): [sec_id_int]}
+        
         quote = dhan.ticker_data(req_dict)
         
-        if not isinstance(quote, dict) or 'data' not in quote:
-            return "API Issue"
+        if not isinstance(quote, dict):
+            return "API Resp Err"
             
-        ltp = quote.get('data', {}).get(str(exchange), {}).get(str(sec_id_int), {}).get('last_price', 0.0)
+        # THE FIX: Safely unpack the API response. 
+        # If the token expires or Dhan throws an error, the 'data' field becomes a string/empty.
+        data_obj = quote.get('data')
+        
+        if not isinstance(data_obj, dict):
+            # Extract the actual API error message string (e.g. "Invalid Token")
+            error_msg = str(data_obj) if data_obj else quote.get('remarks', 'Unknown API Error')
+            return f"API: {error_msg}"[:20]
+            
+        exch_obj = data_obj.get(str(exchange), {})
+        sec_obj = exch_obj.get(str(sec_id_int), {})
+        
+        ltp = sec_obj.get('last_price', 0.0)
         
         if float(ltp) == 0.0:
             return "Market Closed"
@@ -166,7 +176,6 @@ with st.sidebar.form("entry_form"):
     trade_type = st.selectbox("Trade Type", trade_options, index=tt_idx)
     
     st.markdown("### Backend API Details")
-    # RESTORED: BSE removed to protect against API failure
     exch_options = ["NSE_EQ", "NSE_FNO"]
     try:
         default_exch_index = exch_options.index(auto_exch)
