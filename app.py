@@ -56,15 +56,15 @@ def get_dhan_scrip_master():
 
 scrip_df = get_dhan_scrip_master()
 
-# --- 3. AUTHENTICATION & GOOGLE SHEETS SYNC ---
+# --- 3. AUTHENTICATION & GOOGLE SHEETS SETUP ---
 try:
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
-    
     sheet_headers = worksheet.row_values(1)
+    
     required_cols = ["Live Price", "Exit Price"]
     for col in required_cols:
         if col not in sheet_headers:
@@ -75,7 +75,7 @@ except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR: QUICK PASTE & LOGGING ---
+# --- 4. SIDEBAR: LOG NEW TRADES ---
 st.sidebar.header("📝 Log a New Tip or Trade")
 raw_tip = st.sidebar.text_area("⚡ Quick Paste Tip:")
 parsed_data = parse_telegram_tip(raw_tip)
@@ -142,18 +142,46 @@ with st.sidebar.form("entry_form"):
         st.sidebar.success(f"Successfully logged {symbol}!")
         st.rerun()
 
-# --- 5. MAIN DASHBOARD: INTERACTIVE TRACKER ---
-data = worksheet.get_all_records()
-df = pd.DataFrame(data) if data else pd.DataFrame()
+# --- 5. AUTOMATED BACKGROUND DATABASE SYNC ENGINE ---
+# Pulling fresh copy of active rows to reference within the callback
+initial_data = worksheet.get_all_records()
+initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
-if not df.empty:
-    df['_Sheet_Row'] = range(2, len(df) + 2) 
-    
+def auto_sync_database():
+    """Triggers instantly when the user modifies cells or deletes rows, entirely skipping manual save buttons."""
+    if "trade_editor" in st.session_state and not initial_df.empty:
+        # Re-attach precise sheet row numbers to mapping dataframe
+        initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
+        active_map = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].reset_index(drop=True)
+        
+        editor_state = st.session_state.trade_editor
+        
+        # A. Auto-Handle Deletions instantly
+        deleted_indices = editor_state.get("deleted_rows", [])
+        if deleted_indices:
+            rows_to_delete = active_map.iloc[deleted_indices]['_Sheet_Row'].tolist()
+            rows_to_delete.sort(reverse=True)
+            for r in rows_to_delete:
+                worksheet.delete_rows(r)
+                
+        # B. Auto-Handle Inline Edits instantly when focus is lost (cursor moves)
+        edited_rows = editor_state.get("edited_rows", {})
+        if edited_rows:
+            for idx, changes in edited_rows.items():
+                sheet_row = active_map.iloc[idx]['_Sheet_Row']
+                for col_name, new_val in changes.items():
+                    if col_name in sheet_headers:
+                        col_idx = sheet_headers.index(col_name) + 1
+                        worksheet.update_cell(sheet_row, col_idx, str(new_val))
+
+# --- 6. MAIN DASHBOARD: INTERACTIVE TRACKER ---
+if not initial_df.empty:
     st.markdown("### Monitor & Update Active Positions")
-    st.caption("1. **To Edit:** Double-click Status, Live Price, Exit Price, SL, or Targets. \n2. **To Delete:** Check the row's box on the far left, then click the **Trash Can icon** on the top right. \n3. Click **Save Changes & Deletions** when done.")
+    st.caption("⚡ **Auto-Save Active:** Changes save automatically the moment you click the Trash Can or finish editing a cell and press Enter / click away.")
     
-    df_active = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy()
-    df_active = df_active.reset_index(drop=True) 
+    # Process and display active layout
+    initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
+    df_active = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy().reset_index(drop=True)
     
     view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
@@ -163,12 +191,14 @@ if not df.empty:
         elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
             df_active[col] = df_active[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
-    edited_df = st.data_editor(
+    # Embedded callback triggers auto_sync_database completely behind the scenes
+    st.data_editor(
         df_active[view_cols],
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic", 
         key="trade_editor",
+        on_change=auto_sync_database, # <--- THE MAGIC SCRIPT LAYER
         column_config={
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
@@ -180,46 +210,16 @@ if not df.empty:
         },
         disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
     )
-    
-    if st.button("💾 Save Changes & Deletions", type="primary"):
-        editor_state = st.session_state.trade_editor
-        updates_made = False
-        
-        # Process Deletions (UPDATED TO delete_rows)
-        deleted_indices = editor_state.get("deleted_rows", [])
-        if deleted_indices:
-            rows_to_delete = df_active.iloc[deleted_indices]['_Sheet_Row'].tolist()
-            rows_to_delete.sort(reverse=True)
-            for r in rows_to_delete:
-                worksheet.delete_rows(r)  # <--- FIX APPLIED HERE
-            updates_made = True
-                
-        # Process Edits
-        edited_rows = editor_state.get("edited_rows", {})
-        if edited_rows:
-            for idx, changes in edited_rows.items():
-                sheet_row = df_active.iloc[idx]['_Sheet_Row']
-                for col_name, new_val in changes.items():
-                    if col_name in sheet_headers:
-                        col_idx = sheet_headers.index(col_name) + 1
-                        worksheet.update_cell(sheet_row, col_idx, str(new_val))
-            updates_made = True
-                        
-        if updates_made:
-            st.success("Database successfully synchronized!")
-            st.rerun()
-        else:
-            st.info("No changes or deletions detected.")
 
     st.markdown("---")
 
-    # --- 6. DEEP DIVE JOURNAL PORTAL ---
+    # --- 7. DEEP DIVE JOURNAL PORTAL ---
     st.markdown("### 🧠 Deep Dive Journal Portal")
-    trade_list = df['Symbol / Asset'].tolist()
+    trade_list = initial_df['Symbol / Asset'].tolist()
     selected_trade = st.selectbox("Select a trade to view its background and performance:", reversed(trade_list))
     
     if selected_trade:
-        trade_data = df[df['Symbol / Asset'] == selected_trade].iloc[0]
+        trade_data = initial_df[initial_df['Symbol / Asset'] == selected_trade].iloc[0]
         
         with st.container(border=True):
             col1, col2, col3, col4 = st.columns(4)
