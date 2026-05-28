@@ -56,7 +56,7 @@ def get_dhan_scrip_master():
 
 scrip_df = get_dhan_scrip_master()
 
-# --- 3. GOOGLE SHEETS SETUP ---
+# --- 3. AUTHENTICATION & GOOGLE SHEETS SYNC ---
 try:
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
@@ -75,7 +75,7 @@ except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR: LOG NEW TRADES ---
+# --- 4. SIDEBAR: QUICK PASTE & LOGGING ---
 st.sidebar.header("📝 Log a New Tip or Trade")
 raw_tip = st.sidebar.text_area("⚡ Quick Paste Tip:")
 parsed_data = parse_telegram_tip(raw_tip)
@@ -157,15 +157,12 @@ if not df.empty:
     
     view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
-    # FIX: Explicitly enforce string types across all editable columns to unlock them completely
     for col in view_cols:
         if col not in df_active.columns: 
             df_active[col] = ""
         elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
-            # Clean up default empty markers ('nan') and force everything to an editable text block
             df_active[col] = df_active[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
-    # Render data editor
     edited_df = st.data_editor(
         df_active[view_cols],
         use_container_width=True,
@@ -188,13 +185,13 @@ if not df.empty:
         editor_state = st.session_state.trade_editor
         updates_made = False
         
-        # Process Deletions
+        # Process Deletions (UPDATED TO delete_rows)
         deleted_indices = editor_state.get("deleted_rows", [])
         if deleted_indices:
             rows_to_delete = df_active.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
             for r in rows_to_delete:
-                worksheet.delete_row(r)
+                worksheet.delete_rows(r)  # <--- FIX APPLIED HERE
             updates_made = True
                 
         # Process Edits
