@@ -8,6 +8,16 @@ from datetime import datetime
 st.set_page_config(page_title="ARC Trading Dashboard", layout="wide")
 st.title("📈 ARC Trading Dashboard & Journal")
 
+# --- INITIALIZE SESSION STATE FOR NAVIGATION ---
+if "viewing_trade" not in st.session_state:
+    st.session_state.viewing_trade = None
+
+def open_journal(trade_sym):
+    st.session_state.viewing_trade = trade_sym
+
+def close_journal():
+    st.session_state.viewing_trade = None
+
 # --- 1. NLP PARSER ---
 def parse_telegram_tip(text):
     data = {"symbol": "", "trade_type": "Equity", "entry": "", "add_levels": "", "sl": "", "t1": "", "t2": ""}
@@ -46,7 +56,7 @@ def parse_telegram_tip(text):
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER & RESOLVER ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=10):
+def get_dhan_scrip_master(v=11):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -54,7 +64,7 @@ def get_dhan_scrip_master(v=10):
         return df[df['SEM_EXM_EXCH_ID'] == 'NSE']
     except: return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(v=10)
+scrip_df = get_dhan_scrip_master(v=11)
 
 def search_instruments(query):
     if not query or scrip_df.empty: return pd.DataFrame()
@@ -104,11 +114,7 @@ except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR PANEL: NAVIGATION & INPUTS ---
-st.sidebar.markdown("## 🧭 Navigation")
-current_page = st.sidebar.radio("Go to Page:", ["📋 Watchlist Ideas", "💼 Active Trades", "🧠 Journal Deep Dive"])
-
-st.sidebar.markdown("---")
+# --- 4. SIDEBAR PANEL: DATA ENTRY ---
 st.sidebar.header("📝 Data Entry Hub")
 
 # BULK IMPORT ENGINE
@@ -203,9 +209,9 @@ initial_data = worksheet.get_all_records()
 initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
 def run_background_sync(df_filtered, state_key):
+    """Saves to Google Sheets instantly. Warning removed because Streamlit auto-reruns."""
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
-        updates_made = False
         
         # Row Deletions
         deleted_indices = editor_state.get("deleted_rows", [])
@@ -214,7 +220,6 @@ def run_background_sync(df_filtered, state_key):
             rows_to_delete.sort(reverse=True)
             for r in rows_to_delete:
                 worksheet.delete_rows(r)
-            updates_made = True
             
         # Inline Cell Edits
         edited_rows = editor_state.get("edited_rows", {})
@@ -225,126 +230,131 @@ def run_background_sync(df_filtered, state_key):
                     if col_name in sheet_headers:
                         col_idx = sheet_headers.index(col_name) + 1
                         worksheet.update_cell(sheet_row, col_idx, str(new_val))
-            updates_made = True
-            
-        if updates_made:
-            st.rerun()
 
-# --- 6. MAIN ENGINE: SEGMENTED PAGES ---
+# --- 6. MAIN ENGINE: MASTER-DETAIL VIEW ---
 if not initial_df.empty:
     initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
     view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
-    # Text normalization across columns
     for col in view_cols:
         if col not in initial_df.columns: initial_df[col] = ""
         elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
             initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
     # ==========================================
-    # PAGE A: WATCHLIST IDEAS
+    # DRILL-DOWN VIEW: JOURNAL DEEP DIVE
     # ==========================================
-    if current_page == "📋 Watchlist Ideas":
-        st.header("📋 Watchlist Ideas")
-        st.caption("Auto-Save Active. Move ideas to executed plays by modifying the **Status** field to 'Active'.")
+    if st.session_state.viewing_trade:
+        # Top Navigation Bar
+        st.button("⬅️ Back to Dashboard", on_click=close_journal, type="secondary")
+        st.header(f"🧠 Journal: {st.session_state.viewing_trade}")
         
-        df_watchlist = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Watchlist"].copy().reset_index(drop=True)
+        # Pull latest data for this specific trade
+        trade_data = initial_df[initial_df['Symbol / Asset'] == st.session_state.viewing_trade].iloc[0]
+        sheet_row_id = int(trade_data['_Sheet_Row'])
         
-        if not df_watchlist.empty:
-            st.data_editor(
-                df_watchlist[view_cols],
-                use_container_width=True,
-                hide_index=True,
-                num_rows="dynamic",
-                key="watchlist_editor",
-                on_change=run_background_sync,
-                kwargs={"df_filtered": df_watchlist, "state_key": "watchlist_editor"},
-                column_config={
-                    "_Sheet_Row": None,
-                    "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
-                },
-                disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
-            )
-        else:
-            st.info("Watchlist is currently empty. Use the sidebar script to drop raw logs.")
-
-    # ==========================================
-    # PAGE B: ACTIVE TRADES
-    # ==========================================
-    elif current_page == "💼 Active Trades":
-        st.header("💼 Live Executed Trades")
-        st.caption("Auto-Save Active. Edit live metrics inline or move to closed status to capture calculations.")
-        
-        df_active = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Active"].copy().reset_index(drop=True)
-        
-        if not df_active.empty:
-            st.data_editor(
-                df_active[view_cols],
-                use_container_width=True,
-                hide_index=True,
-                num_rows="dynamic",
-                key="active_editor",
-                on_change=run_background_sync,
-                kwargs={"df_filtered": df_active, "state_key": "active_editor"},
-                column_config={
-                    "_Sheet_Row": None,
-                    "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
-                },
-                disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
-            )
-        else:
-            st.info("No live active setups currently tracking.")
-
-    # ==========================================
-    # PAGE C: UNLOCKED JOURNAL DEEP DIVE
-    # ==========================================
-    elif current_page == "🧠 Journal Deep Dive":
-        st.header("🧠 Deep Dive Journal Portal")
-        st.caption("Review trade setups, check capture statistics, or update psychology profiles directly.")
-        
-        trade_list = initial_df['Symbol / Asset'].tolist()
-        selected_trade = st.selectbox("Select a position to analyze:", reversed(trade_list))
-        
-        if selected_trade:
-            trade_data = initial_df[initial_df['Symbol / Asset'] == selected_trade].iloc[0]
-            sheet_row_id = int(trade_data['_Sheet_Row'])
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+            col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+            col3.metric("Live Price", trade_data.get('Live Price', '-'))
+            col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
             
-            with st.container(border=True):
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
-                col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
-                col3.metric("Live Price", trade_data.get('Live Price', '-'))
-                col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
+            # PNL Engine
+            try:
+                entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                exit_val = float(str(trade_data['Exit Price']))
+                pnl = exit_val - entry_val
+                if pnl > 0: st.success(f"🏆 Winning Trade! Net Points Captured: +{round(pnl, 2)}")
+                else: st.error(f"📉 Losing Trade. Net Points Lost: {round(pnl, 2)}")
+            except:
+                st.info("💡 Performance will calculate automatically once a numerical Exit Price is recorded.")
+            
+            st.markdown("#### Update Trading Psychology Logs")
+            with st.form("psychology_update_form"):
+                curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
                 
-                try:
-                    entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
-                    exit_val = float(str(trade_data['Exit Price']))
-                    pnl = exit_val - entry_val
-                    if pnl > 0: st.success(f"🏆 Winning Trade! Net Points Captured: +{round(pnl, 2)}")
-                    else: st.error(f"📉 Losing Trade. Net Points Lost: {round(pnl, 2)}")
-                except:
-                    st.info("💡 Performance will calculate automatically once an Exit Price is recorded.")
+                new_rationale = st.text_area("Pre-Trade Rationale & Setups", value=curr_rationale if curr_rationale != 'nan' else '')
+                new_emotions = st.text_area("Emotional/Mindset Logs", value=curr_emotions if curr_emotions != 'nan' else '')
                 
-                st.markdown("#### Update Trading Psychology Logs")
-                
-                # Form securely processes multi-line notes without spreadsheet mapping misalignment
-                with st.form("psychology_update_form"):
-                    curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
-                    curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                if st.form_submit_button("💾 Save Psychology Updates", type="primary"):
+                    rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                    emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
                     
-                    # RENDER FULLY EDITABLE FORM OBJECTS (Fixes image_e892a6.png lock)
-                    new_rationale = st.text_area("Pre-Trade Rationale & Setups", value=curr_rationale if curr_rationale != 'nan' else '')
-                    new_emotions = st.text_area("Emotional/Mindset Logs", value=curr_emotions if curr_emotions != 'nan' else '')
-                    
-                    if st.form_submit_button("💾 Save Psychology Updates", type="primary"):
-                        # Target exact header layout configurations
-                        rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
-                        emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
-                        
-                        worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
-                        worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
-                        
-                        st.success("Psychological notes synchronized successfully!")
-                        st.rerun()
+                    worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                    worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                    st.success("Notes synchronized successfully!")
+                    st.rerun()
+
+    # ==========================================
+    # MASTER VIEW: CENTRAL TABS
+    # ==========================================
+    else:
+        tab1, tab2, tab3 = st.tabs(["📋 Watchlist Ideas", "💼 Active Trades", "🔒 Closed Trades"])
+        
+        # TAB 1: WATCHLIST
+        with tab1:
+            st.caption("Double-click cells to edit. Select the checkbox on the far left and click the Trash icon to delete.")
+            df_watchlist = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Watchlist"].copy().reset_index(drop=True)
+            
+            if not df_watchlist.empty:
+                st.data_editor(
+                    df_watchlist[view_cols],
+                    use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
+                    on_change=run_background_sync, kwargs={"df_filtered": df_watchlist, "state_key": "wl_editor"},
+                    column_config={"_Sheet_Row": None, "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True)},
+                    disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
+                )
+                
+                st.markdown("##### 🔍 Deep Dive")
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    wl_sel = st.selectbox("Select Idea to Journal:", df_watchlist['Symbol / Asset'].tolist(), key="wl_select", label_visibility="collapsed")
+                with c2:
+                    st.button("View Trade Details", on_click=open_journal, args=(wl_sel,), use_container_width=True)
+            else:
+                st.info("Watchlist is currently empty.")
+
+        # TAB 2: ACTIVE TRADES
+        with tab2:
+            st.caption("Double-click cells to edit. Select the checkbox on the far left and click the Trash icon to delete.")
+            df_active = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Active"].copy().reset_index(drop=True)
+            
+            if not df_active.empty:
+                st.data_editor(
+                    df_active[view_cols],
+                    use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
+                    on_change=run_background_sync, kwargs={"df_filtered": df_active, "state_key": "act_editor"},
+                    column_config={"_Sheet_Row": None, "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True)},
+                    disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
+                )
+                
+                st.markdown("##### 🔍 Deep Dive")
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    act_sel = st.selectbox("Select Trade to Journal:", df_active['Symbol / Asset'].tolist(), key="act_select", label_visibility="collapsed")
+                with c2:
+                    st.button("View Trade Details", on_click=open_journal, args=(act_sel,), use_container_width=True)
+            else:
+                st.info("No active trades tracking right now.")
+                
+        # TAB 3: CLOSED TRADES
+        with tab3:
+            st.caption("Review your historical executions.")
+            df_closed = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Closed"].copy().reset_index(drop=True)
+            
+            if not df_closed.empty:
+                st.dataframe(df_closed[view_cols], use_container_width=True, hide_index=True, column_config={"_Sheet_Row": None})
+                
+                st.markdown("##### 🔍 Deep Dive")
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    cls_sel = st.selectbox("Select Past Trade to Review:", df_closed['Symbol / Asset'].tolist(), key="cls_select", label_visibility="collapsed")
+                with c2:
+                    st.button("View Post-Trade Analysis", on_click=open_journal, args=(cls_sel,), use_container_width=True)
+            else:
+                st.info("No closed trades logged yet.")
+                
 else:
     st.info("Database is currently empty. Initialize trades from the manual panel.")
