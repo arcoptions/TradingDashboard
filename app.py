@@ -3,7 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-from dhanhq import dhanhq
+from dhanhq import dhanhq, DhanContext # <-- Added DhanContext here
 
 st.set_page_config(page_title="Master Trading Journal", layout="wide")
 st.title("📈 Master Trading Dashboard & Journal")
@@ -17,10 +17,11 @@ try:
     sh = gc.open("Comprehensive Trading Tracker 2026")
     worksheet = sh.sheet1
     
-    # Dhan API Connection
+    # Dhan API Connection (Updated Syntax)
     client_id = st.secrets["dhan"]["client_id"]
     access_token = st.secrets["dhan"]["access_token"]
-    dhan = dhanhq(client_id, access_token)
+    dhan_context = DhanContext(client_id, access_token) # <-- Wrapped in DhanContext
+    dhan = dhanhq(dhan_context)
 except Exception as e:
     st.error(f"System Connection Failed: {e}")
     st.stop()
