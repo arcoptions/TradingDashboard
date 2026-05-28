@@ -46,7 +46,7 @@ def parse_telegram_tip(text):
 
 # --- 2. AUTO-DOWNLOAD SCRIP MASTER & RESOLVER ---
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=9): # Bumped version to flush the old cache
+def get_dhan_scrip_master(v=10):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -54,12 +54,10 @@ def get_dhan_scrip_master(v=9): # Bumped version to flush the old cache
         return df[df['SEM_EXM_EXCH_ID'] == 'NSE']
     except: return pd.DataFrame()
 
-scrip_df = get_dhan_scrip_master(v=9)
+scrip_df = get_dhan_scrip_master(v=10)
 
 def search_instruments(query):
-    """Core search engine that sorts results by nearest expiry date."""
     if not query or scrip_df.empty: return pd.DataFrame()
-    
     terms = query.upper().split()
     if 'SEARCH_STRING' not in scrip_df.columns:
         scrip_df['SEARCH_STRING'] = scrip_df['SEM_TRADING_SYMBOL'].fillna('') + " " + scrip_df['SEM_CUSTOM_SYMBOL'].fillna('')
@@ -69,31 +67,23 @@ def search_instruments(query):
         mask = mask & scrip_df['SEARCH_STRING'].str.upper().str.contains(term, regex=False)
         
     results = scrip_df[mask].copy()
-    
     if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
-        # Convert raw text dates into mathematical datetime objects
         results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
-        
-        # Filter out anything that has already expired
         today = pd.Timestamp.today().normalize()
         results = results[(results['Parsed_Expiry'] >= today) | (results['Parsed_Expiry'].isna())]
-        
-        # Sort chronologically so the nearest upcoming month is always #1
         results = results.sort_values(by='Parsed_Expiry', ascending=True)
         
     return results.head(30)
 
 def resolve_instrument(parsed_sym):
-    """Automatically finds the closest matching expiry and Security ID in the background."""
     results = search_instruments(parsed_sym)
     if not results.empty:
-        row = results.iloc[0] # Safely grabs the nearest active month
+        row = results.iloc[0]
         sym = str(row['SEM_TRADING_SYMBOL'])
         sec = str(row['SEM_SMST_SECURITY_ID'])
         exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
         if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
         elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
-        
     return parsed_sym, "", "NSE_EQ"
 
 # --- 3. AUTHENTICATION & GOOGLE SHEETS SETUP ---
@@ -110,69 +100,57 @@ try:
         if col not in sheet_headers:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
-            
 except Exception as e:
     st.error(f"Google Sheets Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR: DATA ENTRY HUB ---
+# --- 4. SIDEBAR PANEL: NAVIGATION & INPUTS ---
+st.sidebar.markdown("## 🧭 Navigation")
+current_page = st.sidebar.radio("Go to Page:", ["📋 Watchlist Ideas", "💼 Active Trades", "🧠 Journal Deep Dive"])
+
+st.sidebar.markdown("---")
 st.sidebar.header("📝 Data Entry Hub")
 
-# BULK IMPORT PIPELINE
-with st.sidebar.expander("📥 Bulk Import (Paste Multiple)", expanded=False):
-    st.caption("Paste multiple lines of text. All valid tips will be processed and sent to your Watchlist instantly.")
-    bulk_text = st.text_area("Raw Text Block:", height=150)
+# BULK IMPORT ENGINE
+with st.sidebar.expander("📥 Bulk Import (Multiple Lines)"):
+    bulk_text = st.text_area("Raw Text Block:")
     bulk_source = st.selectbox("Source for all:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"], key="bulk_src")
-    
-    if st.button("🚀 Process & Send to Watchlist", type="primary"):
+    if st.button("🚀 Send to Watchlist", type="primary"):
         raw_lines = [line.strip() for line in bulk_text.split('\n') if line.strip()]
-        unique_lines = list(dict.fromkeys(raw_lines)) 
-        
+        unique_lines = list(dict.fromkeys(raw_lines))
         rows_to_insert = []
         for line in unique_lines:
             p_data = parse_telegram_tip(line)
-            if not p_data['symbol']: continue 
-            
+            if not p_data['symbol']: continue
             t_sym, t_sec, t_exch = resolve_instrument(p_data['symbol'])
-            
             row = [""] * len(sheet_headers)
             def set_v(col_name, val):
                 if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
-                
             set_v("Trade Date", datetime.today().strftime("%Y-%m-%d"))
             set_v("Idea Source (Chartink/Telegram/X/Self)", bulk_source)
             set_v("Symbol / Asset", t_sym)
             set_v("Trade Type (Eq/Option)", p_data['trade_type'])
             set_v("Exchange", t_exch)
             set_v("Security ID", t_sec)
-            set_v("Status (Watch/Active/Closed)", "Watchlist") 
+            set_v("Status (Watch/Active/Closed)", "Watchlist")
             set_v("Entry CMP / Range", p_data['entry'])
             set_v("Add-On / Dip Levels", p_data['add_levels'])
             set_v("Stop Loss (SL)", p_data['sl'])
             set_v("Target 1", p_data['t1'])
             set_v("Target 2", p_data['t2'])
-            
             rows_to_insert.append(row)
-            
         if rows_to_insert:
-            worksheet.append_rows(rows_to_insert) 
-            st.sidebar.success(f"Successfully processed {len(rows_to_insert)} unique trades!")
+            worksheet.append_rows(rows_to_insert)
+            st.sidebar.success(f"Logged {len(rows_to_insert)} items successfully!")
             st.rerun()
-        else:
-            st.sidebar.warning("No valid trades found in the text.")
 
-st.sidebar.markdown("---")
-
-# STANDARD SINGLE LOGGING
+# SINGLE LOG ENTRY
 with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
-    raw_tip = st.text_area("⚡ Quick Paste Single Tip:")
+    raw_tip = st.text_area("⚡ Quick Paste Single:")
     parsed_data = parse_telegram_tip(raw_tip)
-
     search_query = st.text_input("🔍 Find Instrument", value=parsed_data["symbol"])
     auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
-
     results = search_instruments(search_query)
-    
     if not results.empty:
         selected_display = st.selectbox("Select Exact Contract expiry:", results['SEM_TRADING_SYMBOL'].tolist())
         row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
@@ -190,7 +168,6 @@ with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
         exchange = st.selectbox("Exchange", ["NSE_EQ", "NSE_FNO"], index=0 if auto_exch == "NSE_EQ" else 1)
         sec_id = st.text_input("Security ID (Number only)", value=auto_sec_id)
         status = st.selectbox("Status", ["Watchlist", "Active", "Closed"])
-        
         entry_range = st.text_input("Entry CMP / Range", value=parsed_data["entry"])
         add_levels = st.text_input("Add-On / Dip Levels", value=parsed_data["add_levels"])
         sl = st.text_input("Stop Loss (SL)", value=parsed_data["sl"])
@@ -203,7 +180,6 @@ with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
             new_row = [""] * len(sheet_headers)
             def set_val(col_name, val):
                 if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
-                
             set_val("Trade Date", date)
             set_val("Idea Source (Chartink/Telegram/X/Self)", source)
             set_val("Symbol / Asset", symbol)
@@ -218,103 +194,157 @@ with st.sidebar.expander("✍️ Single Trade (Manual Entry)", expanded=True):
             set_val("Target 2", t2)
             set_val("Strategic Rationale (Why I took it)", rationale)
             set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
-            
             worksheet.append_row(new_row)
-            st.sidebar.success(f"Successfully logged {symbol}!")
+            st.sidebar.success("Logged successfully!")
             st.rerun()
 
-# --- 5. AUTOMATED BACKGROUND DATABASE SYNC ENGINE ---
+# --- 5. AUTOMATED BACKGROUND DATA SYNC ENGINE ---
 initial_data = worksheet.get_all_records()
 initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
-def auto_sync_database():
-    if "trade_editor" in st.session_state and not initial_df.empty:
-        initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
-        active_map = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].reset_index(drop=True)
-        editor_state = st.session_state.trade_editor
+def run_background_sync(df_filtered, state_key):
+    if state_key in st.session_state and not df_filtered.empty:
+        editor_state = st.session_state[state_key]
+        updates_made = False
         
+        # Row Deletions
         deleted_indices = editor_state.get("deleted_rows", [])
         if deleted_indices:
-            rows_to_delete = active_map.iloc[deleted_indices]['_Sheet_Row'].tolist()
+            rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
             for r in rows_to_delete:
                 worksheet.delete_rows(r)
-                
+            updates_made = True
+            
+        # Inline Cell Edits
         edited_rows = editor_state.get("edited_rows", {})
         if edited_rows:
             for idx, changes in edited_rows.items():
-                sheet_row = active_map.iloc[idx]['_Sheet_Row']
+                sheet_row = df_filtered.iloc[idx]['_Sheet_Row']
                 for col_name, new_val in changes.items():
                     if col_name in sheet_headers:
                         col_idx = sheet_headers.index(col_name) + 1
                         worksheet.update_cell(sheet_row, col_idx, str(new_val))
+            updates_made = True
+            
+        if updates_made:
+            st.rerun()
 
-# --- 6. MAIN DASHBOARD: INTERACTIVE TRACKER ---
+# --- 6. MAIN ENGINE: SEGMENTED PAGES ---
 if not initial_df.empty:
-    st.markdown("### Monitor & Update Active Positions")
-    st.caption("⚡ **Auto-Save Active:** Changes save automatically the moment you click the Trash Can or finish editing a cell and press Enter / click away.")
-    
     initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
-    df_active = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].copy().reset_index(drop=True)
-    
     view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
     
+    # Text normalization across columns
     for col in view_cols:
-        if col not in df_active.columns: 
-            df_active[col] = ""
+        if col not in initial_df.columns: initial_df[col] = ""
         elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
-            df_active[col] = df_active[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
+            initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
-    st.data_editor(
-        df_active[view_cols],
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic", 
-        key="trade_editor",
-        on_change=auto_sync_database,
-        column_config={
-            "_Sheet_Row": None, 
-            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
-            "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
-            "Target 1": st.column_config.TextColumn("Target 1"),
-            "Target 2": st.column_config.TextColumn("Target 2"),
-            "Live Price": st.column_config.TextColumn("Live Price"),
-            "Exit Price": st.column_config.TextColumn("Exit Price"),
-        },
-        disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
-    )
-
-    st.markdown("---")
-
-    # --- 7. DEEP DIVE JOURNAL PORTAL ---
-    st.markdown("### 🧠 Deep Dive Journal Portal")
-    trade_list = initial_df['Symbol / Asset'].tolist()
-    selected_trade = st.selectbox("Select a trade to view its background and performance:", reversed(trade_list))
-    
-    if selected_trade:
-        trade_data = initial_df[initial_df['Symbol / Asset'] == selected_trade].iloc[0]
+    # ==========================================
+    # PAGE A: WATCHLIST IDEAS
+    # ==========================================
+    if current_page == "📋 Watchlist Ideas":
+        st.header("📋 Watchlist Ideas")
+        st.caption("Auto-Save Active. Move ideas to executed plays by modifying the **Status** field to 'Active'.")
         
-        with st.container(border=True):
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
-            col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
-            col3.metric("Live Price", trade_data.get('Live Price', '-'))
-            col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
+        df_watchlist = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Watchlist"].copy().reset_index(drop=True)
+        
+        if not df_watchlist.empty:
+            st.data_editor(
+                df_watchlist[view_cols],
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="watchlist_editor",
+                on_change=run_background_sync,
+                kwargs={"df_filtered": df_watchlist, "state_key": "watchlist_editor"},
+                column_config={
+                    "_Sheet_Row": None,
+                    "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+                },
+                disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
+            )
+        else:
+            st.info("Watchlist is currently empty. Use the sidebar script to drop raw logs.")
+
+    # ==========================================
+    # PAGE B: ACTIVE TRADES
+    # ==========================================
+    elif current_page == "💼 Active Trades":
+        st.header("💼 Live Executed Trades")
+        st.caption("Auto-Save Active. Edit live metrics inline or move to closed status to capture calculations.")
+        
+        df_active = initial_df[initial_df["Status (Watch/Active/Closed)"] == "Active"].copy().reset_index(drop=True)
+        
+        if not df_active.empty:
+            st.data_editor(
+                df_active[view_cols],
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="active_editor",
+                on_change=run_background_sync,
+                kwargs={"df_filtered": df_active, "state_key": "active_editor"},
+                column_config={
+                    "_Sheet_Row": None,
+                    "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+                },
+                disabled=["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"]
+            )
+        else:
+            st.info("No live active setups currently tracking.")
+
+    # ==========================================
+    # PAGE C: UNLOCKED JOURNAL DEEP DIVE
+    # ==========================================
+    elif current_page == "🧠 Journal Deep Dive":
+        st.header("🧠 Deep Dive Journal Portal")
+        st.caption("Review trade setups, check capture statistics, or update psychology profiles directly.")
+        
+        trade_list = initial_df['Symbol / Asset'].tolist()
+        selected_trade = st.selectbox("Select a position to analyze:", reversed(trade_list))
+        
+        if selected_trade:
+            trade_data = initial_df[initial_df['Symbol / Asset'] == selected_trade].iloc[0]
+            sheet_row_id = int(trade_data['_Sheet_Row'])
             
-            try:
-                entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
-                exit_val = float(str(trade_data['Exit Price']))
-                pnl = exit_val - entry_val
+            with st.container(border=True):
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                col4.metric("Exit Price", trade_data.get('Exit Price', 'Not Exited'))
                 
-                if pnl > 0:
-                    st.success(f"🏆 Winning Trade! Net Points Captured: +{round(pnl, 2)}")
-                else:
-                    st.error(f"📉 Losing Trade. Net Points Lost: {round(pnl, 2)}")
-            except:
-                st.info("💡 Performance will calculate automatically once an Exit Price is recorded.")
-            
-            st.markdown("#### Trading Psychology")
-            st.text_area("Pre-Trade Rationale", trade_data.get('Strategic Rationale (Why I took it)', 'No rationale logged.'), disabled=True)
-            st.text_area("Emotional State", trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', 'No emotions logged.'), disabled=True)
+                try:
+                    entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                    exit_val = float(str(trade_data['Exit Price']))
+                    pnl = exit_val - entry_val
+                    if pnl > 0: st.success(f"🏆 Winning Trade! Net Points Captured: +{round(pnl, 2)}")
+                    else: st.error(f"📉 Losing Trade. Net Points Lost: {round(pnl, 2)}")
+                except:
+                    st.info("💡 Performance will calculate automatically once an Exit Price is recorded.")
+                
+                st.markdown("#### Update Trading Psychology Logs")
+                
+                # Form securely processes multi-line notes without spreadsheet mapping misalignment
+                with st.form("psychology_update_form"):
+                    curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                    curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                    
+                    # RENDER FULLY EDITABLE FORM OBJECTS (Fixes image_e892a6.png lock)
+                    new_rationale = st.text_area("Pre-Trade Rationale & Setups", value=curr_rationale if curr_rationale != 'nan' else '')
+                    new_emotions = st.text_area("Emotional/Mindset Logs", value=curr_emotions if curr_emotions != 'nan' else '')
+                    
+                    if st.form_submit_button("💾 Save Psychology Updates", type="primary"):
+                        # Target exact header layout configurations
+                        rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                        emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
+                        
+                        worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                        worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                        
+                        st.success("Psychological notes synchronized successfully!")
+                        st.rerun()
 else:
-    st.info("Your database is currently empty. Use the sidebar to log your first trade!")
+    st.info("Database is currently empty. Initialize trades from the manual panel.")
