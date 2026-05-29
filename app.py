@@ -102,6 +102,15 @@ def search_instruments(query):
 def resolve_instrument(parsed_sym):
     results = search_instruments(parsed_sym)
     if not results.empty:
+        # SMART EQUITY PRIORITY: If symbol is a single word (Chartink Scan), force Cash Market Equity
+        if len(parsed_sym.strip().split()) == 1:
+            eq_match = results[results['SEM_SEGMENT'] == 'E']
+            if not eq_match.empty:
+                exact = eq_match[eq_match['SEM_TRADING_SYMBOL'] == parsed_sym.upper()]
+                row = exact.iloc[0] if not exact.empty else eq_match.iloc[0]
+                return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+
+        # Standard Options Resolution
         row = results.iloc[0]
         sym = str(row['SEM_TRADING_SYMBOL'])
         sec = str(row['SEM_SMST_SECURITY_ID'])
@@ -134,7 +143,6 @@ try:
         scanner_sheet = sh.add_worksheet(title="Scanners", rows="1000", cols="10")
         scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "Live Price"])
         
-    # Ensure Live Price exists in Scanner Sheet
     scanner_headers = scanner_sheet.row_values(1)
     if "Live Price" not in scanner_headers:
         scanner_sheet.update_cell(1, len(scanner_headers) + 1, "Live Price")
@@ -187,7 +195,6 @@ def fetch_live_prices():
                 else:
                     skipped_assets.append(f"{symbol} (Scan)")
 
-    # Deduplicate Dhan requests for performance
     payload = {k: list(set(v)) for k, v in payload.items() if v}
     
     if not payload: 
