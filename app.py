@@ -1,5 +1,6 @@
 import re
 import io
+import requests
 import streamlit as st
 import pandas as pd
 import gspread
@@ -13,18 +14,13 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- CUSTOM CSS: Hides branding but protects the sidebar toggle ---
-# --- CUSTOM CSS: Safest way to hide branding without breaking the sidebar ---
+# --- CUSTOM CSS ---
 st.markdown("""
     <style>
-        /* Hide the Deploy button */
-        .stAppDeployButton {display:none !important;}
-        /* Hide the Main Menu (Hamburger/Three dots) */
-        #MainMenu {visibility: hidden !important;}
-        /* Hide the footer */
-        footer {visibility: hidden !important;}
-        /* Force the sidebar toggle to stay visible and on top */
-        [data-testid="collapsedControl"] {z-index: 999999 !important;}
+        #MainMenu {visibility: hidden;}
+        [data-testid="stToolbar"] {visibility: hidden;} 
+        footer {visibility: hidden;}
+        .block-container {padding-top: 2rem; padding-bottom: 0rem;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -141,9 +137,79 @@ except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
 
-# --- 4. SIDEBAR PANEL: NAVIGATION ---
+# --- 4. DHAN LIVE DATA ENGINE ---
+def fetch_live_prices():
+    if "dhan_client_id" not in st.secrets or "dhan_access_token" not in st.secrets:
+        st.error("Missing API Keys: Please add 'dhan_client_id' and 'dhan_access_token' to your Streamlit secrets.")
+        return
+        
+    initial_data = worksheet.get_all_records()
+    if not initial_data: return
+    
+    df = pd.DataFrame(initial_data)
+    df['_Sheet_Row'] = range(2, len(df) + 2)
+    active_df = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
+    
+    if active_df.empty: 
+        st.info("No active trades to sync.")
+        return
+        
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
+    row_map = [] 
+    
+    for idx, row in active_df.iterrows():
+        exch = row.get("Exchange", "")
+        sec_id = str(row.get("Security ID", ""))
+        sheet_row = row['_Sheet_Row']
+        
+        if exch in payload and sec_id.isdigit():
+            payload[exch].append(int(sec_id))
+            row_map.append({"sheet_row": sheet_row, "exch": exch, "sec_id": sec_id})
+            
+    payload = {k: v for k, v in payload.items() if v}
+    if not payload: return
+        
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'access-token': st.secrets["dhan_access_token"],
+        'client-id': st.secrets["dhan_client_id"]
+    }
+    
+    with st.spinner("Fetching live market data from Dhan..."):
+        try:
+            url = "https://api.dhan.co/v2/marketfeed/ohlc"
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                data = response.json().get("data", {})
+                updates = []
+                live_price_col_idx = sheet_headers.index("Live Price") + 1
+                
+                for item in row_map:
+                    exch = item["exch"]
+                    sec_id = item["sec_id"]
+                    if exch in data and sec_id in data[exch]:
+                        # Dhan returns the Live Traded Price under 'last_price'
+                        last_price = data[exch][sec_id].get("last_price", "")
+                        updates.append({
+                            'range': gspread.utils.rowcol_to_a1(item["sheet_row"], live_price_col_idx),
+                            'values': [[str(last_price)]]
+                        })
+                
+                if updates:
+                    worksheet.batch_update(updates)
+                    st.success(f"Successfully updated live prices for {len(updates)} assets!")
+                    st.rerun()
+                else:
+                    st.warning("No price data matched your Security IDs.")
+            else:
+                st.error(f"Dhan API Error: {response.text}")
+        except Exception as e:
+            st.error(f"Request Failed: {e}")
+
+# --- 5. SIDEBAR PANEL: NAVIGATION ---
 with st.sidebar:
-    # LOADS BRANDING LOGO (use_container_width fixes the warning!)
     try:
         st.image("logo.png", use_container_width=True)
     except:
@@ -157,9 +223,6 @@ with st.sidebar:
     )
     st.divider()
 
-    # ==========================================
-    # DATA ENTRY PANELS
-    # ==========================================
     if current_page == "Options Tracker":
         st.subheader("Data Entry")
 
@@ -284,7 +347,7 @@ with st.sidebar:
                     except Exception as e:
                         st.error("Parse failed. Ensure TSV format.")
 
-# --- 5. AUTOMATED BACKGROUND DATA SYNC ENGINES ---
+# --- 6. AUTOMATED BACKGROUND DATA SYNC ENGINES ---
 def run_background_sync(df_filtered, state_key):
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
@@ -329,7 +392,7 @@ def run_scanner_sync(df_filtered, state_key):
                         col_idx = scanner_headers.index(col_name) + 1
                         scanner_sheet.update_cell(sheet_row, col_idx, str(new_val))
 
-# --- 6. PAGE A: OPTIONS TRACKER & JOURNAL ---
+# --- 7. PAGE A: OPTIONS TRACKER & JOURNAL ---
 if current_page == "Options Tracker":
     initial_data = worksheet.get_all_records()
     initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
@@ -395,6 +458,12 @@ if current_page == "Options Tracker":
                         st.success("Database synchronized.")
                         st.rerun()
         else:
+            # LIVE PRICE BUTTON PLACEMENT
+            col1, col2 = st.columns([8, 2])
+            with col2:
+                if st.button("🔄 Sync Live Prices", use_container_width=True):
+                    fetch_live_prices()
+                    
             tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
             
             with tab1:
@@ -421,7 +490,7 @@ if current_page == "Options Tracker":
     else:
         st.info("Database connection established. No data available.")
 
-# --- 7. PAGE B: CHARTINK SCANNERS ---
+# --- 8. PAGE B: CHARTINK SCANNERS ---
 elif current_page == "Chartink Scanners":
     st.subheader("Automated Scan Feeds")
     
