@@ -117,6 +117,7 @@ try:
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
+    # Primary Trades Sheet
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     required_cols = ["Live Price", "Exit Price"]
@@ -125,54 +126,72 @@ try:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
             
+    # Scanner Sheet
     worksheet_list = [ws.title for ws in sh.worksheets()]
     if "Scanners" in worksheet_list:
         scanner_sheet = sh.worksheet("Scanners")
     else:
         scanner_sheet = sh.add_worksheet(title="Scanners", rows="1000", cols="10")
-        scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis"])
+        scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "Live Price"])
+        
+    # Ensure Live Price exists in Scanner Sheet
     scanner_headers = scanner_sheet.row_values(1)
+    if "Live Price" not in scanner_headers:
+        scanner_sheet.update_cell(1, len(scanner_headers) + 1, "Live Price")
+        scanner_headers.append("Live Price")
     
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
 
-# --- 4. DHAN LIVE DATA ENGINE ---
+# --- 4. DUAL-ENGINE LIVE DATA SYNC ---
 def fetch_live_prices():
     if "dhan" not in st.secrets:
         st.error("Missing API Keys: Check your secrets configuration.")
-        return
-        
-    initial_data = worksheet.get_all_records()
-    if not initial_data: return
-    
-    df = pd.DataFrame(initial_data)
-    df['_Sheet_Row'] = range(2, len(df) + 2)
-    active_df = df[df["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
-    
-    if active_df.empty: 
-        st.info("No active trades to sync.")
         return
         
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
     row_map = [] 
     skipped_assets = [] 
     
-    for idx, row in active_df.iterrows():
-        exch = str(row.get("Exchange", "")).strip()
-        sec_id = str(row.get("Security ID", "")).strip()
-        sheet_row = row['_Sheet_Row']
-        symbol = row.get("Symbol / Asset", "Unknown Option")
+    # Engine A: Process Options Tracker Data
+    opt_data = worksheet.get_all_records()
+    if opt_data:
+        df_opt = pd.DataFrame(opt_data)
+        df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
+        active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
         
-        if exch in payload and sec_id.isdigit():
-            payload[exch].append(int(sec_id))
-            row_map.append({"sheet_row": sheet_row, "exch": exch, "sec_id": sec_id})
-        else:
-            skipped_assets.append(symbol)
-            
-    payload = {k: v for k, v in payload.items() if v}
+        for idx, row in active_opt.iterrows():
+            exch = str(row.get("Exchange", "")).strip()
+            sec_id = str(row.get("Security ID", "")).strip()
+            if exch in payload and sec_id.isdigit():
+                payload[exch].append(int(sec_id))
+                row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+            else:
+                skipped_assets.append(row.get("Symbol / Asset", "Unknown Option"))
+
+    # Engine B: Process Chartink Scanner Data (Dynamic Resolution)
+    scan_data = scanner_sheet.get_all_records()
+    if scan_data:
+        df_scan = pd.DataFrame(scan_data)
+        df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+        active_scan = df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])]
+        
+        for idx, row in active_scan.iterrows():
+            symbol = str(row.get("Symbol", "")).strip()
+            if symbol:
+                t_sym, sec_id, exch = resolve_instrument(symbol)
+                if exch in payload and sec_id.isdigit():
+                    payload[exch].append(int(sec_id))
+                    row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+                else:
+                    skipped_assets.append(f"{symbol} (Scan)")
+
+    # Deduplicate Dhan requests for performance
+    payload = {k: list(set(v)) for k, v in payload.items() if v}
+    
     if not payload: 
-        st.warning("Could not sync. All active records are missing their Security ID in the database.")
+        st.warning("Could not sync. No valid Security IDs found in database.")
         return
         
     headers = {
@@ -189,25 +208,32 @@ def fetch_live_prices():
             
             if response.status_code == 200:
                 data = response.json().get("data", {})
-                updates = []
-                live_price_col_idx = sheet_headers.index("Live Price") + 1
+                opt_updates = []
+                scan_updates = []
                 
+                opt_col_idx = sheet_headers.index("Live Price") + 1
+                scan_col_idx = scanner_headers.index("Live Price") + 1
+                
+                synced_count = 0
                 for item in row_map:
                     exch = item["exch"]
                     sec_id = item["sec_id"]
                     if exch in data and sec_id in data[exch]:
                         last_price = data[exch][sec_id].get("last_price", "")
-                        updates.append({
-                            'range': gspread.utils.rowcol_to_a1(item["sheet_row"], live_price_col_idx),
-                            'values': [[str(last_price)]]
-                        })
+                        if item["type"] == "opt":
+                            opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], opt_col_idx), 'values': [[str(last_price)]]})
+                        elif item["type"] == "scan":
+                            scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
+                        synced_count += 1
                 
-                if updates:
-                    worksheet.batch_update(updates)
+                if opt_updates: worksheet.batch_update(opt_updates)
+                if scan_updates: scanner_sheet.batch_update(scan_updates)
+                
+                if synced_count > 0:
                     if skipped_assets:
-                        st.warning(f"Synced {len(updates)} assets, but skipped the following due to missing Security IDs: {', '.join(skipped_assets)}")
+                        st.warning(f"Synced {synced_count} assets. Skipped missing IDs: {', '.join(skipped_assets[:3])}...")
                     else:
-                        st.success(f"Successfully updated live prices for {len(updates)} assets!")
+                        st.success(f"Successfully updated live prices for {synced_count} assets!")
                     st.rerun()
                 else:
                     st.warning("No price data matched your Security IDs.")
@@ -344,6 +370,7 @@ with st.sidebar:
                                 set_sv("Trigger Time", datetime.now().strftime("%I:%M %p"))
                                 set_sv("Status", "Monitoring")
                                 set_sv("Notes / Analysis", f"Manual Copy | Vol: {row.get('Volume', 'N/A')}")
+                                set_sv("Live Price", "")
                                 rows_to_add.append(new_row)
                             
                             if rows_to_add:
@@ -468,7 +495,7 @@ if current_page == "Options Tracker":
         else:
             col1, col2 = st.columns([8, 2])
             with col2:
-                if st.button("🔄 Sync Live Prices", use_container_width=True):
+                if st.button("🔄 Sync Live Prices", use_container_width=True, key="sync_options"):
                     fetch_live_prices()
                     
             tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
@@ -499,7 +526,12 @@ if current_page == "Options Tracker":
 
 # --- 8. PAGE B: CHARTINK SCANNERS ---
 elif current_page == "Chartink Scanners":
-    st.subheader("Automated Scan Feeds")
+    col1, col2 = st.columns([8, 2])
+    with col1:
+        st.subheader("Automated Scan Feeds")
+    with col2:
+        if st.button("🔄 Sync Live Prices", use_container_width=True, key="sync_scanner"):
+            fetch_live_prices()
     
     scanner_data = scanner_sheet.get_all_records()
     df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
@@ -509,16 +541,17 @@ elif current_page == "Chartink Scanners":
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
         
-        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
+        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
             "_Sheet_Row": None,
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True),
             "Trigger Price": st.column_config.TextColumn("Trigger Price"),
+            "Live Price": st.column_config.TextColumn("Live Price"),
             "Trigger Time": st.column_config.TextColumn("Trigger Time"),
             "Notes / Analysis": st.column_config.TextColumn("Notes / Analysis")
         }
         
-        for col in ["Notes / Analysis", "Trigger Price", "Trigger Time"]:
+        for col in ["Notes / Analysis", "Trigger Price", "Live Price", "Trigger Time"]:
             if col in df_scan.columns:
                 df_scan[col] = df_scan[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
@@ -531,7 +564,7 @@ elif current_page == "Chartink Scanners":
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
                         on_change=run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}"},
                         column_config=scan_col_config,
-                        disabled=["Date Added", "Symbol", "Trigger Price", "Trigger Time"]
+                        disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Trigger Time"]
                     )
                 else:
                     st.info(f"No active triggers for {filter_name}.")
