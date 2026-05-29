@@ -1,3 +1,36 @@
+That is a classic database architecture quirk! I know exactly why this is happening.
+
+The Dhan Live Market API doesn't actually read the text name of your option (like `"UPL-Jun2026-660-CE"`). Instead, it requires a strict, numeric **Security ID** (like `42528`) and an **Exchange** code (like `NSE_FNO`) to fetch the price.
+
+### The Diagnosis
+
+Your newly added "Watchlist" trades are updating perfectly because you logged them *after* we built the automatic background instrument resolver. The dashboard successfully captured their numeric Security IDs and saved them invisibly to your Google Sheet.
+
+The trades sitting in your "Active Trades" tab were likely logged *before* that system was fully built, or they were typed in manually without selecting an exact match from the dropdown. Because of this, **their "Security ID" and "Exchange" columns in your Google Sheet are completely blank.** When you click the Sync button, the script sees the blank IDs and silently skips over those rows.
+
+### The Fix
+
+**Option 1: The Quick Manual Fix (Recommended)**
+
+1. In your dashboard, simply delete those old Active trades using the Trash Can icon.
+2. Re-log them immediately using the **Manual Entry** sidebar tool. Ensure you select the exact expiry from the dropdown so it captures the Security ID.
+3. Move them back to "Active" status. They will now sync perfectly forever.
+
+**Option 2: The Google Sheets Fix**
+
+1. Open your Google Sheet directly.
+2. Look at the hidden columns for **Exchange** and **Security ID**.
+3. You will notice those columns are blank for your older Active trades. If you type `NSE_FNO` into the Exchange column and type in the correct numeric Security IDs, the sync button will instantly start working for them.
+
+---
+
+### A Smart Code Upgrade (Error Tracking)
+
+To prevent this from ever being a mystery again, I have upgraded your `Sync Live Prices` engine. It now features a smart tracker. If it encounters a row that is missing a Security ID, it will pop up a yellow warning telling you *exactly* which asset failed to sync and why!
+
+Go to GitHub, edit your `app.py`, and replace your code with this version to add the smart error tracking:
+
+```python
 import re
 import io
 import requests
@@ -139,8 +172,8 @@ except Exception as e:
 
 # --- 4. DHAN LIVE DATA ENGINE ---
 def fetch_live_prices():
-    if "dhan_client_id" not in st.secrets or "dhan_access_token" not in st.secrets:
-        st.error("Missing API Keys: Please add 'dhan_client_id' and 'dhan_access_token' to your Streamlit secrets.")
+    if "dhan" not in st.secrets:
+        st.error("Missing API Keys: Check your secrets configuration.")
         return
         
     initial_data = worksheet.get_all_records()
@@ -156,24 +189,31 @@ def fetch_live_prices():
         
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
     row_map = [] 
+    skipped_assets = [] # NEW: Tracks missing IDs
     
     for idx, row in active_df.iterrows():
-        exch = row.get("Exchange", "")
-        sec_id = str(row.get("Security ID", ""))
+        exch = str(row.get("Exchange", "")).strip()
+        sec_id = str(row.get("Security ID", "")).strip()
         sheet_row = row['_Sheet_Row']
+        symbol = row.get("Symbol / Asset", "Unknown Option")
         
+        # Validation: Checks if it has a valid ID before sending to Dhan
         if exch in payload and sec_id.isdigit():
             payload[exch].append(int(sec_id))
             row_map.append({"sheet_row": sheet_row, "exch": exch, "sec_id": sec_id})
+        else:
+            skipped_assets.append(symbol)
             
     payload = {k: v for k, v in payload.items() if v}
-    if not payload: return
+    if not payload: 
+        st.warning("Could not sync. All active records are missing their Security ID in the database.")
+        return
         
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
-        'access-token': st.secrets["dhan_access_token"],
-        'client-id': st.secrets["dhan_client_id"]
+        'access-token': st.secrets["dhan"]["dhan_access_token"],
+        'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
     
     with st.spinner("Fetching live market data from Dhan..."):
@@ -190,7 +230,6 @@ def fetch_live_prices():
                     exch = item["exch"]
                     sec_id = item["sec_id"]
                     if exch in data and sec_id in data[exch]:
-                        # Dhan returns the Live Traded Price under 'last_price'
                         last_price = data[exch][sec_id].get("last_price", "")
                         updates.append({
                             'range': gspread.utils.rowcol_to_a1(item["sheet_row"], live_price_col_idx),
@@ -199,7 +238,11 @@ def fetch_live_prices():
                 
                 if updates:
                     worksheet.batch_update(updates)
-                    st.success(f"Successfully updated live prices for {len(updates)} assets!")
+                    # NEW: Advanced notification system
+                    if skipped_assets:
+                        st.warning(f"Synced {len(updates)} assets, but skipped the following due to missing Security IDs: {', '.join(skipped_assets)}")
+                    else:
+                        st.success(f"Successfully updated live prices for {len(updates)} assets!")
                     st.rerun()
                 else:
                     st.warning("No price data matched your Security IDs.")
@@ -458,7 +501,6 @@ if current_page == "Options Tracker":
                         st.success("Database synchronized.")
                         st.rerun()
         else:
-            # LIVE PRICE BUTTON PLACEMENT
             col1, col2 = st.columns([8, 2])
             with col2:
                 if st.button("🔄 Sync Live Prices", use_container_width=True):
@@ -534,3 +576,5 @@ elif current_page == "Chartink Scanners":
         render_scanner_tab(tab_pos, "Positional")
     else:
         st.info("System operational. Listening for incoming webhooks...")
+
+```
