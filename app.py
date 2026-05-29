@@ -28,9 +28,12 @@ st.markdown("## ARC Trading Terminal")
 
 if "viewing_trade" not in st.session_state:
     st.session_state.viewing_trade = None
+if "viewing_trade_row" not in st.session_state:
+    st.session_state.viewing_trade_row = None
 
 def close_journal():
     st.session_state.viewing_trade = None
+    st.session_state.viewing_trade_row = None
 
 # --- 1. NLP PARSER ---
 def parse_telegram_tip(text):
@@ -93,7 +96,6 @@ def search_instruments(query):
     results = scrip_df[mask].copy()
     if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
         results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
-        # Removed the restrictive date filter to ensure recently expired or borderline contracts still show up!
         results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
         
     return results.head(200)
@@ -313,7 +315,6 @@ with st.sidebar:
                 elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
             else:
                 if search_query:
-                    # Smart fallback instruction if the user types a strike that Dhan doesn't officially list
                     st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just '{parsed_data.get('symbol', search_query).split()[0]}' in the box above to reveal all active strikes.")
                 auto_symbol = search_query
 
@@ -401,7 +402,9 @@ def run_background_sync(df_filtered, state_key):
         for idx, changes in list(edited_rows.items()):
             if "Journal" in changes and changes["Journal"] is True:
                 sym = df_filtered.iloc[idx]['Symbol / Asset']
+                row_id = df_filtered.iloc[idx]['_Sheet_Row']
                 st.session_state.viewing_trade = sym
+                st.session_state.viewing_trade_row = int(row_id)
                 del changes["Journal"]
                 if not changes: del editor_state["edited_rows"][idx]
         
@@ -467,41 +470,87 @@ if current_page == "Options Tracker":
         }
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
 
-        if st.session_state.viewing_trade:
+        if st.session_state.get("viewing_trade_row"):
             st.button("Back to Terminal", on_click=close_journal)
-            st.subheader(f"Trade Review: {st.session_state.viewing_trade}")
-            trade_data = initial_df[initial_df['Symbol / Asset'] == st.session_state.viewing_trade].iloc[0]
-            sheet_row_id = int(trade_data['_Sheet_Row'])
+            trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
             
-            with st.container(border=True):
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
-                col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
-                col3.metric("Live Price", trade_data.get('Live Price', '-'))
-                col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
+            if not trade_rows.empty:
+                trade_data = trade_rows.iloc[0]
+                sheet_row_id = int(trade_data['_Sheet_Row'])
+                st.subheader(f"Trade Review: {trade_data['Symbol / Asset']}")
                 
-                try:
-                    entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
-                    exit_val = float(str(trade_data['Exit Price']))
-                    pnl = exit_val - entry_val
-                    if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
-                    else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                except: pass
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                with st.form("psychology_update_form"):
-                    curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
-                    curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
-                    new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
-                    new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                with st.container(border=True):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                    col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                    col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                    col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
                     
-                    if st.form_submit_button("Update Records", type="primary"):
-                        rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
-                        emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
-                        worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
-                        worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
-                        st.success("Database synchronized.")
+                    try:
+                        entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                        exit_val = float(str(trade_data['Exit Price']))
+                        pnl = exit_val - entry_val
+                        if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                        else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                    except: pass
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # --- NEW CONTRACT FIX & RE-LINKING INTERACTION CONSOLE ---
+                    st.markdown("### 🔧 Repair Contract Link")
+                    st.caption("Use this to fix broken/shorthand names. This directly changes the row mapping inside Google Sheets.")
+                    
+                    default_search = str(trade_data['Symbol / Asset']).split()[0]
+                    fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                    fix_results = search_instruments(fix_query)
+                    
+                    updated_symbol = str(trade_data['Symbol / Asset'])
+                    updated_sec_id = str(trade_data.get('Security ID', ''))
+                    updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
+                    
+                    if not fix_results.empty:
+                        selected_fix = st.selectbox("Select Correct Contract & Expiry:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                        fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                        updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
+                        updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
+                        exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
+                        if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
+                        elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
+                    else:
+                        if fix_query:
+                            st.warning(f"No match found for '{fix_query}'. Try looking up the root ticker symbol.")
+                            
+                    if st.button("Save & Re-Link Contract", type="primary", key="save_fix_contract", use_container_width=True):
+                        sym_col = sheet_headers.index("Symbol / Asset") + 1
+                        sec_col = sheet_headers.index("Security ID") + 1
+                        exch_col = sheet_headers.index("Exchange") + 1
+                        
+                        worksheet.update_cell(sheet_row_id, sym_col, updated_symbol)
+                        worksheet.update_cell(sheet_row_id, sec_col, updated_sec_id)
+                        worksheet.update_cell(sheet_row_id, exch_col, updated_exch)
+                        
+                        st.success(f"Successfully re-linked row {sheet_row_id} to official asset: {updated_symbol}!")
+                        st.session_state.viewing_trade = updated_symbol
                         st.rerun()
+                    
+                    st.divider()
+                    
+                    with st.form("psychology_update_form"):
+                        curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                        curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                        new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                        new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                        
+                        if st.form_submit_button("Update Records", type="primary"):
+                            rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                            emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
+                            worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                            worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                            st.success("Database synchronized.")
+                            st.rerun()
+            else:
+                st.error("Row context lost. Please return to the terminal.")
+                st.button("Back to Terminal", on_click=close_journal)
         else:
             col1, col2 = st.columns([8, 2])
             with col2:
