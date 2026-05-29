@@ -95,23 +95,23 @@ def search_instruments(query):
         results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
         today = pd.Timestamp.today().normalize()
         results = results[(results['Parsed_Expiry'] >= today) | (results['Parsed_Expiry'].isna())]
-        results = results.sort_values(by='Parsed_Expiry', ascending=True)
+        # UPGRADE: Sorts cleanly by Expiry Date, then sequentially by Strike/Symbol
+        results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
         
-    return results.head(30)
+    # UPGRADE: Increased limit from 30 to 200 to prevent cutoff of strikes
+    return results.head(200)
 
 def resolve_instrument(parsed_sym):
     parsed_sym = str(parsed_sym).strip().upper()
     if not parsed_sym or scrip_df.empty:
         return parsed_sym, "", "NSE_EQ"
         
-    # 1. SMART EQUITY PRIORITY: Direct Exact Match Bypass
     if len(parsed_sym.split()) == 1:
         eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
         if not eq_match.empty:
             row = eq_match.iloc[0]
             return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
 
-    # 2. Standard Search (Options / Fuzzy Match)
     results = search_instruments(parsed_sym)
     if not results.empty:
         row = results.iloc[0]
@@ -130,7 +130,6 @@ try:
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    # Primary Trades Sheet
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     required_cols = ["Live Price", "Exit Price"]
@@ -139,7 +138,6 @@ try:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
             
-    # Scanner Sheet
     worksheet_list = [ws.title for ws in sh.worksheets()]
     if "Scanners" in worksheet_list:
         scanner_sheet = sh.worksheet("Scanners")
@@ -166,7 +164,6 @@ def fetch_live_prices():
     row_map = [] 
     skipped_assets = [] 
     
-    # Engine A: Process Options Tracker Data
     opt_data = worksheet.get_all_records()
     if opt_data:
         df_opt = pd.DataFrame(opt_data)
@@ -182,7 +179,6 @@ def fetch_live_prices():
             else:
                 skipped_assets.append(row.get("Symbol / Asset", "Unknown Option"))
 
-    # Engine B: Process Chartink Scanner Data (Dynamic Resolution)
     scan_data = scanner_sheet.get_all_records()
     if scan_data:
         df_scan = pd.DataFrame(scan_data)
