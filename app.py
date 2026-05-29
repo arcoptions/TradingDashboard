@@ -100,23 +100,27 @@ def search_instruments(query):
     return results.head(30)
 
 def resolve_instrument(parsed_sym):
+    parsed_sym = str(parsed_sym).strip().upper()
+    if not parsed_sym or scrip_df.empty:
+        return parsed_sym, "", "NSE_EQ"
+        
+    # 1. SMART EQUITY PRIORITY: Direct Exact Match Bypass
+    if len(parsed_sym.split()) == 1:
+        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
+        if not eq_match.empty:
+            row = eq_match.iloc[0]
+            return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+
+    # 2. Standard Search (Options / Fuzzy Match)
     results = search_instruments(parsed_sym)
     if not results.empty:
-        # SMART EQUITY PRIORITY: If symbol is a single word (Chartink Scan), force Cash Market Equity
-        if len(parsed_sym.strip().split()) == 1:
-            eq_match = results[results['SEM_SEGMENT'] == 'E']
-            if not eq_match.empty:
-                exact = eq_match[eq_match['SEM_TRADING_SYMBOL'] == parsed_sym.upper()]
-                row = exact.iloc[0] if not exact.empty else eq_match.iloc[0]
-                return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
-
-        # Standard Options Resolution
         row = results.iloc[0]
         sym = str(row['SEM_TRADING_SYMBOL'])
         sec = str(row['SEM_SMST_SECURITY_ID'])
         exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
         if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
         elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
+        
     return parsed_sym, "", "NSE_EQ"
 
 # --- 3. AUTHENTICATION & GOOGLE SHEETS SETUP ---
