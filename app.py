@@ -26,10 +26,13 @@ st.markdown("""
 
 st.markdown("## ARC Trading Terminal")
 
+# --- SESSION STATE INITIALIZATION ---
 if "viewing_trade" not in st.session_state:
     st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state:
     st.session_state.viewing_trade_row = None
+if "qp_key" not in st.session_state:
+    st.session_state.qp_key = 0
 
 def close_journal():
     st.session_state.viewing_trade = None
@@ -299,8 +302,8 @@ with st.sidebar:
                     st.rerun()
 
         with st.expander("Manual Entry", expanded=True):
-            # Tied Quick Parse to session state so it can be wiped clean dynamically
-            raw_tip = st.text_area("Quick Parse:", key="quick_parse")
+            # Dynamic key prevents the Session State API crash!
+            raw_tip = st.text_area("Quick Parse:", key=f"qp_{st.session_state.qp_key}")
             parsed_data = parse_telegram_tip(raw_tip)
             search_query = st.text_input("Find Instrument", value=parsed_data["symbol"])
             auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
@@ -319,7 +322,6 @@ with st.sidebar:
                     st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just '{parsed_data.get('symbol', search_query).split()[0]}' in the box above to reveal all active strikes.")
                 auto_symbol = search_query
 
-            # Added clear_on_submit=True
             with st.form("entry_form", clear_on_submit=True):
                 date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
                 source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
@@ -356,8 +358,8 @@ with st.sidebar:
                     set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
                     worksheet.append_row(new_row)
                     
-                    # Wipes the Quick Parse box so the form re-renders completely empty
-                    st.session_state.quick_parse = ""
+                    # Wipes the Quick Parse box safely by incrementing the ID
+                    st.session_state.qp_key += 1
                     st.success("Trade Logged.")
                     st.rerun()
 
@@ -424,7 +426,6 @@ def run_background_sync(df_filtered, state_key):
                 sheet_row = df_filtered.iloc[idx]['_Sheet_Row']
                 for col_name, new_val in changes.items():
                     if col_name in sheet_headers:
-                        # SMART INLINE EDITING: Detects if you changed the symbol directly in the table
                         if col_name == "Symbol / Asset":
                             t_sym, t_sec, t_exch = resolve_instrument(str(new_val))
                             worksheet.update_cell(sheet_row, sheet_headers.index("Symbol / Asset") + 1, t_sym)
@@ -481,7 +482,6 @@ if current_page == "Options Tracker":
             "Exit Price": st.column_config.TextColumn("Exit Price"),
         }
         
-        # UNLOCKED 'Symbol / Asset' SO YOU CAN EDIT IT DIRECTLY IN THE TABLE
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Entry CMP / Range"] 
 
         if st.session_state.get("viewing_trade_row"):
