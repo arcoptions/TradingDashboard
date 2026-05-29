@@ -299,7 +299,8 @@ with st.sidebar:
                     st.rerun()
 
         with st.expander("Manual Entry", expanded=True):
-            raw_tip = st.text_area("Quick Parse:")
+            # Tied Quick Parse to session state so it can be wiped clean dynamically
+            raw_tip = st.text_area("Quick Parse:", key="quick_parse")
             parsed_data = parse_telegram_tip(raw_tip)
             search_query = st.text_input("Find Instrument", value=parsed_data["symbol"])
             auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
@@ -318,7 +319,8 @@ with st.sidebar:
                     st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just '{parsed_data.get('symbol', search_query).split()[0]}' in the box above to reveal all active strikes.")
                 auto_symbol = search_query
 
-            with st.form("entry_form"):
+            # Added clear_on_submit=True
+            with st.form("entry_form", clear_on_submit=True):
                 date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
                 source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
                 symbol = st.text_input("Asset", value=auto_symbol)
@@ -353,6 +355,9 @@ with st.sidebar:
                     set_val("Strategic Rationale (Why I took it)", rationale)
                     set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
                     worksheet.append_row(new_row)
+                    
+                    # Wipes the Quick Parse box so the form re-renders completely empty
+                    st.session_state.quick_parse = ""
                     st.success("Trade Logged.")
                     st.rerun()
 
@@ -419,8 +424,15 @@ def run_background_sync(df_filtered, state_key):
                 sheet_row = df_filtered.iloc[idx]['_Sheet_Row']
                 for col_name, new_val in changes.items():
                     if col_name in sheet_headers:
-                        col_idx = sheet_headers.index(col_name) + 1
-                        worksheet.update_cell(sheet_row, col_idx, str(new_val))
+                        # SMART INLINE EDITING: Detects if you changed the symbol directly in the table
+                        if col_name == "Symbol / Asset":
+                            t_sym, t_sec, t_exch = resolve_instrument(str(new_val))
+                            worksheet.update_cell(sheet_row, sheet_headers.index("Symbol / Asset") + 1, t_sym)
+                            worksheet.update_cell(sheet_row, sheet_headers.index("Security ID") + 1, t_sec)
+                            worksheet.update_cell(sheet_row, sheet_headers.index("Exchange") + 1, t_exch)
+                        else:
+                            col_idx = sheet_headers.index(col_name) + 1
+                            worksheet.update_cell(sheet_row, col_idx, str(new_val))
 
 def run_scanner_sync(df_filtered, state_key):
     if state_key in st.session_state and not df_filtered.empty:
@@ -468,7 +480,9 @@ if current_page == "Options Tracker":
             "Live Price": st.column_config.TextColumn("Live Price"),
             "Exit Price": st.column_config.TextColumn("Exit Price"),
         }
-        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", "Entry CMP / Range"] 
+        
+        # UNLOCKED 'Symbol / Asset' SO YOU CAN EDIT IT DIRECTLY IN THE TABLE
+        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Entry CMP / Range"] 
 
         if st.session_state.get("viewing_trade_row"):
             st.button("Back to Terminal", on_click=close_journal)
@@ -496,9 +510,8 @@ if current_page == "Options Tracker":
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # --- NEW CONTRACT FIX & RE-LINKING INTERACTION CONSOLE ---
-                    st.markdown("### 🔧 Repair Contract Link")
-                    st.caption("Use this to fix broken/shorthand names. This directly changes the row mapping inside Google Sheets.")
+                    st.markdown("### 🔧 Advanced Repair Tool")
+                    st.caption("Use this if inline editing isn't finding the exact distant expiry you need.")
                     
                     default_search = str(trade_data['Symbol / Asset']).split()[0]
                     fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
