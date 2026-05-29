@@ -93,12 +93,9 @@ def search_instruments(query):
     results = scrip_df[mask].copy()
     if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
         results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
-        today = pd.Timestamp.today().normalize()
-        results = results[(results['Parsed_Expiry'] >= today) | (results['Parsed_Expiry'].isna())]
-        # UPGRADE: Sorts cleanly by Expiry Date, then sequentially by Strike/Symbol
+        # Removed the restrictive date filter to ensure recently expired or borderline contracts still show up!
         results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
         
-    # UPGRADE: Increased limit from 30 to 200 to prevent cutoff of strikes
     return results.head(200)
 
 def resolve_instrument(parsed_sym):
@@ -305,6 +302,7 @@ with st.sidebar:
             search_query = st.text_input("Find Instrument", value=parsed_data["symbol"])
             auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
             results = search_instruments(search_query)
+            
             if not results.empty:
                 selected_display = st.selectbox("Select Expiry:", results['SEM_TRADING_SYMBOL'].tolist())
                 row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
@@ -313,11 +311,16 @@ with st.sidebar:
                 exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
                 if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
                 elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
+            else:
+                if search_query:
+                    # Smart fallback instruction if the user types a strike that Dhan doesn't officially list
+                    st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just '{parsed_data.get('symbol', search_query).split()[0]}' in the box above to reveal all active strikes.")
+                auto_symbol = search_query
 
             with st.form("entry_form"):
                 date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
                 source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
-                symbol = st.text_input("Asset", value=auto_symbol if auto_symbol else parsed_data["symbol"])
+                symbol = st.text_input("Asset", value=auto_symbol)
                 trade_type = st.selectbox("Type", ["Option", "Equity"], index=0 if parsed_data["trade_type"] == "Option" else 1)
                 exchange = st.selectbox("Exchange", ["NSE_EQ", "NSE_FNO"], index=0 if auto_exch == "NSE_EQ" else 1)
                 sec_id = st.text_input("Security ID", value=auto_sec_id)
