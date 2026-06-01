@@ -4,7 +4,7 @@ import io
 import re
 from datetime import datetime
 from streamlit_option_menu import option_menu
-import backend as bk # Imports your brand new engine
+import backend as bk 
 
 # --- PAGE CONFIG MUST BE FIRST ---
 st.set_page_config(
@@ -19,14 +19,25 @@ st.markdown("""
         #MainMenu {visibility: hidden;}
         [data-testid="stToolbar"] {visibility: hidden;} 
         footer {visibility: hidden;}
-        .block-container {padding-top: 1rem; padding-bottom: 0rem;}
         
-        /* Premium styling for the new trade button */
+        /* Fixed Header Cut-off */
+        .block-container {padding-top: 4rem; padding-bottom: 0rem;}
+        
+        /* Premium ARC Gold styling for Primary buttons */
         div.stButton > button[kind="primary"] {
             font-weight: 600;
             font-size: 16px;
             padding: 20px;
             border-radius: 8px;
+            background: linear-gradient(135deg, #E2C275 0%, #B8860B 50%, #E2C275 100%);
+            color: #000000;
+            border: none;
+            transition: all 0.3s ease;
+        }
+        div.stButton > button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #B8860B 0%, #E2C275 50%, #B8860B 100%);
+            box-shadow: 0px 4px 15px rgba(184, 134, 11, 0.4);
+            color: #000000;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -49,6 +60,33 @@ try:
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
+
+# --- DYNAMIC ROW HIGHLIGHTING LOGIC ---
+def highlight_rows(row):
+    try:
+        bg_color = ''
+        live_price_str = str(row.get('Live Price', ''))
+        entry_range_str = str(row.get('Entry CMP / Range', ''))
+        
+        if live_price_str.strip() in ['', 'nan', 'None']:
+            return [bg_color] * len(row)
+            
+        live_price = float(live_price_str)
+        
+        numbers = re.findall(r'[\d\.]+', entry_range_str)
+        if not numbers:
+            return [bg_color] * len(row)
+            
+        min_entry = min([float(n) for n in numbers])
+        
+        if live_price > min_entry:
+            bg_color = 'background-color: rgba(39, 174, 96, 0.15);' # Green Tint
+        elif live_price < min_entry:
+            bg_color = 'background-color: rgba(231, 76, 60, 0.15);' # Red Tint
+            
+        return [bg_color] * len(row)
+    except:
+        return [''] * len(row)
 
 # --- MODAL: DATA ENTRY FORM ---
 @st.dialog("➕ Log New Trade or Scan", width="large")
@@ -145,8 +183,11 @@ def trade_entry_modal():
 
 # --- SIDEBAR NAV & SETTINGS ---
 with st.sidebar:
-    try: st.image("logo.png", use_container_width=True)
-    except: st.markdown("## ARC Terminal")
+    # Used columns to naturally shrink and center the logo
+    col1, col2, col3 = st.columns([1, 3, 1])
+    with col2:
+        try: st.image("logo.png", use_container_width=True)
+        except: st.markdown("## ARC Terminal")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -291,7 +332,7 @@ if current_page == "Options Tracker":
         else:
             col1, col2 = st.columns([8, 2])
             with col2:
-                if st.button("🔄 Sync Live Prices", use_container_width=True, key="sync_options"):
+                if st.button("🔄 Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
                     
             tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
@@ -299,21 +340,24 @@ if current_page == "Options Tracker":
             with tab1:
                 df_wl = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
+                    # Applied the Smart Styler here
+                    st.data_editor(df_wl.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
 
             with tab2:
                 df_act = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
+                    # Applied the Smart Styler here
+                    st.data_editor(df_act.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
                     
             with tab3:
                 df_cls = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
-                    st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
+                    # Applied the Smart Styler here
+                    st.data_editor(df_cls.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
                         disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                 else: st.info("No records found.")
@@ -324,7 +368,7 @@ elif current_page == "Chartink Scanners":
     col1, col2 = st.columns([8, 2])
     with col1: st.markdown("### Automated Scan Feeds")
     with col2:
-        if st.button("🔄 Sync Live Prices", use_container_width=True, key="sync_scanner"):
+        if st.button("🔄 Sync Live Prices", use_container_width=True):
             bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
     
     scanner_data = scanner_sheet.get_all_records()
