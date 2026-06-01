@@ -3,7 +3,6 @@ import pandas as pd
 import io
 import re
 from datetime import datetime
-from streamlit_option_menu import option_menu
 import backend as bk 
 
 # --- PAGE CONFIG MUST BE FIRST ---
@@ -13,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- CUSTOM CSS FOR ULTIMATE CLEAN LOOK ---
+# --- CUSTOM CSS FOR INSTITUTIONAL CLEAN LOOK ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -23,21 +22,73 @@ st.markdown("""
         /* Fixed Header Cut-off */
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* Premium ARC Gold styling for Primary buttons */
-        div.stButton > button[kind="primary"] {
-            font-weight: 600;
-            font-size: 16px;
-            padding: 20px;
-            border-radius: 8px;
-            background: linear-gradient(135deg, #E2C275 0%, #B8860B 50%, #E2C275 100%);
-            color: #000000;
-            border: none;
-            transition: all 0.3s ease;
+        /* 1. Log New Trade Button (Primary) - Shade 1: Deep Navy */
+        [data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+            width: 100%;
+            display: flex;
+            justify-content: flex-start;
+            padding: 14px 20px;
+            border-radius: 6px;
+            background-color: #0A111A !important; 
+            border: 1px solid #1E293B !important;
+            color: #F8FAFC !important;
+            font-size: 15px;
+            font-weight: 500;
+            transition: all 0.2s ease;
         }
-        div.stButton > button[kind="primary"]:hover {
-            background: linear-gradient(135deg, #B8860B 0%, #E2C275 50%, #B8860B 100%);
-            box-shadow: 0px 4px 15px rgba(184, 134, 11, 0.4);
-            color: #000000;
+        [data-testid="stSidebar"] div.stButton > button[kind="primary"] p {
+            text-align: left;
+            margin: 0;
+        }
+        [data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover {
+            background-color: #111A26 !important;
+        }
+
+        /* 2 & 3. Navigation Menu - Styled Radio Buttons */
+        [data-testid="stSidebar"] div[role="radiogroup"] {
+            gap: 0.5rem; 
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label {
+            background-color: #131E2E !important; /* Shade 2: Medium Navy */
+            padding: 14px 20px;
+            border-radius: 6px;
+            margin: 0;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            border: 1px solid #1E293B !important;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        /* Hide the default radio circle */
+        [data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {
+            display: none;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label > div:last-child {
+            margin-left: 0;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label p {
+            font-size: 15px;
+            font-weight: 500;
+            color: #CBD5E1 !important;
+            margin: 0;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+            background-color: #1A283C !important;
+        }
+        /* Active Tab State - Shade 3: Lighter Steel Blue */
+        [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
+            background-color: #1F314D !important; 
+            border-left: 4px solid #4F8BFF !important; 
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] p {
+            color: #FFFFFF !important;
+            font-weight: 600;
+        }
+        
+        /* Clean up the Daily API Setup Expander */
+        [data-testid="stSidebar"] div[data-testid="stExpander"] {
+            border-color: #1E293B;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -80,22 +131,22 @@ def highlight_rows(row):
         min_entry = min([float(n) for n in numbers])
         
         if live_price > min_entry:
-            bg_color = 'background-color: rgba(39, 174, 96, 0.15);' # Green Tint
+            bg_color = 'background-color: rgba(39, 174, 96, 0.15);' 
         elif live_price < min_entry:
-            bg_color = 'background-color: rgba(231, 76, 60, 0.15);' # Red Tint
+            bg_color = 'background-color: rgba(231, 76, 60, 0.15);' 
             
         return [bg_color] * len(row)
     except:
         return [''] * len(row)
 
 # --- MODAL: DATA ENTRY FORM ---
-@st.dialog("➕ Log New Trade or Scan", width="large")
+@st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal():
-    tab1, tab2 = st.tabs(["⚡ Quick Parse (Manual Entry)", "📥 Bulk Import List"])
+    tab1, tab2 = st.tabs(["Quick Parse (Manual Entry)", "Bulk Import List"])
     
     with tab1:
-        st.caption("Paste a Telegram tip directly below to extract strike, range, stop loss, and targets automatically.")
-        raw_tip = st.text_area("Telegram / X Tip:", key=f"qp_{st.session_state.qp_key}", height=100)
+        st.caption("Paste a tip directly below to extract strike, range, stop loss, and targets automatically.")
+        raw_tip = st.text_area("Tip Input:", key=f"qp_{st.session_state.qp_key}", height=100)
         parsed_data = bk.parse_telegram_tip(raw_tip)
         
         search_query = st.text_input("Refine Instrument Search", value=parsed_data["symbol"])
@@ -112,7 +163,7 @@ def trade_entry_modal():
             elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
         else:
             if search_query:
-                st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just the root ticker symbol.")
+                st.warning(f"No matches found for '{search_query}'. Try typing just the root ticker symbol.")
             auto_symbol = search_query
 
         with st.form("entry_form", clear_on_submit=True):
@@ -183,35 +234,27 @@ def trade_entry_modal():
 
 # --- SIDEBAR NAV & SETTINGS ---
 with st.sidebar:
-    # Used columns to naturally shrink and center the logo
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col2:
-        try: st.image("logo.png", use_container_width=True)
-        except: st.markdown("## ARC Terminal")
+    # Removed column wrappers so the logo expands naturally and left-aligns with everything else
+    try: 
+        st.image("logo.png", use_container_width=True)
+    except: 
+        st.markdown("## ARC Terminal")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    if st.button("➕ Log New Trade", type="primary", use_container_width=True):
+    if st.button("Log New Trade", type="primary", use_container_width=True):
         trade_entry_modal()
         
     st.markdown("<br>", unsafe_allow_html=True)
         
-    current_page = option_menu(
-        menu_title=None, 
-        options=["Options Tracker", "Chartink Scanners"], 
-        icons=["graph-up-arrow", "radar"], 
-        menu_icon="cast", 
-        default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"font-size": "18px"},
-            "nav-link": {"font-size": "15px", "text-align": "left", "margin":"0px", "--hover-color": "#eee"},
-            "nav-link-selected": {"background-color": "#2E3A59"},
-        }
+    current_page = st.radio(
+        "Navigation",
+        ["Options Tracker", "Chartink Scanners"],
+        label_visibility="collapsed"
     )
     
     st.divider()
-    with st.expander("⚙️ Daily API Setup", expanded=False):
+    with st.expander("Daily API Setup", expanded=False):
         st.caption("Paste today's generated Dhan Access Token here.")
         try: saved_token = settings_sheet.acell('B2').value or ""
         except: saved_token = ""
@@ -255,7 +298,7 @@ if current_page == "Options Tracker":
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Entry CMP / Range"] 
 
         if st.session_state.get("viewing_trade_row"):
-            st.button("← Back to Terminal", on_click=close_journal)
+            st.button("Back to Terminal", on_click=close_journal)
             trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
             
             if not trade_rows.empty:
@@ -279,7 +322,7 @@ if current_page == "Options Tracker":
                     except: pass
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    st.markdown("### 🔧 Advanced Repair Tool")
+                    st.markdown("### Advanced Repair Tool")
                     st.caption("Use this if inline editing isn't finding the exact distant expiry you need.")
                     
                     default_search = str(trade_data['Symbol / Asset']).split()[0]
@@ -332,7 +375,7 @@ if current_page == "Options Tracker":
         else:
             col1, col2 = st.columns([8, 2])
             with col2:
-                if st.button("🔄 Sync Live Prices", use_container_width=True):
+                if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
                     
             tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
@@ -340,7 +383,6 @@ if current_page == "Options Tracker":
             with tab1:
                 df_wl = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    # Applied the Smart Styler here
                     st.data_editor(df_wl.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -348,7 +390,6 @@ if current_page == "Options Tracker":
             with tab2:
                 df_act = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    # Applied the Smart Styler here
                     st.data_editor(df_act.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -356,7 +397,6 @@ if current_page == "Options Tracker":
             with tab3:
                 df_cls = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
-                    # Applied the Smart Styler here
                     st.data_editor(df_cls.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
                         disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
@@ -368,7 +408,7 @@ elif current_page == "Chartink Scanners":
     col1, col2 = st.columns([8, 2])
     with col1: st.markdown("### Automated Scan Feeds")
     with col2:
-        if st.button("🔄 Sync Live Prices", use_container_width=True):
+        if st.button("Sync Live Prices", use_container_width=True):
             bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
     
     scanner_data = scanner_sheet.get_all_records()
@@ -407,7 +447,7 @@ elif current_page == "Chartink Scanners":
         render_scanner_tab(tab_pos, "Positional")
         
         st.divider()
-        with st.expander("📥 Import Manual Backup", expanded=False):
+        with st.expander("Import Manual Backup", expanded=False):
             st.caption("Paste copied table directly from Chartink if webhooks fail.")
             scan_type = st.selectbox("Assign to Scanner:", ["CE1", "CE2", "Positional"])
             chartink_data = st.text_area("Data Dump:", height=100)
