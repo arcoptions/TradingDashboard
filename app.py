@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- CUSTOM CSS FOR PERFECT ALIGNMENT & INSTITUTIONAL LOOK ---
+# --- BULLETPROOF CSS FOR UNIFORM SIDEBAR BUTTONS ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -20,81 +20,90 @@ st.markdown("""
         footer {visibility: hidden;}
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* 1. Log New Trade Button (Primary) - Action Blue */
-        [data-testid="stSidebar"] div.stButton {
+        /* 1. FORCE ABSOLUTE UNIFORMITY IN SIZE & SHAPE */
+        div[data-testid="stSidebar"] .stButton > button,
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
+        div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
             width: 100% !important;
-        }
-        [data-testid="stSidebar"] div.stButton > button[kind="primary"] {
-            width: 100% !important;
-            justify-content: flex-start !important; /* Left Align */
-            padding: 16px 20px !important;
-            border-radius: 6px !important;
-            background-color: #1E3A8A !important; /* Deep Royal Blue */
-            border: 1px solid #1E3A8A !important;
-            color: #FFFFFF !important;
-            font-size: 16px !important;
-            font-weight: 600 !important;
-            transition: all 0.2s ease;
+            min-width: 100% !important;
+            max-width: 100% !important;
+            height: 46px !important;
+            min-height: 46px !important;
+            max-height: 46px !important;
             box-sizing: border-box !important;
-        }
-        [data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover {
-            background-color: #2563EB !important; /* Brighter blue on hover */
-        }
-
-        /* 2 & 3. Navigation Menu - Styled Radio Buttons */
-        [data-testid="stSidebar"] div[role="radiogroup"] {
-            width: 100% !important;
-            display: flex;
-            flex-direction: column;
-            gap: 8px; 
-        }
-        [data-testid="stSidebar"] div[role="radiogroup"] > label {
-            background-color: #0F172A !important; /* Midnight Navy for Inactive */
-            padding: 16px 20px !important;
+            margin: 6px 0px !important;
+            padding: 10px 16px !important;
             border-radius: 6px !important;
-            margin: 0 !important;
-            width: 100% !important;
             display: flex !important;
             align-items: center !important;
-            justify-content: flex-start !important; /* Left Align */
-            border: 1px solid #1E293B !important;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            box-sizing: border-box !important;
+            justify-content: center !important;
+            text-align: center !important;
+            font-size: 15px !important;
+            cursor: pointer !important;
+            transition: all 0.15s ease-in-out !important;
         }
-        
-        /* Hide the default radio circles */
-        [data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {
+
+        /* Hide the native radio button circular check elements entirely */
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
-        
-        /* Target the text inside the radio button */
-        [data-testid="stSidebar"] div[role="radiogroup"] > label p {
-            font-size: 16px !important;
-            font-weight: 500 !important;
-            color: #94A3B8 !important; /* Muted text for inactive */
-            margin: 0 !important;
-            text-align: left !important;
+
+        /* Normalize inner text container flows */
+        div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
         }
+
+        div[data-testid="stSidebar"] .stButton > button p,
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label p {
+            margin: 0 !important;
+            padding: 0 !important;
+            font-size: 15px !important;
+            width: auto !important;
+        }
+
+        /* 2. DISTINCT HIGH-CONTRAST COLOR SCHEMES */
         
-        [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-            background-color: #1E293B !important;
+        /* [COLOR A] Log New Trade Button - Primary Action Blue */
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+            background-color: #1E40AF !important; 
+            color: #FFFFFF !important;
+            border: 1px solid #2563EB !important;
+            font-weight: 600 !important;
         }
-        
-        /* Active Tab State - Slate Blue */
-        [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
-            background-color: #334155 !important; /* Mid-tone Slate Blue for Active */
-            border-left: 4px solid #60A5FA !important; /* Blue accent indicator */
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+            background-color: #1D4ED8 !important;
         }
-        [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] p {
+
+        /* [COLOR B] Selected Navigation Tab - Deep Teal */
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {
+            background-color: #047857 !important; 
+            border: 1px solid #059669 !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] p {
             color: #FFFFFF !important;
             font-weight: 600 !important;
         }
+
+        /* [COLOR C] Unselected Navigation Tabs - Dark Charcoal/Slate */
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {
+            background-color: #1F2937 !important; 
+            border: 1px solid #374151 !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]):hover {
+            background-color: #374151 !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) p {
+            color: #9CA3AF !important;
+            font-weight: 400 !important;
+        }
         
-        /* Clean up the Daily API Setup Expander */
+        /* Clean up secondary interface borders */
         [data-testid="stSidebar"] div[data-testid="stExpander"] {
-            border-color: #1E293B;
+            border-color: #374151;
         }
     </style>
 """, unsafe_allow_html=True)
