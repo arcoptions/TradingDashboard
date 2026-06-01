@@ -26,7 +26,6 @@ st.markdown("""
 
 st.markdown("## ARC Trading Terminal")
 
-# --- SESSION STATE INITIALIZATION ---
 if "viewing_trade" not in st.session_state:
     st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state:
@@ -132,6 +131,7 @@ try:
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
+    # Primary Trades Sheet
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     required_cols = ["Live Price", "Exit Price"]
@@ -140,6 +140,7 @@ try:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
             
+    # Scanner Sheet
     worksheet_list = [ws.title for ws in sh.worksheets()]
     if "Scanners" in worksheet_list:
         scanner_sheet = sh.worksheet("Scanners")
@@ -151,6 +152,13 @@ try:
     if "Live Price" not in scanner_headers:
         scanner_sheet.update_cell(1, len(scanner_headers) + 1, "Live Price")
         scanner_headers.append("Live Price")
+        
+    # --- NEW: Daily API Settings Sheet ---
+    if "Settings" in worksheet_list:
+        settings_sheet = sh.worksheet("Settings")
+    else:
+        settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
+        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""]], "A1:B2")
     
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
@@ -160,6 +168,16 @@ except Exception as e:
 def fetch_live_prices():
     if "dhan" not in st.secrets:
         st.error("Missing API Keys: Check your secrets configuration.")
+        return
+        
+    # Dynamically reads today's token from Google Sheets instead of Secrets
+    try:
+        daily_token = settings_sheet.acell('B2').value
+        if not daily_token:
+            st.error("No token found for today! Please paste your new Dhan token in the '⚙️ Daily Setup' sidebar.")
+            return
+    except Exception as e:
+        st.error(f"Could not read token from settings: {e}")
         return
         
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
@@ -206,8 +224,8 @@ def fetch_live_prices():
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
-        'access-token': st.secrets["dhan"]["dhan_access_token"],
-        'client-id': st.secrets["dhan"]["dhan_client_id"]
+        'access-token': daily_token, # Uses the dynamic sheet token!
+        'client-id': st.secrets["dhan"]["dhan_client_id"] # Client ID never changes, so it stays in secrets
     }
     
     with st.spinner("Fetching live market data from Dhan..."):
@@ -246,6 +264,8 @@ def fetch_live_prices():
                     st.rerun()
                 else:
                     st.warning("No price data matched your Security IDs.")
+            elif response.status_code == 401:
+                st.error("Authentication Failed: Your token has expired or is invalid. Please paste today's token in the '⚙️ Daily Setup' menu.")
             else:
                 st.error(f"Dhan API Error: {response.text}")
         except Exception as e:
@@ -265,6 +285,20 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.divider()
+    
+    # --- NEW: DAILY API SETUP WIDGET ---
+    with st.expander("⚙️ Daily API Setup", expanded=False):
+        st.caption("Paste today's generated Dhan Access Token here. It will be saved securely for the rest of the day.")
+        try:
+            saved_token = settings_sheet.acell('B2').value or ""
+        except:
+            saved_token = ""
+            
+        new_token = st.text_input("Today's Token:", value=saved_token, type="password")
+        if st.button("Save Token", use_container_width=True):
+            settings_sheet.update_acell('B2', new_token)
+            st.success("Saved! You are ready to trade.")
+            st.rerun()
 
     if current_page == "Options Tracker":
         st.subheader("Data Entry")
@@ -302,7 +336,6 @@ with st.sidebar:
                     st.rerun()
 
         with st.expander("Manual Entry", expanded=True):
-            # Dynamic key prevents the Session State API crash!
             raw_tip = st.text_area("Quick Parse:", key=f"qp_{st.session_state.qp_key}")
             parsed_data = parse_telegram_tip(raw_tip)
             search_query = st.text_input("Find Instrument", value=parsed_data["symbol"])
@@ -358,7 +391,6 @@ with st.sidebar:
                     set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
                     worksheet.append_row(new_row)
                     
-                    # Wipes the Quick Parse box safely by incrementing the ID
                     st.session_state.qp_key += 1
                     st.success("Trade Logged.")
                     st.rerun()
