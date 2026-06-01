@@ -12,78 +12,84 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- CUSTOM CSS FOR INSTITUTIONAL CLEAN LOOK ---
+# --- CUSTOM CSS FOR PERFECT ALIGNMENT & INSTITUTIONAL LOOK ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
         [data-testid="stToolbar"] {visibility: hidden;} 
         footer {visibility: hidden;}
-        
-        /* Fixed Header Cut-off */
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* 1. Log New Trade Button (Primary) - Shade 1: Deep Navy */
-        [data-testid="stSidebar"] div.stButton > button[kind="primary"] {
-            width: 100%;
-            display: flex;
-            justify-content: flex-start;
-            padding: 14px 20px;
-            border-radius: 6px;
-            background-color: #0A111A !important; 
-            border: 1px solid #1E293B !important;
-            color: #F8FAFC !important;
-            font-size: 15px;
-            font-weight: 500;
-            transition: all 0.2s ease;
+        /* 1. Log New Trade Button (Primary) - Action Blue */
+        [data-testid="stSidebar"] div.stButton {
+            width: 100% !important;
         }
-        [data-testid="stSidebar"] div.stButton > button[kind="primary"] p {
-            text-align: left;
-            margin: 0;
+        [data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+            width: 100% !important;
+            justify-content: flex-start !important; /* Left Align */
+            padding: 16px 20px !important;
+            border-radius: 6px !important;
+            background-color: #1E3A8A !important; /* Deep Royal Blue */
+            border: 1px solid #1E3A8A !important;
+            color: #FFFFFF !important;
+            font-size: 16px !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease;
+            box-sizing: border-box !important;
         }
         [data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover {
-            background-color: #111A26 !important;
+            background-color: #2563EB !important; /* Brighter blue on hover */
         }
 
         /* 2 & 3. Navigation Menu - Styled Radio Buttons */
         [data-testid="stSidebar"] div[role="radiogroup"] {
-            gap: 0.5rem; 
+            width: 100% !important;
+            display: flex;
+            flex-direction: column;
+            gap: 8px; 
         }
         [data-testid="stSidebar"] div[role="radiogroup"] > label {
-            background-color: #131E2E !important; /* Shade 2: Medium Navy */
-            padding: 14px 20px;
-            border-radius: 6px;
-            margin: 0;
-            width: 100%;
-            display: flex;
-            align-items: center;
+            background-color: #0F172A !important; /* Midnight Navy for Inactive */
+            padding: 16px 20px !important;
+            border-radius: 6px !important;
+            margin: 0 !important;
+            width: 100% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important; /* Left Align */
             border: 1px solid #1E293B !important;
             cursor: pointer;
             transition: all 0.2s ease;
+            box-sizing: border-box !important;
         }
-        /* Hide the default radio circle */
+        
+        /* Hide the default radio circles */
         [data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {
-            display: none;
+            display: none !important;
         }
-        [data-testid="stSidebar"] div[role="radiogroup"] > label > div:last-child {
-            margin-left: 0;
-        }
+        
+        /* Target the text inside the radio button */
         [data-testid="stSidebar"] div[role="radiogroup"] > label p {
-            font-size: 15px;
-            font-weight: 500;
-            color: #CBD5E1 !important;
-            margin: 0;
+            font-size: 16px !important;
+            font-weight: 500 !important;
+            color: #94A3B8 !important; /* Muted text for inactive */
+            margin: 0 !important;
+            text-align: left !important;
+            width: 100% !important;
         }
+        
         [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-            background-color: #1A283C !important;
+            background-color: #1E293B !important;
         }
-        /* Active Tab State - Shade 3: Lighter Steel Blue */
+        
+        /* Active Tab State - Slate Blue */
         [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
-            background-color: #1F314D !important; 
-            border-left: 4px solid #4F8BFF !important; 
+            background-color: #334155 !important; /* Mid-tone Slate Blue for Active */
+            border-left: 4px solid #60A5FA !important; /* Blue accent indicator */
         }
         [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] p {
             color: #FFFFFF !important;
-            font-weight: 600;
+            font-weight: 600 !important;
         }
         
         /* Clean up the Daily API Setup Expander */
@@ -234,7 +240,6 @@ def trade_entry_modal():
 
 # --- SIDEBAR NAV & SETTINGS ---
 with st.sidebar:
-    # Removed column wrappers so the logo expands naturally and left-aligns with everything else
     try: 
         st.image("logo.png", use_container_width=True)
     except: 
