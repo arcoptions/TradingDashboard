@@ -1,5 +1,6 @@
 streamlit
 pandas
+requests
 gspread
 google-auth
-requests
+streamlit-option-menu
