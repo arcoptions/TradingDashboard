@@ -150,9 +150,9 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     opt_data = worksheet.get_all_records()
     if opt_data:
         df_opt = pd.DataFrame(opt_data)
-        df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
-        active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isnan() == False] # Protection against blank spaces
-        if not active_opt.empty:
+        if not df_opt.empty and "Status (Watch/Active/Closed)" in df_opt.columns:
+            df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
+            # Fixed crash loop by letting pandas native .isin handles empty strings implicitly
             active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
             for idx, row in active_opt.iterrows():
                 exch = str(row.get("Exchange", "")).strip()
@@ -164,22 +164,22 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     scan_data = scanner_sheet.get_all_records()
     if scan_data:
         df_scan = pd.DataFrame(scan_data)
-        df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-        active_scan = df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])]
-        
-        for idx, row in active_scan.iterrows():
-            symbol = str(row.get("Symbol", "")).strip()
-            if symbol:
-                t_sym, sec_id, exch = resolve_instrument(symbol)
-                if exch in payload and sec_id.isdigit():
-                    payload[exch].append(int(sec_id))
-                    row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+        if not df_scan.empty and "Status" in df_scan.columns:
+            df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+            active_scan = df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])]
+            
+            for idx, row in active_scan.iterrows():
+                symbol = str(row.get("Symbol", "")).strip()
+                if symbol:
+                    t_sym, sec_id, exch = resolve_instrument(symbol)
+                    if exch in payload and sec_id.isdigit():
+                        payload[exch].append(int(sec_id))
+                        row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
 
     payload = {k: list(set(v)) for k, v in payload.items() if v}
     if not payload: 
         return "No targets mapped"
         
-    # --- FIXED CORE BUG HERE: Re-mapped token credentials handshake ---
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
