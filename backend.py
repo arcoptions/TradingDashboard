@@ -138,42 +138,48 @@ def init_db():
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
-# --- 4. CORE DATA REFRESH LOGIC ---
+# --- 4. CORE DATA REFRESH LOGIC (WITH EXPLICIT TIMEOUT PROTECTION) ---
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    daily_token = settings_sheet.acell('B2').value
-    if not daily_token:
-        return "Missing Dynamic Authorization Token"
+    try:
+        daily_token = settings_sheet.acell('B2').value
+        if not daily_token:
+            return "Missing Dynamic Authorization Token"
+    except Exception as e:
+        return f"Database Read Failure: {e}"
         
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
     row_map = [] 
     
-    opt_data = worksheet.get_all_records()
-    if opt_data:
-        df_opt = pd.DataFrame(opt_data)
-        if not df_opt.empty and "Status (Watch/Active/Closed)" in df_opt.columns:
-            df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
-            active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
-            for idx, row in active_opt.iterrows():
-                exch = str(row.get("Exchange", "")).strip()
-                sec_id = str(row.get("Security ID", "")).strip()
-                if exch in payload and sec_id.isdigit():
-                    payload[exch].append(int(sec_id))
-                    row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
-
-    scan_data = scanner_sheet.get_all_records()
-    if scan_data:
-        df_scan = pd.DataFrame(scan_data)
-        if not df_scan.empty and "Status" in df_scan.columns:
-            df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-            active_scan = df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])]
-            
-            for idx, row in active_scan.iterrows():
-                symbol = str(row.get("Symbol", "")).strip()
-                if symbol:
-                    t_sym, sec_id, exch = resolve_instrument(symbol)
+    try:
+        opt_data = worksheet.get_all_records()
+        if opt_data:
+            df_opt = pd.DataFrame(opt_data)
+            if not df_opt.empty and "Status (Watch/Active/Closed)" in df_opt.columns:
+                df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
+                active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
+                for idx, row in active_opt.iterrows():
+                    exch = str(row.get("Exchange", "")).strip()
+                    sec_id = str(row.get("Security ID", "")).strip()
                     if exch in payload and sec_id.isdigit():
                         payload[exch].append(int(sec_id))
-                        row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+                        row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+
+        scan_data = scanner_sheet.get_all_records()
+        if scan_data:
+            df_scan = pd.DataFrame(scan_data)
+            if not df_scan.empty and "Status" in df_scan.columns:
+                df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+                active_scan = df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])]
+                
+                for idx, row in active_scan.iterrows():
+                    symbol = str(row.get("Symbol", "")).strip()
+                    if symbol:
+                        t_sym, sec_id, exch = resolve_instrument(symbol)
+                        if exch in payload and sec_id.isdigit():
+                            payload[exch].append(int(sec_id))
+                            row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+    except Exception as e:
+        return f"DataFrame Parse Failure: {e}"
 
     payload = {k: list(set(v)) for k, v in payload.items() if v}
     if not payload: 
@@ -187,7 +193,11 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     }
     
     url = "https://api.dhan.co/v2/marketfeed/ohlc"
-    response = requests.post(url, headers=headers, json=payload)
+    try:
+        # Added explicit timeout limits to eliminate silent thread hangs
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+    except Exception as e:
+        return f"HTTP Connection Timeout: {e}"
     
     if response.status_code == 200:
         data = response.json().get("data", {})
@@ -207,40 +217,57 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 elif item["type"] == "scan":
                     scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
         
-        if opt_updates: worksheet.batch_update(opt_updates)
-        if scan_updates: scanner_sheet.batch_update(scan_updates)
-        
-        # --- FIXED: Forces the timestamp string calculation to use local Indian Standard Time (IST) ---
-        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        current_time_str = ist_now.strftime("%d-%b %I:%M %p")
-        try: settings_sheet.update_acell('B3', current_time_str)
-        except: pass
-        
+        try:
+            if opt_updates: worksheet.batch_update(opt_updates)
+            if scan_updates: scanner_sheet.batch_update(scan_updates)
+            
+            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            current_time_str = ist_now.strftime("%d-%b %I:%M %p")
+            settings_sheet.update_acell('B3', current_time_str)
+        except Exception as e:
+            return f"Spreadsheet Write Failure: {e}"
+            
         return "Success"
     else:
         return f"API Error: {response.status_code}"
 
-# --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON ---
-def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+# --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON (ANTI-EXPIRATION SYSTEM) ---
+def background_sync_loop():
+    """Persistent background tracking daemon with built-in re-authorization."""
+    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    
     while True:
-        # --- FIXED: Forces the market hours execution metrics to evaluate against local IST ---
         now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        
         if now.weekday() < 5:
             start_market = now.replace(hour=9, minute=0, second=0, microsecond=0)
             end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
             
             if start_market <= now <= end_market:
                 try:
-                    execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-                except Exception as e:
-                    pass
+                    # Dynamically instantiate fresh workspace links to prevent 60-min token drop timeouts
+                    credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+                    gc = gspread.authorize(credentials)
+                    sh = gc.open("Comprehensive Trading Tracker 2026")
+                    
+                    bg_worksheet = sh.sheet1
+                    bg_scanner_sheet = sh.worksheet("Scanners")
+                    bg_settings_sheet = sh.worksheet("Settings")
+                    
+                    bg_sheet_headers = bg_worksheet.row_values(1)
+                    bg_scanner_headers = bg_scanner_sheet.row_values(1)
+                    
+                    execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_sheet_headers, bg_scanner_headers)
+                except Exception:
+                    pass # Prevent thread crashing on temporary database locks
+                    
         time.sleep(300)
 
 @st.cache_resource
 def start_automated_scheduler(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+    # Decoupled parameter bindings so the execution context controls its own memory footprint
     cron_worker = threading.Thread(
         target=background_sync_loop,
-        args=(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers),
         daemon=True
     )
     cron_worker.start()
