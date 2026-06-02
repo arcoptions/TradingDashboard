@@ -51,12 +51,12 @@ st.markdown("""
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* Hide native radio button circular selectors */
+        /* Hide native radio button circular check boxes */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
 
-        /* Normalize internal markdown typography blocks */
+        /* Normalize markdown text layouts in sidebar wrappers */
         div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
@@ -175,11 +175,11 @@ def compute_signal_indicators(df):
                 
             min_entry = min([float(d) for d in digits])
             if live_price > min_entry:
-                signals.append("🟢 Above")
+                signals.append("Above")
             elif live_price < min_entry:
-                signals.append("🔴 Below")
+                signals.append("Below")
             else:
-                signals.append("⚪ At Entry")
+                signals.append("At Entry")
         except:
             signals.append("-")
             
@@ -319,7 +319,6 @@ if current_page == "Options Tracker":
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
         
-        # Calculate dynamic status columns right before view loading
         initial_df = compute_signal_indicators(initial_df)
         
         view_cols = [
@@ -329,14 +328,13 @@ if current_page == "Options Tracker":
             "Notes", "Security ID", "_Sheet_Row"
         ]
         
-        # UPGRADED SANITIZER: Force completely explicit string conversions on all text blocks
+        # FIX: Added '_Sheet_Row' to the exclusion tuple to completely preserve its math type!
         for col in view_cols:
             if col not in initial_df.columns: 
                 initial_df[col] = ""
-            elif col != "Journal":
+            elif col not in ["Journal", "_Sheet_Row"]:
                 initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
         
-        # Explicit boolean formatting for Checkbox validation rules
         initial_df["Journal"] = initial_df["Journal"].replace({'': False, 'False': False, 'True': True}).astype(bool)
 
         table_column_config = {
@@ -345,7 +343,7 @@ if current_page == "Options Tracker":
             "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Source"), 
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
-            "Vs Entry": st.column_config.TextColumn("Vs Entry", help="Performance relative to your lowest entry parameters"),
+            "Vs Entry": st.column_config.TextColumn("Vs Entry"),
             "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
             "Add-On / Dip Levels": st.column_config.TextColumn("Add-On Levels"),
             "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
@@ -431,8 +429,8 @@ if current_page == "Options Tracker":
                             st.success("Database synchronized.")
                             st.rerun()
             else:
-                st.error("Row context lost. Please return to the terminal.")
-                st.button("Back to Terminal", on_click=close_journal)
+                # FIX: Removed the secondary duplicated button block here to enforce perfect stability
+                st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
         else:
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
