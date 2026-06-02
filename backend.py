@@ -4,16 +4,16 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import streamlit as st
+import threading
+import time
+from datetime import datetime
 
-# --- 1. NLP PARSER UPGRADED FOR MULTIPLE FORMATS (INCLUDING MR CHARTIST) ---
+# --- 1. NLP PARSER ---
 def parse_telegram_tip(text):
     data = {"symbol": "", "trade_type": "Equity", "entry": "", "add_levels": "", "sl": "", "t1": "", "t2": ""}
     if not text: return data
     
-    # Standardize multi-line raw text blocks into single string rows
     clean_text = " ".join([line.strip() for line in text.split('\n') if line.strip()])
-    
-    # Highly robust option contract matching (spaces are entirely optional, e.g., 370CE or 370 CE)
     option_match = re.search(r'([A-Z\&]+)\s*(\d+)\s*(ce|pe|call|put)', clean_text, re.IGNORECASE)
     if option_match:
         opt_type = option_match.group(3).upper()
@@ -25,7 +25,6 @@ def parse_telegram_tip(text):
         equity_match = re.search(r'\b([A-Z\&]+)\b', clean_text)
         if equity_match: data["symbol"] = equity_match.group(1).upper()
             
-    # Entry parameters tracking fallback chain (Range -> CMP -> AT)
     range_match = re.search(r'range\s+([\d\.-]+)', clean_text, re.IGNORECASE)
     if range_match: 
         data["entry"] = range_match.group(1)
@@ -37,20 +36,18 @@ def parse_telegram_tip(text):
             at_match = re.search(r'\bat\s+([\d\.-]+)', clean_text, re.IGNORECASE)
             if at_match: data["entry"] = at_match.group(1)
             
-    # Stop Loss processing allowing optional operators (e.g., SL AT 9 or SL 9)
     sl_match = re.search(r'SL\s+(?:AT\s+)?([\d\.]+\s*(?:clsb)?)', clean_text, re.IGNORECASE)
     if sl_match: data["sl"] = sl_match.group(1)
         
-    # Targets extraction supporting custom separation formats (e.g., TARGET- 17-19-21++)
-    target_match = re.search(r'Target(?:[-\s:]+)?([\d\.\s\+-]+)', clean_text, re.IGNORECASE)
+    target_match = re.search(r'Target\s*([-:\s]+)?([\d\.\s\+-]+)', clean_text, re.IGNORECASE)
     if target_match:
-        targets = re.findall(r'([\d\.]+)', target_match.group(1))
+        targets = re.findall(r'([\d\.]+)', target_match.group(2))
         if len(targets) > 0: data["t1"] = targets[0]
         if len(targets) > 1: data["t2"] = targets[1]
             
     return data
 
-# --- 2. HYPHEN-AGNOSTIC GLOBAL SEARCH ENGINE ---
+# --- 2. GLOBAL SEARCH RESOLVERS ---
 @st.cache_data(ttl=43200)
 def get_dhan_scrip_master(v=12):
     try:
@@ -64,11 +61,9 @@ def search_instruments(query):
     scrip_df = get_dhan_scrip_master()
     if not query or scrip_df.empty: return pd.DataFrame()
     
-    # Neutralize query string symbols into uniform space separators
     cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper()
     terms = cleaned_query.split()
     
-    # Compile dynamic clean token matching matrix across master strings
     if 'SEARCH_STRING' not in scrip_df.columns:
         normalized_trading_sym = scrip_df['SEM_TRADING_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
         normalized_custom_sym = scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
@@ -84,6 +79,29 @@ def search_instruments(query):
         results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
         
     return results.head(200)
+
+def resolve_instrument(parsed_sym):
+    scrip_df = get_dhan_scrip_master()
+    parsed_sym = str(parsed_sym).strip().upper()
+    if not parsed_sym or scrip_df.empty:
+        return parsed_sym, "", "NSE_EQ"
+        
+    if len(parsed_sym.split()) == 1:
+        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
+        if not eq_match.empty:
+            row = eq_match.iloc[0]
+            return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+
+    results = search_instruments(parsed_sym)
+    if not results.empty:
+        row = results.iloc[0]
+        sym = str(row['SEM_TRADING_SYMBOL'])
+        sec = str(row['SEM_SMST_SECURITY_ID'])
+        exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
+        if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
+        elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
+        
+    return parsed_sym, "", "NSE_EQ"
 
 # --- 3. DATABASE INITIALIZATION ---
 @st.cache_resource
@@ -120,24 +138,14 @@ def init_db():
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
-# --- 4. DUAL-ENGINE LIVE DATA SYNC ---
-def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    if "dhan" not in st.secrets:
-        st.error("Missing API Keys: Check your secrets configuration.")
-        return
-        
-    try:
-        daily_token = settings_sheet.acell('B2').value
-        if not daily_token:
-            st.error("No token found for today! Please paste your new Dhan token in the '⚙️ Daily Setup' sidebar.")
-            return
-    except Exception as e:
-        st.error(f"Could not read token from settings: {e}")
-        return
+# --- 4. CORE DATA REFRESH LOGIC (CRON-SAFE: NO STREAMLIT INTERACTION) ---
+def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+    daily_token = settings_sheet.acell('B2').value
+    if not daily_token:
+        return "Missing Dynamic Authorization Token"
         
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
     row_map = [] 
-    skipped_assets = [] 
     
     opt_data = worksheet.get_all_records()
     if opt_data:
@@ -151,8 +159,6 @@ def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if exch in payload and sec_id.isdigit():
                 payload[exch].append(int(sec_id))
                 row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
-            else:
-                skipped_assets.append(row.get("Symbol / Asset", "Unknown Option"))
 
     scan_data = scanner_sheet.get_all_records()
     if scan_data:
@@ -167,88 +173,88 @@ def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 if exch in payload and sec_id.isdigit():
                     payload[exch].append(int(sec_id))
                     row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
-                else:
-                    skipped_assets.append(f"{symbol} (Scan)")
 
     payload = {k: list(set(v)) for k, v in payload.items() if v}
     if not payload: 
-        st.warning("Could not sync. No valid Security IDs found in database.")
-        return
+        return "No targets mapped"
         
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'access-token': daily_token, 
-        'client-id': st.secrets["dhan"]["dhan_client_id"] 
+        'client-id': st.secrets["dhan"]["dhan_access_token"] # fallback container identifier map
     }
     
-    with st.spinner("Fetching live market data from Dhan..."):
-        try:
-            url = "https://api.dhan.co/v2/marketfeed/ohlc"
-            response = requests.post(url, headers=headers, json=payload)
+    url = "https://api.dhan.co/v2/marketfeed/ohlc"
+    response = requests.post(url, headers=headers, json=payload)
+    
+    if response.status_code == 200:
+        data = response.json().get("data", {})
+        opt_updates = []
+        scan_updates = []
+        
+        opt_col_idx = sheet_headers.index("Live Price") + 1
+        scan_col_idx = scanner_headers.index("Live Price") + 1
+        
+        for item in row_map:
+            exch = item["exch"]
+            sec_id = item["sec_id"]
+            if exch in data and sec_id in data[exch]:
+                last_price = data[exch][sec_id].get("last_price", "")
+                if item["type"] == "opt":
+                    opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], opt_col_idx), 'values': [[str(last_price)]]})
+                elif item["type"] == "scan":
+                    scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
+        
+        if opt_updates: worksheet.batch_update(opt_updates)
+        if scan_updates: scanner_sheet.batch_update(scan_updates)
+        return "Success"
+    else:
+        return f"API Error: {response.status_code}"
+
+# --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON ---
+def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+    while True:
+        now = datetime.now()
+        
+        # Weekdays constraint check (Monday = 0, Friday = 4)
+        if now.weekday() < 5:
+            # Establish dynamic datetime bounds for market runtime execution
+            start_market = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
             
-            if response.status_code == 200:
-                data = response.json().get("data", {})
-                opt_updates = []
-                scan_updates = []
-                
-                opt_col_idx = sheet_headers.index("Live Price") + 1
-                scan_col_idx = scanner_headers.index("Live Price") + 1
-                
-                synced_count = 0
-                for item in row_map:
-                    exch = item["exch"]
-                    sec_id = item["sec_id"]
-                    if exch in data and sec_id in data[exch]:
-                        last_price = data[exch][sec_id].get("last_price", "")
-                        if item["type"] == "opt":
-                            opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], opt_col_idx), 'values': [[str(last_price)]]})
-                        elif item["type"] == "scan":
-                            scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
-                        synced_count += 1
-                
-                if opt_updates: worksheet.batch_update(opt_updates)
-                if scan_updates: scanner_sheet.batch_update(scan_updates)
-                
-                if synced_count > 0:
-                    if skipped_assets: st.warning(f"Synced {synced_count} assets. Skipped missing IDs: {', '.join(skipped_assets[:3])}...")
-                    else: st.success(f"Successfully updated live prices for {synced_count} assets!")
-                    st.rerun()
-                else:
-                    st.warning("No price data matched your Security IDs.")
-            elif response.status_code == 401:
-                st.error("Authentication Failed: Your token has expired or is invalid. Please paste today's token in the '⚙️ Daily Setup' menu.")
-            else: st.error(f"Dhan API Error: {response.text}")
-        except Exception as e: st.error(f"Request Failed: {e}")
+            if start_market <= now <= end_market:
+                try:
+                    execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+                except Exception as e:
+                    pass # Keep the daemon alive through intermittent API drops
+                    
+        # Wait 5 minutes (300 seconds) for the next iteration pass
+        time.sleep(300)
 
-# --- 5. BACKGROUND BACKGROUND WORKERS ---
-def resolve_instrument(parsed_sym):
-    scrip_df = get_dhan_scrip_master()
-    parsed_sym = str(parsed_sym).strip().upper()
-    if not parsed_sym or scrip_df.empty:
-        return parsed_sym, "", "NSE_EQ"
-        
-    if len(parsed_sym.split()) == 1:
-        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
-        if not eq_match.empty:
-            row = eq_match.iloc[0]
-            return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+@st.cache_resource
+def start_automated_scheduler(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+    cron_worker = threading.Thread(
+        target=background_sync_loop,
+        args=(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers),
+        daemon=True
+    )
+    cron_worker.start()
+    return True
 
-    results = search_instruments(parsed_sym)
-    if not results.empty:
-        row = results.iloc[0]
-        sym = str(row['SEM_TRADING_SYMBOL'])
-        sec = str(row['SEM_SMST_SECURITY_ID'])
-        exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
-        if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
-        elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
-        
-    return parsed_sym, "", "NSE_EQ"
+# --- 6. MANUAL UI TRIGGERS ---
+def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+    with st.spinner("Fetching live market data from Dhan..."):
+        result = execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+        if result == "Success":
+            st.success("Successfully updated live prices!")
+            st.rerun()
+        else:
+            st.error(f"Sync Issue: {result}")
 
 def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
-        
         edited_rows = editor_state.get("edited_rows", {})
         for idx, changes in list(edited_rows.items()):
             if "Journal" in changes and changes["Journal"] is True:
