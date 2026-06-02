@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- BULLETPROOF CSS FOR UNIFORM SIDEBAR BUTTONS & GRID LAYOUT ---
+# --- CHAMPAGNE GOLD CSS FOR PREMIUM LIGHT THEME ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -20,7 +20,15 @@ st.markdown("""
         footer {visibility: hidden;}
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* FORCE ABSOLUTE UNIFORMITY IN SIDEBAR ELEMENTS SIZE & SHAPE */
+        /* CHAMPAGNE GOLD PALETTE EXTRACTED FROM LOGO */
+        :root {
+            --arc-gold-light: #F9E7BE;
+            --arc-gold-mid: #D1A553;
+            --arc-gold-dark: #B88A3B;
+            --arc-text-dark: #1A202C; 
+        }
+        
+        /* SIDEBAR BUTTON ALIGNMENT & SHAPE NORMALIZATION */
         div[data-testid="stSidebar"] .stButton > button,
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
         div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
@@ -36,24 +44,24 @@ st.markdown("""
             border-radius: 6px !important;
             display: flex !important;
             align-items: center !important;
-            justify-content: center !important;
-            text-align: center !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
             font-size: 15px !important;
             cursor: pointer !important;
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* Hide native radio button circular check selectors */
+        /* Hide native radio button circular selectors */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
 
-        /* Normalize inner text container flexbox metrics */
+        /* Normalize internal markdown typography blocks */
         div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
             display: flex !important;
-            justify-content: center !important;
+            justify-content: flex-start !important;
             align-items: center !important;
         }
 
@@ -62,18 +70,11 @@ st.markdown("""
             margin: 0 !important;
             padding: 0 !important;
             font-size: 15px !important;
-            width: auto !important;
+            width: 100% !important;
+            text-align: left !important;
         }
 
-        /* CHAMPAGNE GOLD PALETTE EXTRACTED FROM LOGO */
-        :root {
-            --arc-gold-light: #F9E7BE;
-            --arc-gold-mid: #D1A553;
-            --arc-gold-dark: #B88A3B;
-            --arc-text-dark: #1A202C; 
-        }
-
-        /* Log New Trade Button - Primary Action Gold */
+        /* Log New Trade Button (Primary Action) */
         div[data-testid="stSidebar"] .stButton > button[kind="primary"],
         .stButton > button[kind="primary"] {
             background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
@@ -152,32 +153,38 @@ except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
 
-# --- DYNAMIC ROW HIGHLIGHTING LOGIC ---
-def highlight_rows(row):
-    try:
-        bg_color = ''
-        live_price_str = str(row.get('Live Price', ''))
-        entry_range_str = str(row.get('Entry CMP / Range', ''))
-        
-        if live_price_str.strip() in ['', 'nan', 'None']:
-            return [bg_color] * len(row)
+# --- RUNTIME SIGNAL CALCULATION ENGINE ---
+def compute_signal_indicators(df):
+    if df.empty:
+        return df
+    signals = []
+    for idx, row in df.iterrows():
+        try:
+            live_val = str(row.get('Live Price', '')).strip()
+            range_val = str(row.get('Entry CMP / Range', '')).strip()
             
-        live_price = float(live_price_str)
-        
-        numbers = re.findall(r'[\d\.]+', entry_range_str)
-        if not numbers:
-            return [bg_color] * len(row)
+            if live_val in ['', 'nan', 'None'] or range_val in ['', 'nan', 'None']:
+                signals.append("-")
+                continue
+                
+            live_price = float(live_val)
+            digits = re.findall(r'[\d\.]+', range_val)
+            if not digits:
+                signals.append("-")
+                continue
+                
+            min_entry = min([float(d) for d in digits])
+            if live_price > min_entry:
+                signals.append("🟢 Above")
+            elif live_price < min_entry:
+                signals.append("🔴 Below")
+            else:
+                signals.append("⚪ At Entry")
+        except:
+            signals.append("-")
             
-        min_entry = min([float(n) for n in numbers])
-        
-        if live_price > min_entry:
-            bg_color = 'background-color: rgba(39, 174, 96, 0.12);' 
-        elif live_price < min_entry:
-            bg_color = 'background-color: rgba(231, 76, 60, 0.12);' 
-            
-        return [bg_color] * len(row)
-    except:
-        return [''] * len(row)
+    df['Vs Entry'] = signals
+    return df
 
 # --- MODAL: DATA ENTRY FORM ---
 @st.dialog("Log New Trade or Scan", width="large")
@@ -312,16 +319,19 @@ if current_page == "Options Tracker":
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
         
+        # Calculate dynamic status columns right before view loading
+        initial_df = compute_signal_indicators(initial_df)
+        
         view_cols = [
             "Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", 
-            "Status (Watch/Active/Closed)", "Entry CMP / Range", "Add-On / Dip Levels", 
+            "Status (Watch/Active/Closed)", "Vs Entry", "Entry CMP / Range", "Add-On / Dip Levels", 
             "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", 
             "Notes", "Security ID", "_Sheet_Row"
         ]
         
         for col in view_cols:
             if col not in initial_df.columns: initial_df[col] = ""
-            elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price", "Add-On / Dip Levels", "Notes", "Security ID"]:
+            elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price", "Add-On / Dip Levels", "Notes", "Security ID", "Vs Entry"]:
                 initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
         table_column_config = {
@@ -330,6 +340,7 @@ if current_page == "Options Tracker":
             "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Source"), 
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+            "Vs Entry": st.column_config.TextColumn("Vs Entry", help="Performance relative to your lowest entry parameters"),
             "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
             "Add-On / Dip Levels": st.column_config.TextColumn("Add-On Levels"),
             "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
@@ -341,8 +352,8 @@ if current_page == "Options Tracker":
             "Security ID": st.column_config.TextColumn("Security ID"),
         }
         
-        # FIX: Removed "Entry CMP / Range" to fully unlock inline modification
-        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)"] 
+        # Unlocked columns mapping bounds
+        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry"] 
 
         if st.session_state.get("viewing_trade_row"):
             st.button("Back to Terminal", on_click=close_journal)
@@ -443,22 +454,22 @@ if current_page == "Options Tracker":
             with tab1:
                 df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    st.data_editor(df_wl[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
+                    # Clean stable rendering - styler removed entirely to ensure zero script errors
+                    st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
 
             with tab2:
                 df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    st.data_editor(df_act[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
+                    st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
                     
             with tab3:
                 df_cls = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
-                    # Enforce range safety on closed positions
-                    st.data_editor(df_cls[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
+                    st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
                         disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                 else: st.info("No records found.")
