@@ -329,10 +329,15 @@ if current_page == "Options Tracker":
             "Notes", "Security ID", "_Sheet_Row"
         ]
         
+        # UPGRADED SANITIZER: Force completely explicit string conversions on all text blocks
         for col in view_cols:
-            if col not in initial_df.columns: initial_df[col] = ""
-            elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price", "Add-On / Dip Levels", "Notes", "Security ID", "Vs Entry"]:
+            if col not in initial_df.columns: 
+                initial_df[col] = ""
+            elif col != "Journal":
                 initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
+        
+        # Explicit boolean formatting for Checkbox validation rules
+        initial_df["Journal"] = initial_df["Journal"].replace({'': False, 'False': False, 'True': True}).astype(bool)
 
         table_column_config = {
             "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
@@ -352,7 +357,6 @@ if current_page == "Options Tracker":
             "Security ID": st.column_config.TextColumn("Security ID"),
         }
         
-        # Unlocked columns mapping bounds
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry"] 
 
         if st.session_state.get("viewing_trade_row"):
@@ -454,7 +458,6 @@ if current_page == "Options Tracker":
             with tab1:
                 df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    # Clean stable rendering - styler removed entirely to ensure zero script errors
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
