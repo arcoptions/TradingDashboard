@@ -120,6 +120,14 @@ st.markdown("""
         [data-testid="stSidebar"] div[data-testid="stExpander"] {
             border-color: #E2E8F0;
         }
+        
+        .sync-timestamp-text {
+            font-size: 12px !important;
+            color: #64748B !important;
+            text-align: right !important;
+            margin-top: 4px;
+            width: 100%;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -142,7 +150,6 @@ try:
         worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
         sheet_headers.append("Notes")
         
-    # CRITICAL: This boots up your background daemon thread automatically on launch!
     bk.start_automated_scheduler(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
@@ -437,9 +444,13 @@ if current_page == "Options Tracker":
             with f_col2:
                 selected_dates = st.multiselect("Filter by Trade Date", options=all_dates, default=all_dates)
             with f_col3:
-                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+                
+                try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+                except: timestamp_val = "Pending"
+                st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
 
             filtered_df = initial_df.copy()
             if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
@@ -479,6 +490,10 @@ elif current_page == "Chartink Scanners":
     with col2:
         if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
             bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+        
+        try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+        except: timestamp_val = "Pending"
+        st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
     
     scanner_data = scanner_sheet.get_all_records()
     df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
@@ -521,6 +536,7 @@ elif current_page == "Chartink Scanners":
             scan_type = st.selectbox("Assign to Scanner:", ["CE1", "CE2", "Positional"])
             chartink_data = st.text_area("Data Dump:", height=100)
             
+            # FIX: Cleared the "r.rerun()" compilation error line right here
             if st.button("Process Dump", type="primary", use_container_width=True):
                 if chartink_data:
                     try:
@@ -540,7 +556,7 @@ elif current_page == "Chartink Scanners":
                             if rows_to_add:
                                 scanner_sheet.append_rows(rows_to_add)
                                 st.success(f"Saved {len(rows_to_add)} records.")
-                                r.rerun()
+                                st.rerun()
                         else: st.error("Invalid format. Missing 'Symbol' column.")
                     except Exception as e: st.error("Parse failed. Ensure TSV format.")
     else:
