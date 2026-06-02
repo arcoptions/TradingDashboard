@@ -138,7 +138,7 @@ def init_db():
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
-# --- 4. CORE DATA REFRESH LOGIC (CRON-SAFE: NO STREAMLIT INTERACTION) ---
+# --- 4. CORE DATA REFRESH LOGIC ---
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     daily_token = settings_sheet.acell('B2').value
     if not daily_token:
@@ -182,7 +182,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'access-token': daily_token, 
-        'client-id': st.secrets["dhan"]["dhan_access_token"] # fallback container identifier map
+        'client-id': st.secrets["dhan"]["dhan_access_token"]
     }
     
     url = "https://api.dhan.co/v2/marketfeed/ohlc"
@@ -216,10 +216,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
 def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     while True:
         now = datetime.now()
-        
-        # Weekdays constraint check (Monday = 0, Friday = 4)
         if now.weekday() < 5:
-            # Establish dynamic datetime bounds for market runtime execution
             start_market = now.replace(hour=9, minute=0, second=0, microsecond=0)
             end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
             
@@ -227,16 +224,15 @@ def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers
                 try:
                     execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
                 except Exception as e:
-                    pass # Keep the daemon alive through intermittent API drops
-                    
-        # Wait 5 minutes (300 seconds) for the next iteration pass
+                    pass
         time.sleep(300)
 
+# --- CACHE PROTECTION ADDED HERE VIA LEADING UNDERSCORES ---
 @st.cache_resource
-def start_automated_scheduler(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+def start_automated_scheduler(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     cron_worker = threading.Thread(
         target=background_sync_loop,
-        args=(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers),
+        args=(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers),
         daemon=True
     )
     cron_worker.start()
