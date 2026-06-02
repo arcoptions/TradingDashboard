@@ -20,7 +20,6 @@ st.markdown("""
         footer {visibility: hidden;}
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* CHAMPAGNE GOLD PALETTE EXTRACTED FROM LOGO */
         :root {
             --arc-gold-light: #F9E7BE;
             --arc-gold-mid: #D1A553;
@@ -28,7 +27,6 @@ st.markdown("""
             --arc-text-dark: #1A202C; 
         }
         
-        /* SIDEBAR BUTTON ALIGNMENT & SHAPE NORMALIZATION */
         div[data-testid="stSidebar"] .stButton > button,
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
         div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
@@ -51,12 +49,10 @@ st.markdown("""
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* Hide native radio button circular check boxes */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
 
-        /* Normalize markdown text layouts in sidebar wrappers */
         div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
@@ -74,7 +70,6 @@ st.markdown("""
             text-align: left !important;
         }
 
-        /* Log New Trade Button (Primary Action) */
         div[data-testid="stSidebar"] .stButton > button[kind="primary"],
         .stButton > button[kind="primary"] {
             background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
@@ -88,7 +83,6 @@ st.markdown("""
             box-shadow: 0px 4px 12px rgba(209, 165, 83, 0.3) !important;
         }
 
-        /* Selected Navigation Tab */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {
             background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
             border: 1px solid var(--arc-gold-dark) !important;
@@ -98,7 +92,6 @@ st.markdown("""
             font-weight: 700 !important;
         }
 
-        /* Multi-Select Filter Tags */
         div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
             background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important;
             color: var(--arc-text-dark) !important;
@@ -112,7 +105,6 @@ st.markdown("""
             fill: var(--arc-text-dark) !important;
         }
 
-        /* Unselected Navigation Tabs */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {
             background-color: transparent !important; 
             border: 1px solid #E2E8F0 !important;
@@ -143,12 +135,15 @@ def close_journal():
     st.session_state.viewing_trade = None
     st.session_state.viewing_trade_row = None
 
-# --- DATABASE CONNECTION ---
+# --- DATABASE CONNECTION & GLOBAL AUTO-SCHEDULER ENGINE ---
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = bk.init_db()
     if "Notes" not in sheet_headers:
         worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
         sheet_headers.append("Notes")
+        
+    # CRITICAL: This boots up your background daemon thread automatically on launch!
+    bk.start_automated_scheduler(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
@@ -319,7 +314,6 @@ if current_page == "Options Tracker":
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
         
-        # Calculate dynamic status columns right before view loading
         initial_df = compute_signal_indicators(initial_df)
         
         view_cols = [
@@ -329,7 +323,6 @@ if current_page == "Options Tracker":
             "Notes", "Security ID", "_Sheet_Row"
         ]
         
-        # Explicitly protect the numeric type constraint on Row Context Indexes
         for col in view_cols:
             if col not in initial_df.columns: 
                 initial_df[col] = ""
@@ -359,7 +352,6 @@ if current_page == "Options Tracker":
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry"] 
 
         if st.session_state.get("viewing_trade_row"):
-            # Enforce clean reset mapping keys to avoid duplicate widget allocation warnings
             if st.button("Back to Terminal", key="top_reset_view_btn"):
                 close_journal()
                 st.rerun()
@@ -434,7 +426,7 @@ if current_page == "Options Tracker":
                             st.success("Database synchronized.")
                             st.rerun()
             else:
-                st.error("Row context mismatch detected. Please click the reset execution button above to restore safety bounds.")
+                st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
         else:
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
@@ -548,7 +540,7 @@ elif current_page == "Chartink Scanners":
                             if rows_to_add:
                                 scanner_sheet.append_rows(rows_to_add)
                                 st.success(f"Saved {len(rows_to_add)} records.")
-                                st.rerun()
+                                r.rerun()
                         else: st.error("Invalid format. Missing 'Symbol' column.")
                     except Exception as e: st.error("Parse failed. Ensure TSV format.")
     else:
