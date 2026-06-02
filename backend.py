@@ -5,12 +5,16 @@ import gspread
 from google.oauth2.service_account import Credentials
 import streamlit as st
 
-# --- 1. NLP PARSER ---
+# --- 1. NLP PARSER UPGRADED FOR MULTIPLE FORMATS (INCLUDING MR CHARTIST) ---
 def parse_telegram_tip(text):
     data = {"symbol": "", "trade_type": "Equity", "entry": "", "add_levels": "", "sl": "", "t1": "", "t2": ""}
     if not text: return data
-        
-    option_match = re.search(r'([A-Z\&]+)\s+(\d+)\s+(ce|pe|call|put)', text, re.IGNORECASE)
+    
+    # Standardize multi-line raw text blocks into single string rows
+    clean_text = " ".join([line.strip() for line in text.split('\n') if line.strip()])
+    
+    # Highly robust option contract matching (spaces are entirely optional, e.g., 370CE or 370 CE)
+    option_match = re.search(r'([A-Z\&]+)\s*(\d+)\s*(ce|pe|call|put)', clean_text, re.IGNORECASE)
     if option_match:
         opt_type = option_match.group(3).upper()
         if opt_type == 'CALL': opt_type = 'CE'
@@ -18,22 +22,27 @@ def parse_telegram_tip(text):
         data["symbol"] = f"{option_match.group(1).upper()} {option_match.group(2)} {opt_type}"
         data["trade_type"] = "Option"
     else:
-        equity_match = re.search(r'^([A-Z\&]+)\b', text)
+        equity_match = re.search(r'\b([A-Z\&]+)\b', clean_text)
         if equity_match: data["symbol"] = equity_match.group(1).upper()
             
-    range_match = re.search(r'range\s+([\d\.-]+)', text, re.IGNORECASE)
-    if range_match: data["entry"] = range_match.group(1)
+    # Entry parameters tracking fallback chain (Range -> CMP -> AT)
+    range_match = re.search(r'range\s+([\d\.-]+)', clean_text, re.IGNORECASE)
+    if range_match: 
+        data["entry"] = range_match.group(1)
     else:
-        cmp_match = re.search(r'cmp\s+([\d\.]+)', text, re.IGNORECASE)
-        if cmp_match: data["entry"] = cmp_match.group(1)
+        cmp_match = re.search(r'cmp\s+([\d\.]+)', clean_text, re.IGNORECASE)
+        if cmp_match: 
+            data["entry"] = cmp_match.group(1)
+        else:
+            at_match = re.search(r'\bat\s+([\d\.-]+)', clean_text, re.IGNORECASE)
+            if at_match: data["entry"] = at_match.group(1)
             
-    add_match = re.search(r'add more\s*(?:levels?)?[-\s]*([\d\.\s-]+?)(?:\s+if comes|\.|\s+SL)', text, re.IGNORECASE)
-    if add_match: data["add_levels"] = add_match.group(1).strip('- ')
-        
-    sl_match = re.search(r'SL\s+([\d\.]+\s*(?:clsb)?)', text, re.IGNORECASE)
+    # Stop Loss processing allowing optional operators (e.g., SL AT 9 or SL 9)
+    sl_match = re.search(r'SL\s+(?:AT\s+)?([\d\.]+\s*(?:clsb)?)', clean_text, re.IGNORECASE)
     if sl_match: data["sl"] = sl_match.group(1)
         
-    target_match = re.search(r'Target\s+([\d\.\s-]+)', text, re.IGNORECASE)
+    # Targets extraction supporting custom separation formats (e.g., TARGET- 17-19-21++)
+    target_match = re.search(r'Target(?:[-\s:]+)?([\d\.\s\+-]+)', clean_text, re.IGNORECASE)
     if target_match:
         targets = re.findall(r'([\d\.]+)', target_match.group(1))
         if len(targets) > 0: data["t1"] = targets[0]
@@ -41,7 +50,7 @@ def parse_telegram_tip(text):
             
     return data
 
-# --- 2. AUTO-DOWNLOAD SCRIP MASTER & RESOLVER ---
+# --- 2. HYPHEN-AGNOSTIC GLOBAL SEARCH ENGINE ---
 @st.cache_data(ttl=43200)
 def get_dhan_scrip_master(v=12):
     try:
@@ -54,13 +63,20 @@ def get_dhan_scrip_master(v=12):
 def search_instruments(query):
     scrip_df = get_dhan_scrip_master()
     if not query or scrip_df.empty: return pd.DataFrame()
-    terms = query.upper().split()
+    
+    # Neutralize query string symbols into uniform space separators
+    cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper()
+    terms = cleaned_query.split()
+    
+    # Compile dynamic clean token matching matrix across master strings
     if 'SEARCH_STRING' not in scrip_df.columns:
-        scrip_df['SEARCH_STRING'] = scrip_df['SEM_TRADING_SYMBOL'].fillna('') + " " + scrip_df['SEM_CUSTOM_SYMBOL'].fillna('')
+        normalized_trading_sym = scrip_df['SEM_TRADING_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
+        normalized_custom_sym = scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
+        scrip_df['SEARCH_STRING'] = normalized_trading_sym.str.upper() + " " + normalized_custom_sym.str.upper()
         
     mask = pd.Series([True] * len(scrip_df))
     for term in terms:
-        mask = mask & scrip_df['SEARCH_STRING'].str.upper().str.contains(term, regex=False)
+        mask = mask & scrip_df['SEARCH_STRING'].str.contains(term, regex=False)
         
     results = scrip_df[mask].copy()
     if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
@@ -68,29 +84,6 @@ def search_instruments(query):
         results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
         
     return results.head(200)
-
-def resolve_instrument(parsed_sym):
-    scrip_df = get_dhan_scrip_master()
-    parsed_sym = str(parsed_sym).strip().upper()
-    if not parsed_sym or scrip_df.empty:
-        return parsed_sym, "", "NSE_EQ"
-        
-    if len(parsed_sym.split()) == 1:
-        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
-        if not eq_match.empty:
-            row = eq_match.iloc[0]
-            return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
-
-    results = search_instruments(parsed_sym)
-    if not results.empty:
-        row = results.iloc[0]
-        sym = str(row['SEM_TRADING_SYMBOL'])
-        sec = str(row['SEM_SMST_SECURITY_ID'])
-        exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
-        if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
-        elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
-        
-    return parsed_sym, "", "NSE_EQ"
 
 # --- 3. DATABASE INITIALIZATION ---
 @st.cache_resource
@@ -229,6 +222,29 @@ def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         except Exception as e: st.error(f"Request Failed: {e}")
 
 # --- 5. BACKGROUND BACKGROUND WORKERS ---
+def resolve_instrument(parsed_sym):
+    scrip_df = get_dhan_scrip_master()
+    parsed_sym = str(parsed_sym).strip().upper()
+    if not parsed_sym or scrip_df.empty:
+        return parsed_sym, "", "NSE_EQ"
+        
+    if len(parsed_sym.split()) == 1:
+        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
+        if not eq_match.empty:
+            row = eq_match.iloc[0]
+            return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+
+    results = search_instruments(parsed_sym)
+    if not results.empty:
+        row = results.iloc[0]
+        sym = str(row['SEM_TRADING_SYMBOL'])
+        sec = str(row['SEM_SMST_SECURITY_ID'])
+        exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
+        if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
+        elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
+        
+    return parsed_sym, "", "NSE_EQ"
+
 def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
