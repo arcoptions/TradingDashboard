@@ -438,13 +438,13 @@ if current_page == "Options Tracker":
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
             
-            f_col1, f_col2, f_col3 = st.columns([4, 4, 2])
+            # --- FIXED ALIGNMENT ENGINE: Locked column baselines via alignment container profiles ---
+            f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
             with f_col1:
                 selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
             with f_col2:
                 selected_dates = st.multiselect("Filter by Trade Date", options=all_dates, default=all_dates)
             with f_col3:
-                st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
                 
@@ -536,7 +536,6 @@ elif current_page == "Chartink Scanners":
             scan_type = st.selectbox("Assign to Scanner:", ["CE1", "CE2", "Positional"])
             chartink_data = st.text_area("Data Dump:", height=100)
             
-            # FIX: Cleared the "r.rerun()" compilation error line right here
             if st.button("Process Dump", type="primary", use_container_width=True):
                 if chartink_data:
                     try:
