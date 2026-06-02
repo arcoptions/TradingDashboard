@@ -27,12 +27,24 @@ st.markdown("""
             --arc-text-dark: #1A202C; 
         }
         
-        /* Force sidebar toggle button to the absolute front layer */
+        /* AGGRESSIVE OVERRIDE FOR THE SIDEBAR TOGGLE BUTTON */
         [data-testid="collapsedControl"] {
+            display: flex !important;
+            visibility: visible !important;
             z-index: 999999 !important;
+            background-color: var(--arc-gold-light) !important;
+            border-radius: 6px !important;
+            margin: 15px !important;
+            border: 1px solid var(--arc-gold-dark) !important;
+            box-shadow: 0px 4px 12px rgba(0,0,0,0.15) !important;
+            transition: all 0.2s ease-in-out !important;
         }
-        header {
-            z-index: 99998 !important;
+        [data-testid="collapsedControl"]:hover {
+            background-color: var(--arc-gold-mid) !important;
+        }
+        [data-testid="collapsedControl"] svg {
+            fill: var(--arc-text-dark) !important;
+            color: var(--arc-text-dark) !important;
         }
         
         div[data-testid="stSidebar"] .stButton > button,
@@ -129,7 +141,6 @@ st.markdown("""
             border-color: #E2E8F0;
         }
         
-        /* Clean target specifications for independent timestamp layouts */
         .sync-timestamp-text {
             font-size: 12px !important;
             color: #64748B !important;
