@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- BULLETPROOF CSS FOR UNIFORM SIDEBAR BUTTONS ---
+# --- BULLETPROOF CSS FOR UNIFORM SIDEBAR BUTTONS & GRID LAYOUT ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -20,7 +20,7 @@ st.markdown("""
         footer {visibility: hidden;}
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* 1. FORCE ABSOLUTE UNIFORMITY IN SIZE & SHAPE */
+        /* FORCE ABSOLUTE UNIFORMITY IN SIDEBAR ELEMENTS SIZE & SHAPE */
         div[data-testid="stSidebar"] .stButton > button,
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
         div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
@@ -43,12 +43,12 @@ st.markdown("""
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* Hide the native radio button circular check elements entirely */
+        /* Hide native radio button circular check selectors */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
 
-        /* Normalize inner text container flows */
+        /* Normalize inner text container flexbox metrics */
         div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
@@ -65,9 +65,9 @@ st.markdown("""
             width: auto !important;
         }
 
-        /* 2. DISTINCT HIGH-CONTRAST COLOR SCHEMES */
+        /* HIGH-CONTRAST PROFESSIONAL COLOR PALETTES */
         
-        /* [COLOR A] Log New Trade Button - Primary Action Blue */
+        /* Log New Trade Button - Primary Action Blue */
         div[data-testid="stSidebar"] .stButton > button[kind="primary"] {
             background-color: #1E40AF !important; 
             color: #FFFFFF !important;
@@ -78,7 +78,7 @@ st.markdown("""
             background-color: #1D4ED8 !important;
         }
 
-        /* [COLOR B] Selected Navigation Tab - Deep Teal */
+        /* Selected Navigation Tab - Deep Emerald Teal */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {
             background-color: #047857 !important; 
             border: 1px solid #059669 !important;
@@ -88,7 +88,7 @@ st.markdown("""
             font-weight: 600 !important;
         }
 
-        /* [COLOR C] Unselected Navigation Tabs - Dark Charcoal/Slate */
+        /* Unselected Navigation Tabs - Muted Dark Slate */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {
             background-color: #1F2937 !important; 
             border: 1px solid #374151 !important;
@@ -101,7 +101,6 @@ st.markdown("""
             font-weight: 400 !important;
         }
         
-        /* Clean up secondary interface borders */
         [data-testid="stSidebar"] div[data-testid="stExpander"] {
             border-color: #374151;
         }
@@ -123,6 +122,10 @@ def close_journal():
 # --- DATABASE CONNECTION ---
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = bk.init_db()
+    # Dynamic Check: Auto-inject Notes schema column into Google Sheets if missing
+    if "Notes" not in sheet_headers:
+        worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
+        sheet_headers.append("Notes")
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
@@ -146,9 +149,9 @@ def highlight_rows(row):
         min_entry = min([float(n) for n in numbers])
         
         if live_price > min_entry:
-            bg_color = 'background-color: rgba(39, 174, 96, 0.15);' 
+            bg_color = 'background-color: rgba(39, 174, 96, 0.12);' 
         elif live_price < min_entry:
-            bg_color = 'background-color: rgba(231, 76, 60, 0.15);' 
+            bg_color = 'background-color: rgba(231, 76, 60, 0.12);' 
             
         return [bg_color] * len(row)
     except:
@@ -249,10 +252,8 @@ def trade_entry_modal():
 
 # --- SIDEBAR NAV & SETTINGS ---
 with st.sidebar:
-    try: 
-        st.image("logo.png", use_container_width=True)
-    except: 
-        st.markdown("## ARC Terminal")
+    try: st.image("logo.png", use_container_width=True)
+    except: st.markdown("## ARC Terminal")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -288,11 +289,18 @@ if current_page == "Options Tracker":
     if not initial_df.empty:
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
-        view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", "Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "_Sheet_Row"]
+        
+        # STRUCTURAL ORDER UPDATE: Adjusted view sequence containing Notes & terminal positions
+        view_cols = [
+            "Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", 
+            "Status (Watch/Active/Closed)", "Entry CMP / Range", "Add-On / Dip Levels", 
+            "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", 
+            "Notes", "Security ID", "_Sheet_Row"
+        ]
         
         for col in view_cols:
             if col not in initial_df.columns: initial_df[col] = ""
-            elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price"]:
+            elif col in ["Stop Loss (SL)", "Target 1", "Target 2", "Live Price", "Exit Price", "Add-On / Dip Levels", "Notes", "Security ID"]:
                 initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
         table_column_config = {
@@ -302,11 +310,14 @@ if current_page == "Options Tracker":
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
             "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
+            "Add-On / Dip Levels": st.column_config.TextColumn("Add-On Levels"),
             "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
             "Target 1": st.column_config.TextColumn("Target 1"),
             "Target 2": st.column_config.TextColumn("Target 2"),
             "Live Price": st.column_config.TextColumn("Live Price"),
             "Exit Price": st.column_config.TextColumn("Exit Price"),
+            "Notes": st.column_config.TextColumn("Notes"),
+            "Security ID": st.column_config.TextColumn("Security ID"),
         }
         
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Entry CMP / Range"] 
@@ -337,7 +348,6 @@ if current_page == "Options Tracker":
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown("### Advanced Repair Tool")
-                    st.caption("Use this if inline editing isn't finding the exact distant expiry you need.")
                     
                     default_search = str(trade_data['Symbol / Asset']).split()[0]
                     fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
@@ -387,31 +397,47 @@ if current_page == "Options Tracker":
                 st.error("Row context lost. Please return to the terminal.")
                 st.button("Back to Terminal", on_click=close_journal)
         else:
-            col1, col2 = st.columns([8, 2])
-            with col2:
+            # --- HIGH DENSITY FILTERING BAR ---
+            all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
+            all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
+            
+            f_col1, f_col2, f_col3 = st.columns([4, 4, 2])
+            with f_col1:
+                selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
+            with f_col2:
+                selected_dates = st.multiselect("Filter by Trade Date", options=all_dates, default=all_dates)
+            with f_col3:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+
+            # Apply runtime data constraints
+            filtered_df = initial_df.copy()
+            if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
+                filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
+            if "Trade Date" in filtered_df.columns and selected_dates:
+                filtered_df = filtered_df[filtered_df["Trade Date"].isin(selected_dates)]
                     
             tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
             
             with tab1:
-                df_wl = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
+                df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    st.data_editor(df_wl.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
+                    st.data_editor(df_wl[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
 
             with tab2:
-                df_act = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
+                df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    st.data_editor(df_act.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
+                    st.data_editor(df_act[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
                     
             with tab3:
-                df_cls = initial_df[initial_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
+                df_cls = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
-                    st.data_editor(df_cls.style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
+                    st.data_editor(df_cls[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
                         disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                 else: st.info("No records found.")
@@ -422,7 +448,7 @@ elif current_page == "Chartink Scanners":
     col1, col2 = st.columns([8, 2])
     with col1: st.markdown("### Automated Scan Feeds")
     with col2:
-        if st.button("Sync Live Prices", use_container_width=True):
+        if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
             bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
     
     scanner_data = scanner_sheet.get_all_records()
