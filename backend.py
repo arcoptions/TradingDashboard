@@ -151,14 +151,15 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     if opt_data:
         df_opt = pd.DataFrame(opt_data)
         df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
-        active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
-        
-        for idx, row in active_opt.iterrows():
-            exch = str(row.get("Exchange", "")).strip()
-            sec_id = str(row.get("Security ID", "")).strip()
-            if exch in payload and sec_id.isdigit():
-                payload[exch].append(int(sec_id))
-                row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+        active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isnan() == False] # Protection against blank spaces
+        if not active_opt.empty:
+            active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
+            for idx, row in active_opt.iterrows():
+                exch = str(row.get("Exchange", "")).strip()
+                sec_id = str(row.get("Security ID", "")).strip()
+                if exch in payload and sec_id.isdigit():
+                    payload[exch].append(int(sec_id))
+                    row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
 
     scan_data = scanner_sheet.get_all_records()
     if scan_data:
@@ -178,11 +179,12 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     if not payload: 
         return "No targets mapped"
         
+    # --- FIXED CORE BUG HERE: Re-mapped token credentials handshake ---
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'access-token': daily_token, 
-        'client-id': st.secrets["dhan"]["dhan_access_token"]
+        'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
     
     url = "https://api.dhan.co/v2/marketfeed/ohlc"
@@ -227,7 +229,6 @@ def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers
                     pass
         time.sleep(300)
 
-# --- CACHE PROTECTION ADDED HERE VIA LEADING UNDERSCORES ---
 @st.cache_resource
 def start_automated_scheduler(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     cron_worker = threading.Thread(
