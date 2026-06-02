@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- CHAMPAGNE GOLD CSS FOR PREMIUM LIGHT THEME ---
+# --- BULLETPROOF CSS FOR UNIFORM SIDEBAR BUTTONS & GRID LAYOUT ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -20,15 +20,7 @@ st.markdown("""
         footer {visibility: hidden;}
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* CHAMPAGNE GOLD PALETTE EXTRACTED FROM LOGO */
-        :root {
-            --arc-gold-light: #F9E7BE;
-            --arc-gold-mid: #D1A553;
-            --arc-gold-dark: #B88A3B;
-            --arc-text-dark: #1A202C; /* Deep slate for high contrast on gold */
-        }
-        
-        /* 1. SIDEBAR BUTTON ALIGNMENT & SHAPE NORMALIZATION */
+        /* FORCE ABSOLUTE UNIFORMITY IN SIDEBAR ELEMENTS SIZE & SHAPE */
         div[data-testid="stSidebar"] .stButton > button,
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
         div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
@@ -44,24 +36,24 @@ st.markdown("""
             border-radius: 6px !important;
             display: flex !important;
             align-items: center !important;
-            justify-content: flex-start !important; /* Left Aligned */
-            text-align: left !important;
+            justify-content: center !important;
+            text-align: center !important;
             font-size: 15px !important;
             cursor: pointer !important;
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* Hide native radio button circular check elements */
+        /* Hide native radio button circular check selectors */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
 
-        /* Normalize inner text containers */
+        /* Normalize inner text container flexbox metrics */
         div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
             display: flex !important;
-            justify-content: flex-start !important; /* Left Aligned */
+            justify-content: center !important;
             align-items: center !important;
         }
 
@@ -70,13 +62,18 @@ st.markdown("""
             margin: 0 !important;
             padding: 0 !important;
             font-size: 15px !important;
-            width: 100% !important;
-            text-align: left !important;
+            width: auto !important;
         }
 
-        /* 2. APPLYING THE CHAMPAGNE GOLD COLOR */
-        
-        /* Log New Trade Button (Primary) */
+        /* CHAMPAGNE GOLD PALETTE EXTRACTED FROM LOGO */
+        :root {
+            --arc-gold-light: #F9E7BE;
+            --arc-gold-mid: #D1A553;
+            --arc-gold-dark: #B88A3B;
+            --arc-text-dark: #1A202C; 
+        }
+
+        /* Log New Trade Button - Primary Action Gold */
         div[data-testid="stSidebar"] .stButton > button[kind="primary"],
         .stButton > button[kind="primary"] {
             background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
@@ -100,7 +97,7 @@ st.markdown("""
             font-weight: 700 !important;
         }
 
-        /* Multi-Select Filter Tags (Replaces the random brownish streamit tags) */
+        /* Multi-Select Filter Tags */
         div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
             background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important;
             color: var(--arc-text-dark) !important;
@@ -114,8 +111,6 @@ st.markdown("""
             fill: var(--arc-text-dark) !important;
         }
 
-        /* 3. LIGHT THEME OPTIMIZATION */
-        
         /* Unselected Navigation Tabs */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {
             background-color: transparent !important; 
@@ -127,6 +122,10 @@ st.markdown("""
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) p {
             color: #64748B !important;
             font-weight: 500 !important;
+        }
+        
+        [data-testid="stSidebar"] div[data-testid="stExpander"] {
+            border-color: #E2E8F0;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -342,7 +341,8 @@ if current_page == "Options Tracker":
             "Security ID": st.column_config.TextColumn("Security ID"),
         }
         
-        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Entry CMP / Range"] 
+        # FIX: Removed "Entry CMP / Range" to fully unlock inline modification
+        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)"] 
 
         if st.session_state.get("viewing_trade_row"):
             st.button("Back to Terminal", on_click=close_journal)
@@ -457,9 +457,10 @@ if current_page == "Options Tracker":
             with tab3:
                 df_cls = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
+                    # Enforce range safety on closed positions
                     st.data_editor(df_cls[view_cols].style.apply(highlight_rows, axis=1), use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
-                        disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
+                        disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                 else: st.info("No records found.")
     else:
         st.info("Database connection established. No data available.")
