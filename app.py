@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- BULLETPROOF CSS FOR UNIFORM SIDEBAR BUTTONS & GRID LAYOUT ---
+# --- CHAMPAGNE GOLD CSS FOR PREMIUM LIGHT THEME ---
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -20,7 +20,15 @@ st.markdown("""
         footer {visibility: hidden;}
         .block-container {padding-top: 4rem; padding-bottom: 0rem;}
         
-        /* FORCE ABSOLUTE UNIFORMITY IN SIDEBAR ELEMENTS SIZE & SHAPE */
+        /* CHAMPAGNE GOLD PALETTE EXTRACTED FROM LOGO */
+        :root {
+            --arc-gold-light: #F9E7BE;
+            --arc-gold-mid: #D1A553;
+            --arc-gold-dark: #B88A3B;
+            --arc-text-dark: #1A202C; /* Deep slate for high contrast on gold */
+        }
+        
+        /* 1. SIDEBAR BUTTON ALIGNMENT & SHAPE NORMALIZATION */
         div[data-testid="stSidebar"] .stButton > button,
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
         div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
@@ -36,24 +44,24 @@ st.markdown("""
             border-radius: 6px !important;
             display: flex !important;
             align-items: center !important;
-            justify-content: center !important;
-            text-align: center !important;
+            justify-content: flex-start !important; /* Left Aligned */
+            text-align: left !important;
             font-size: 15px !important;
             cursor: pointer !important;
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* Hide native radio button circular check selectors */
+        /* Hide native radio button circular check elements */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important;
         }
 
-        /* Normalize inner text container flexbox metrics */
+        /* Normalize inner text containers */
         div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
             width: 100% !important;
             display: flex !important;
-            justify-content: center !important;
+            justify-content: flex-start !important; /* Left Aligned */
             align-items: center !important;
         }
 
@@ -62,47 +70,63 @@ st.markdown("""
             margin: 0 !important;
             padding: 0 !important;
             font-size: 15px !important;
-            width: auto !important;
+            width: 100% !important;
+            text-align: left !important;
         }
 
-        /* HIGH-CONTRAST PROFESSIONAL COLOR PALETTES */
+        /* 2. APPLYING THE CHAMPAGNE GOLD COLOR */
         
-        /* Log New Trade Button - Primary Action Blue */
-        div[data-testid="stSidebar"] .stButton > button[kind="primary"] {
-            background-color: #1E40AF !important; 
-            color: #FFFFFF !important;
-            border: 1px solid #2563EB !important;
-            font-weight: 600 !important;
+        /* Log New Trade Button (Primary) */
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"],
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
+            color: var(--arc-text-dark) !important;
+            border: 1px solid var(--arc-gold-dark) !important;
+            font-weight: 700 !important;
         }
-        div[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
-            background-color: #1D4ED8 !important;
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover,
+        .stButton > button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #FFF0CA 0%, #E0B462 100%) !important;
+            box-shadow: 0px 4px 12px rgba(209, 165, 83, 0.3) !important;
         }
 
-        /* Selected Navigation Tab - Deep Emerald Teal */
+        /* Selected Navigation Tab */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {
-            background-color: #047857 !important; 
-            border: 1px solid #059669 !important;
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
+            border: 1px solid var(--arc-gold-dark) !important;
         }
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] p {
-            color: #FFFFFF !important;
-            font-weight: 600 !important;
+            color: var(--arc-text-dark) !important;
+            font-weight: 700 !important;
         }
 
-        /* Unselected Navigation Tabs - Muted Dark Slate */
+        /* Multi-Select Filter Tags (Replaces the random brownish streamit tags) */
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important;
+            color: var(--arc-text-dark) !important;
+            border: 1px solid var(--arc-gold-dark) !important;
+        }
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {
+            color: var(--arc-text-dark) !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] svg {
+            fill: var(--arc-text-dark) !important;
+        }
+
+        /* 3. LIGHT THEME OPTIMIZATION */
+        
+        /* Unselected Navigation Tabs */
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {
-            background-color: #1F2937 !important; 
-            border: 1px solid #374151 !important;
+            background-color: transparent !important; 
+            border: 1px solid #E2E8F0 !important;
         }
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]):hover {
-            background-color: #374151 !important;
+            background-color: #F8FAFC !important;
         }
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) p {
-            color: #9CA3AF !important;
-            font-weight: 400 !important;
-        }
-        
-        [data-testid="stSidebar"] div[data-testid="stExpander"] {
-            border-color: #374151;
+            color: #64748B !important;
+            font-weight: 500 !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -122,7 +146,6 @@ def close_journal():
 # --- DATABASE CONNECTION ---
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = bk.init_db()
-    # Dynamic Check: Auto-inject Notes schema column into Google Sheets if missing
     if "Notes" not in sheet_headers:
         worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
         sheet_headers.append("Notes")
@@ -290,7 +313,6 @@ if current_page == "Options Tracker":
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
         
-        # STRUCTURAL ORDER UPDATE: Adjusted view sequence containing Notes & terminal positions
         view_cols = [
             "Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", 
             "Status (Watch/Active/Closed)", "Entry CMP / Range", "Add-On / Dip Levels", 
@@ -397,7 +419,6 @@ if current_page == "Options Tracker":
                 st.error("Row context lost. Please return to the terminal.")
                 st.button("Back to Terminal", on_click=close_journal)
         else:
-            # --- HIGH DENSITY FILTERING BAR ---
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
             
@@ -411,7 +432,6 @@ if current_page == "Options Tracker":
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 
-            # Apply runtime data constraints
             filtered_df = initial_df.copy()
             if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
                 filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
