@@ -1,305 +1,565 @@
-import re
-import requests
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 import streamlit as st
-import threading
-import time
+import pandas as pd
+import io
+import re
 from datetime import datetime
+import backend as bk 
 
-# --- 1. NLP PARSER ---
-def parse_telegram_tip(text):
-    data = {"symbol": "", "trade_type": "Equity", "entry": "", "add_levels": "", "sl": "", "t1": "", "t2": ""}
-    if not text: return data
-    
-    clean_text = " ".join([line.strip() for line in text.split('\n') if line.strip()])
-    option_match = re.search(r'([A-Z\&]+)\s*(\d+)\s*(ce|pe|call|put)', clean_text, re.IGNORECASE)
-    if option_match:
-        opt_type = option_match.group(3).upper()
-        if opt_type == 'CALL': opt_type = 'CE'
-        if opt_type == 'PUT': opt_type = 'PE'
-        data["symbol"] = f"{option_match.group(1).upper()} {option_match.group(2)} {opt_type}"
-        data["trade_type"] = "Option"
-    else:
-        equity_match = re.search(r'\b([A-Z\&]+)\b', clean_text)
-        if equity_match: data["symbol"] = equity_match.group(1).upper()
+# --- PAGE CONFIG MUST BE FIRST ---
+st.set_page_config(
+    page_title="ARC Trading Terminal", 
+    layout="wide",
+    initial_sidebar_state="expanded" 
+)
+
+# --- CHAMPAGNE GOLD CSS FOR PREMIUM LIGHT THEME ---
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+        [data-testid="stToolbar"] {visibility: hidden;} 
+        footer {visibility: hidden;}
+        .block-container {padding-top: 4rem; padding-bottom: 0rem;}
+        
+        :root {
+            --arc-gold-light: #F9E7BE;
+            --arc-gold-mid: #D1A553;
+            --arc-gold-dark: #B88A3B;
+            --arc-text-dark: #1A202C; 
+        }
+        
+        div[data-testid="stSidebar"] .stButton > button,
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
+        div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
+            width: 100% !important;
+            min-width: 100% !important;
+            max-width: 100% !important;
+            height: 46px !important;
+            min-height: 46px !important;
+            max-height: 46px !important;
+            box-sizing: border-box !important;
+            margin: 6px 0px !important;
+            padding: 10px 16px !important;
+            border-radius: 6px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
+            font-size: 15px !important;
+            cursor: pointer !important;
+            transition: all 0.15s ease-in-out !important;
+        }
+
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
+            display: none !important;
+        }
+
+        div[data-testid="stSidebar"] .stButton > button div[data-testid="stMarkdownContainer"],
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] {
+            width: 100% !important;
+            display: flex !important;
+            justify-content: flex-start !important;
+            align-items: center !important;
+        }
+
+        div[data-testid="stSidebar"] .stButton > button p,
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label p {
+            margin: 0 !important;
+            padding: 0 !important;
+            font-size: 15px !important;
+            width: 100% !important;
+            text-align: left !important;
+        }
+
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"],
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
+            color: var(--arc-text-dark) !important;
+            border: 1px solid var(--arc-gold-dark) !important;
+            font-weight: 700 !important;
+        }
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover,
+        .stButton > button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #FFF0CA 0%, #E0B462 100%) !important;
+            box-shadow: 0px 4px 12px rgba(209, 165, 83, 0.3) !important;
+        }
+
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; 
+            border: 1px solid var(--arc-gold-dark) !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] p {
+            color: var(--arc-text-dark) !important;
+            font-weight: 700 !important;
+        }
+
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important;
+            color: var(--arc-text-dark) !important;
+            border: 1px solid var(--arc-gold-dark) !important;
+        }
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {
+            color: var(--arc-text-dark) !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] svg {
+            fill: var(--arc-text-dark) !important;
+        }
+
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {
+            background-color: transparent !important; 
+            border: 1px solid #E2E8F0 !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]):hover {
+            background-color: #F8FAFC !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) p {
+            color: #64748B !important;
+            font-weight: 500 !important;
+        }
+        
+        [data-testid="stSidebar"] div[data-testid="stExpander"] {
+            border-color: #E2E8F0;
+        }
+        
+        /* Clean text wrapping constraints for sync timestamps */
+        .sync-timestamp-text {
+            font-size: 12px !important;
+            color: #64748B !important;
+            text-align: right !important;
+            margin-top: 4px;
+            width: 100%;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- SESSION STATE INITIALIZATION ---
+if "viewing_trade" not in st.session_state:
+    st.session_state.viewing_trade = None
+if "viewing_trade_row" not in st.session_state:
+    st.session_state.viewing_trade_row = None
+if "qp_key" not in st.session_state:
+    st.session_state.qp_key = 0
+
+def close_journal():
+    st.session_state.viewing_trade = None
+    st.session_state.viewing_trade_row = None
+
+# --- DATABASE CONNECTION & GLOBAL AUTO-SCHEDULER ENGINE ---
+try:
+    worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = bk.init_db()
+    if "Notes" not in sheet_headers:
+        worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
+        sheet_headers.append("Notes")
+        
+    bk.start_automated_scheduler(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+except Exception as e:
+    st.error(f"Database Connection Failed: {e}")
+    st.stop()
+
+# --- RUNTIME SIGNAL CALCULATION ENGINE ---
+def compute_signal_indicators(df):
+    if df.empty:
+        return df
+    signals = []
+    for idx, row in df.iterrows():
+        try:
+            live_val = str(row.get('Live Price', '')).strip()
+            range_val = str(row.get('Entry CMP / Range', '')).strip()
             
-    range_match = re.search(r'range\s+([\d\.-]+)', clean_text, re.IGNORECASE)
-    if range_match: 
-        data["entry"] = range_match.group(1)
-    else:
-        cmp_match = re.search(r'cmp\s+([\d\.]+)', clean_text, re.IGNORECASE)
-        if cmp_match: 
-            data["entry"] = cmp_match.group(1)
+            if live_val in ['', 'nan', 'None'] or range_val in ['', 'nan', 'None']:
+                signals.append("-")
+                continue
+                
+            live_price = float(live_val)
+            digits = re.findall(r'[\d\.]+', range_val)
+            if not digits:
+                signals.append("-")
+                continue
+                
+            min_entry = min([float(d) for d in digits])
+            if live_price > min_entry:
+                signals.append("🟢 Above")
+            elif live_price < min_entry:
+                signals.append("🔴 Below")
+            else:
+                signals.append("⚪ At Entry")
+        except:
+            signals.append("-")
+            
+    df['Vs Entry'] = signals
+    return df
+
+# --- MODAL: DATA ENTRY FORM ---
+@st.dialog("Log New Trade or Scan", width="large")
+def trade_entry_modal():
+    tab1, tab2 = st.tabs(["Quick Parse (Manual Entry)", "Bulk Import List"])
+    
+    with tab1:
+        st.caption("Paste a tip directly below to extract strike, range, stop loss, and targets automatically.")
+        raw_tip = st.text_area("Tip Input:", key=f"qp_{st.session_state.qp_key}", height=100)
+        parsed_data = bk.parse_telegram_tip(raw_tip)
+        
+        search_query = st.text_input("Refine Instrument Search", value=parsed_data["symbol"])
+        auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
+        results = bk.search_instruments(search_query)
+        
+        if not results.empty:
+            selected_display = st.selectbox("Select Exact Option Expiry:", results['SEM_TRADING_SYMBOL'].tolist())
+            row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
+            auto_symbol = str(row['SEM_TRADING_SYMBOL'])
+            auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
+            exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
+            if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
+            elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
         else:
-            at_match = re.search(r'\bat\s+([\d\.-]+)', clean_text, re.IGNORECASE)
-            if at_match: data["entry"] = at_match.group(1)
+            if search_query:
+                st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just the root ticker symbol.")
+            auto_symbol = search_query
+
+        with st.form("entry_form", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            with col1: date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
+            with col2: source = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"])
+            with col3: trade_type = st.selectbox("Type", ["Option", "Equity"], index=0 if parsed_data["trade_type"] == "Option" else 1)
+
+            symbol = st.text_input("Validated Asset Name (Do not edit if auto-filled)", value=auto_symbol)
+            exchange = st.selectbox("Exchange", ["NSE_EQ", "NSE_FNO"], index=0 if auto_exch == "NSE_EQ" else 1, label_visibility="collapsed", disabled=True)
+            sec_id = st.text_input("Security ID", value=auto_sec_id, label_visibility="collapsed", disabled=True)
             
-    sl_match = re.search(r'SL\s+(?:AT\s+)?([\d\.]+\s*(?:clsb)?)', clean_text, re.IGNORECASE)
-    if sl_match: data["sl"] = sl_match.group(1)
-        
-    target_match = re.search(r'Target\s*([-:\s]+)?([\d\.\s\+-]+)', clean_text, re.IGNORECASE)
-    if target_match:
-        targets = re.findall(r'([\d\.]+)', target_match.group(2))
-        if len(targets) > 0: data["t1"] = targets[0]
-        if len(targets) > 1: data["t2"] = targets[1]
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: status = st.selectbox("Status", ["Watchlist", "Active", "Closed"])
+            with c2: entry_range = st.text_input("Entry Range", value=parsed_data["entry"])
+            with c3: sl = st.text_input("Stop Loss", value=parsed_data["sl"])
+            with c4: t1 = st.text_input("Target 1", value=parsed_data["t1"])
             
-    return data
-
-# --- 2. GLOBAL SEARCH RESOLVERS ---
-@st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=12):
-    try:
-        url = "https://images.dhan.co/api-data/api-scrip-master.csv"
-        df = pd.read_csv(url, low_memory=False)
-        if df.empty: return df
-        return df[df['SEM_EXM_EXCH_ID'] == 'NSE']
-    except: return pd.DataFrame()
-
-def search_instruments(query):
-    scrip_df = get_dhan_scrip_master()
-    if not query or scrip_df.empty: return pd.DataFrame()
-    
-    cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper()
-    terms = cleaned_query.split()
-    
-    if 'SEARCH_STRING' not in scrip_df.columns:
-        normalized_trading_sym = scrip_df['SEM_TRADING_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
-        normalized_custom_sym = scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
-        scrip_df['SEARCH_STRING'] = normalized_trading_sym.str.upper() + " " + normalized_custom_sym.str.upper()
-        
-    mask = pd.Series([True] * len(scrip_df))
-    for term in terms:
-        mask = mask & scrip_df['SEARCH_STRING'].str.contains(term, regex=False)
-        
-    results = scrip_df[mask].copy()
-    if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
-        results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
-        results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
-        
-    return results.head(200)
-
-def resolve_instrument(parsed_sym):
-    scrip_df = get_dhan_scrip_master()
-    parsed_sym = str(parsed_sym).strip().upper()
-    if not parsed_sym or scrip_df.empty:
-        return parsed_sym, "", "NSE_EQ"
-        
-    if len(parsed_sym.split()) == 1:
-        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
-        if not eq_match.empty:
-            row = eq_match.iloc[0]
-            return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), "NSE_EQ"
-
-    results = search_instruments(parsed_sym)
-    if not results.empty:
-        row = results.iloc[0]
-        sym = str(row['SEM_TRADING_SYMBOL'])
-        sec = str(row['SEM_SMST_SECURITY_ID'])
-        exch, seg = str(row['SEM_EXM_EXCH_ID']), str(row['SEM_SEGMENT'])
-        if exch == "NSE" and seg == "E": return sym, sec, "NSE_EQ"
-        elif exch == "NSE" and seg == "D": return sym, sec, "NSE_FNO"
-        
-    return parsed_sym, "", "NSE_EQ"
-
-# --- 3. DATABASE INITIALIZATION ---
-@st.cache_resource
-def init_db():
-    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-    gc = gspread.authorize(credentials)
-    sh = gc.open("Comprehensive Trading Tracker 2026")
-    
-    worksheet = sh.sheet1
-    sheet_headers = worksheet.row_values(1)
-    for col in ["Live Price", "Exit Price"]:
-        if col not in sheet_headers:
-            worksheet.update_cell(1, len(sheet_headers) + 1, col)
-            sheet_headers.append(col)
+            t2 = st.text_input("Target 2", value=parsed_data["t2"], label_visibility="collapsed", placeholder="Target 2 (Optional)")
+            add_levels = st.text_input("Add-On Levels", value=parsed_data["add_levels"], label_visibility="collapsed", placeholder="Add-On Levels (Optional)")
+            emotions = st.text_input("Psychology", placeholder="Emotions at Entry (FOMO, Calm, etc.)")
+            rationale = st.text_area("Rationale", placeholder="Why are you taking this trade?", height=68)
             
-    worksheet_list = [ws.title for ws in sh.worksheets()]
-    if "Scanners" in worksheet_list:
-        scanner_sheet = sh.worksheet("Scanners")
-    else:
-        scanner_sheet = sh.add_worksheet(title="Scanners", rows="1000", cols="10")
-        scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "Live Price"])
-        
-    scanner_headers = scanner_sheet.row_values(1)
-    if "Live Price" not in scanner_headers:
-        scanner_sheet.update_cell(1, len(scanner_headers) + 1, "Live Price")
-        scanner_headers.append("Live Price")
-        
-    if "Settings" in worksheet_list:
-        settings_sheet = sh.worksheet("Settings")
-    else:
-        settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
-        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""], ["Last Synced", "-"]], "A1:B3")
-        
-    return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
+            if st.form_submit_button("Submit to Database", type="primary", use_container_width=True):
+                new_row = [""] * len(sheet_headers)
+                def set_val(col_name, val):
+                    if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
+                set_val("Trade Date", date); set_val("Idea Source (Chartink/Telegram/X/Self)", source)
+                set_val("Symbol / Asset", symbol); set_val("Trade Type (Eq/Option)", trade_type)
+                set_val("Exchange", exchange); set_val("Security ID", sec_id)
+                set_val("Status (Watch/Active/Closed)", status); set_val("Entry CMP / Range", entry_range)
+                set_val("Add-On / Dip Levels", add_levels); set_val("Stop Loss (SL)", sl)
+                set_val("Target 1", t1); set_val("Target 2", t2)
+                set_val("Strategic Rationale (Why I took it)", rationale)
+                set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
+                
+                worksheet.append_row(new_row)
+                st.session_state.qp_key += 1
+                st.rerun()
 
-# --- 4. CORE DATA REFRESH LOGIC ---
-def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    daily_token = settings_sheet.acell('B2').value
-    if not daily_token:
-        return "Missing Dynamic Authorization Token"
+    with tab2:
+        st.caption("Paste a massive block of raw tips here to bulk-process them into your Watchlist.")
+        bulk_source = st.selectbox("Source:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chartink", "Self/X"], key="bulk_src")
+        bulk_text = st.text_area("Raw Text Block:", height=200)
         
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
-    row_map = [] 
+        if st.button("Process Bulk Upload", type="primary", use_container_width=True):
+            raw_lines = [line.strip() for line in bulk_text.split('\n') if line.strip()]
+            unique_lines = list(dict.fromkeys(raw_lines))
+            rows_to_insert = []
+            for line in unique_lines:
+                p_data = bk.parse_telegram_tip(line)
+                if not p_data['symbol']: continue
+                t_sym, t_sec, t_exch = bk.resolve_instrument(p_data['symbol'])
+                row = [""] * len(sheet_headers)
+                def set_v(col_name, val):
+                    if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
+                set_v("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+                set_v("Idea Source (Chartink/Telegram/X/Self)", bulk_source)
+                set_v("Symbol / Asset", t_sym); set_v("Trade Type (Eq/Option)", p_data['trade_type'])
+                set_v("Exchange", t_exch); set_v("Security ID", t_sec)
+                set_v("Status (Watch/Active/Closed)", "Watchlist"); set_v("Entry CMP / Range", p_data['entry'])
+                set_v("Add-On / Dip Levels", p_data['add_levels']); set_v("Stop Loss (SL)", p_data['sl'])
+                set_v("Target 1", p_data['t1']); set_v("Target 2", p_data['t2'])
+                rows_to_insert.append(row)
+            if rows_to_insert:
+                worksheet.append_rows(rows_to_insert)
+                st.rerun()
+
+# --- SIDEBAR NAV & SETTINGS ---
+with st.sidebar:
+    try: st.image("logo.png", use_container_width=True)
+    except: st.markdown("## ARC Terminal")
     
-    opt_data = worksheet.get_all_records()
-    if opt_data:
-        df_opt = pd.DataFrame(opt_data)
-        if not df_opt.empty and "Status (Watch/Active/Closed)" in df_opt.columns:
-            df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
-            active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
-            for idx, row in active_opt.iterrows():
-                exch = str(row.get("Exchange", "")).strip()
-                sec_id = str(row.get("Security ID", "")).strip()
-                if exch in payload and sec_id.isdigit():
-                    payload[exch].append(int(sec_id))
-                    row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
-
-    scan_data = scanner_sheet.get_all_records()
-    if scan_data:
-        df_scan = pd.DataFrame(scan_data)
-        if not df_scan.empty and "Status" in df_scan.columns:
-            df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-            active_scan = df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])]
-            
-            for idx, row in active_scan.iterrows():
-                symbol = str(row.get("Symbol", "")).strip()
-                if symbol:
-                    t_sym, sec_id, exch = resolve_instrument(symbol)
-                    if exch in payload and sec_id.isdigit():
-                        payload[exch].append(int(sec_id))
-                        row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
-
-    payload = {k: list(set(v)) for k, v in payload.items() if v}
-    if not payload: 
-        return "No targets mapped"
-        
-    headers = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'access-token': daily_token, 
-        'client-id': st.secrets["dhan"]["dhan_client_id"]
-    }
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    url = "https://api.dhan.co/v2/marketfeed/ohlc"
-    response = requests.post(url, headers=headers, json=payload)
-    
-    if response.status_code == 200:
-        data = response.json().get("data", {})
-        opt_updates = []
-        scan_updates = []
+    if st.button("Log New Trade", type="primary", use_container_width=True):
+        trade_entry_modal()
         
-        opt_col_idx = sheet_headers.index("Live Price") + 1
-        scan_col_idx = scanner_headers.index("Live Price") + 1
+    st.markdown("<br>", unsafe_allow_html=True)
         
-        for item in row_map:
-            exch = item["exch"]
-            sec_id = item["sec_id"]
-            if exch in data and sec_id in data[exch]:
-                last_price = data[exch][sec_id].get("last_price", "")
-                if item["type"] == "opt":
-                    opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], opt_col_idx), 'values': [[str(last_price)]]})
-                elif item["type"] == "scan":
-                    scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
-        
-        if opt_updates: worksheet.batch_update(opt_updates)
-        if scan_updates: scanner_sheet.batch_update(scan_updates)
-        
-        # --- UPDATE TIMESTAMPS MATRIX ON SUCCESSFUL COMPILATION ---
-        current_time = datetime.now().strftime("%d-%b %I:%M %p")
-        try: settings_sheet.update_acell('B3', current_time)
-        except: pass
-        
-        return "Success"
-    else:
-        return f"API Error: {response.status_code}"
-
-# --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON ---
-def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    while True:
-        now = datetime.now()
-        if now.weekday() < 5:
-            start_market = now.replace(hour=9, minute=0, second=0, microsecond=0)
-            end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
-            
-            if start_market <= now <= end_market:
-                try:
-                    execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-                except Exception as e:
-                    pass
-        time.sleep(300)
-
-@st.cache_resource
-def start_automated_scheduler(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
-    cron_worker = threading.Thread(
-        target=background_sync_loop,
-        args=(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers),
-        daemon=True
+    current_page = st.radio(
+        "Navigation",
+        ["Options Tracker", "Chartink Scanners"],
+        label_visibility="collapsed"
     )
-    cron_worker.start()
-    return True
-
-# --- 6. MANUAL UI TRIGGERS ---
-def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    with st.spinner("Fetching live market data from Dhan..."):
-        result = execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-        if result == "Success":
-            st.success("Successfully updated live prices!")
+    
+    st.divider()
+    with st.expander("Daily API Setup", expanded=False):
+        st.caption("Paste today's generated Dhan Access Token here.")
+        try: saved_token = settings_sheet.acell('B2').value or ""
+        except: saved_token = ""
+            
+        new_token = st.text_input("Today's Token:", value=saved_token, type="password")
+        if st.button("Save Key", use_container_width=True):
+            settings_sheet.update_acell('B2', new_token)
+            st.success("API Key Locked.")
             st.rerun()
-        else:
-            st.error(f"Sync Issue: {result}")
 
-def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
-    if state_key in st.session_state and not df_filtered.empty:
-        editor_state = st.session_state[state_key]
-        edited_rows = editor_state.get("edited_rows", {})
-        for idx, changes in list(edited_rows.items()):
-            if "Journal" in changes and changes["Journal"] is True:
-                sym = df_filtered.iloc[idx]['Symbol / Asset']
-                row_id = df_filtered.iloc[idx]['_Sheet_Row']
-                st.session_state.viewing_trade = sym
-                st.session_state.viewing_trade_row = int(row_id)
-                del changes["Journal"]
-                if not changes: del editor_state["edited_rows"][idx]
+# --- PAGE ROUTING ---
+if current_page == "Options Tracker":
+    st.markdown("### Options Tracker")
+    initial_data = worksheet.get_all_records()
+    initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
+
+    if not initial_df.empty:
+        initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
+        initial_df["Journal"] = False
         
-        deleted_indices = editor_state.get("deleted_rows", [])
-        if deleted_indices:
-            rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
-            rows_to_delete.sort(reverse=True)
-            for r in rows_to_delete: worksheet.delete_rows(r)
-            
-        if editor_state.get("edited_rows"):
-            for idx, changes in editor_state["edited_rows"].items():
-                sheet_row = df_filtered.iloc[idx]['_Sheet_Row']
-                for col_name, new_val in changes.items():
-                    if col_name in sheet_headers:
-                        if col_name == "Symbol / Asset":
-                            t_sym, t_sec, t_exch = resolve_instrument(str(new_val))
-                            worksheet.update_cell(sheet_row, sheet_headers.index("Symbol / Asset") + 1, t_sym)
-                            worksheet.update_cell(sheet_row, sheet_headers.index("Security ID") + 1, t_sec)
-                            worksheet.update_cell(sheet_row, sheet_headers.index("Exchange") + 1, t_exch)
-                        else:
-                            col_idx = sheet_headers.index(col_name) + 1
-                            worksheet.update_cell(sheet_row, col_idx, str(new_val))
+        initial_df = compute_signal_indicators(initial_df)
+        
+        view_cols = [
+            "Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", 
+            "Status (Watch/Active/Closed)", "Vs Entry", "Entry CMP / Range", "Add-On / Dip Levels", 
+            "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", 
+            "Notes", "Security ID", "_Sheet_Row"
+        ]
+        
+        for col in view_cols:
+            if col not in initial_df.columns: 
+                initial_df[col] = ""
+            elif col not in ["Journal", "_Sheet_Row"]:
+                initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
+        
+        initial_df["Journal"] = initial_df["Journal"].replace({'': False, 'False': False, 'True': True}).astype(bool)
 
-def run_scanner_sync(df_filtered, state_key, scanner_sheet, scanner_headers):
-    if state_key in st.session_state and not df_filtered.empty:
-        editor_state = st.session_state[state_key]
-        deleted_indices = editor_state.get("deleted_rows", [])
-        if deleted_indices:
-            rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
-            rows_to_delete.sort(reverse=True)
-            for r in rows_to_delete: scanner_sheet.delete_rows(r)
+        table_column_config = {
+            "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
+            "Symbol / Asset": st.column_config.TextColumn("Option Contract"), 
+            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Source"), 
+            "_Sheet_Row": None, 
+            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+            "Vs Entry": st.column_config.TextColumn("Vs Entry"),
+            "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
+            "Add-On / Dip Levels": st.column_config.TextColumn("Add-On Levels"),
+            "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
+            "Target 1": st.column_config.TextColumn("Target 1"),
+            "Target 2": st.column_config.TextColumn("Target 2"),
+            "Live Price": st.column_config.TextColumn("Live Price"),
+            "Exit Price": st.column_config.TextColumn("Exit Price"),
+            "Notes": st.column_config.TextColumn("Notes"),
+            "Security ID": st.column_config.TextColumn("Security ID"),
+        }
+        
+        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry"] 
+
+        if st.session_state.get("viewing_trade_row"):
+            if st.button("Back to Terminal", key="top_reset_view_btn"):
+                close_journal()
+                st.rerun()
+                
+            trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
             
-        if editor_state.get("edited_rows"):
-            for idx, changes in editor_state["edited_rows"].items():
-                sheet_row = df_filtered.iloc[idx]['_Sheet_Row']
-                for col_name, new_val in changes.items():
-                    if col_name in scanner_headers:
-                        col_idx = scanner_headers.index(col_name) + 1
-                        scanner_sheet.update_cell(sheet_row, col_idx, str(new_val))
+            if not trade_rows.empty:
+                trade_data = trade_rows.iloc[0]
+                sheet_row_id = int(trade_data['_Sheet_Row'])
+                st.subheader(f"Trade Review: {trade_data['Symbol / Asset']}")
+                
+                with st.container(border=True):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                    col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                    col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                    col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
+                    
+                    try:
+                        entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                        exit_val = float(str(trade_data['Exit Price']))
+                        pnl = exit_val - entry_val
+                        if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                        else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                    except: pass
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("### Advanced Repair Tool")
+                    
+                    default_search = str(trade_data['Symbol / Asset']).split()[0]
+                    fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                    fix_results = bk.search_instruments(fix_query)
+                    
+                    updated_symbol = str(trade_data['Symbol / Asset'])
+                    updated_sec_id = str(trade_data.get('Security ID', ''))
+                    updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
+                    
+                    if not fix_results.empty:
+                        selected_fix = st.selectbox("Select Correct Contract & Expiry:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                        fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                        updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
+                        updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
+                        exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
+                        if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
+                        elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
+                    else:
+                        if fix_query: st.warning(f"No match found for '{fix_query}'. Try looking up the root ticker symbol.")
+                            
+                    if st.button("Save & Re-Link Contract", type="primary", key="save_fix_contract", use_container_width=True):
+                        sym_col = sheet_headers.index("Symbol / Asset") + 1
+                        sec_col = sheet_headers.index("Security ID") + 1
+                        exch_col = sheet_headers.index("Exchange") + 1
+                        worksheet.update_cell(sheet_row_id, sym_col, updated_symbol)
+                        worksheet.update_cell(sheet_row_id, sec_col, updated_sec_id)
+                        worksheet.update_cell(sheet_row_id, exch_col, updated_exch)
+                        st.success(f"Successfully re-linked row {sheet_row_id} to official asset: {updated_symbol}!")
+                        st.session_state.viewing_trade = updated_symbol
+                        st.rerun()
+                    
+                    st.divider()
+                    with st.form("psychology_update_form"):
+                        curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                        curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                        new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                        new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                        
+                        if st.form_submit_button("Update Records", type="primary"):
+                            rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                            emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
+                            worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                            worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                            st.success("Database synchronized.")
+                            st.rerun()
+            else:
+                st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
+        else:
+            all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
+            all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
+            
+            f_col1, f_col2, f_col3 = st.columns([4, 4, 2])
+            with f_col1:
+                selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
+            with f_col2:
+                selected_dates = st.multiselect("Filter by Trade Date", options=all_dates, default=all_dates)
+            with f_col3:
+                st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+                if st.button("Sync Live Prices", use_container_width=True):
+                    bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+                
+                # --- FETCH AND RENDER LOGGED TIMESTAMP MATRIX ---
+                try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+                except: timestamp_val = "Pending"
+                st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
+
+            filtered_df = initial_df.copy()
+            if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
+                filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
+            if "Trade Date" in filtered_df.columns and selected_dates:
+                filtered_df = filtered_df[filtered_df["Trade Date"].isin(selected_dates)]
+                    
+            tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
+            
+            with tab1:
+                df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
+                if not df_wl.empty:
+                    st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
+                        on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                else: st.info("No records found.")
+
+            with tab2:
+                df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
+                if not df_act.empty:
+                    st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
+                        on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                else: st.info("No records found.")
+                    
+            with tab3:
+                df_cls = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
+                if not df_cls.empty:
+                    st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
+                        on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
+                        disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
+                else: st.info("No records found.")
+    else:
+        st.info("Database connection established. No data available.")
+
+elif current_page == "Chartink Scanners":
+    col1, col2 = st.columns([8, 2])
+    with col1: st.markdown("### Automated Scan Feeds")
+    with col2:
+        if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
+            bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+        
+        # --- FETCH AND RENDER LOGGED TIMESTAMP MATRIX ---
+        try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+        except: timestamp_val = "Pending"
+        st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
+    
+    scanner_data = scanner_sheet.get_all_records()
+    df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
+    
+    if not df_scan.empty:
+        df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+        
+        tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
+        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
+        scan_col_config = {
+            "_Sheet_Row": None,
+            "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True),
+            "Trigger Price": st.column_config.TextColumn("Trigger Price"),
+            "Live Price": st.column_config.TextColumn("Live Price"),
+            "Trigger Time": st.column_config.TextColumn("Trigger Time"),
+            "Notes / Analysis": st.column_config.TextColumn("Notes / Analysis")
+        }
+        for col in ["Notes / Analysis", "Trigger Price", "Live Price", "Trigger Time"]:
+            if col in df_scan.columns: df_scan[col] = df_scan[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
+
+        def render_scanner_tab(tab_obj, filter_name):
+            with tab_obj:
+                df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
+                if not df_filtered.empty:
+                    st.data_editor(
+                        df_filtered[scan_view_cols],
+                        use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
+                        on_change=bk.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers},
+                        column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Trigger Time"]
+                    )
+                else: st.info(f"No active triggers for {filter_name}.")
+        
+        render_scanner_tab(tab_ce1, "CE1")
+        render_scanner_tab(tab_ce2, "CE2")
+        render_scanner_tab(tab_pos, "Positional")
+        
+        st.divider()
+        with st.expander("Import Manual Backup", expanded=False):
+            st.caption("Paste copied table directly from Chartink if webhooks fail.")
+            scan_type = st.selectbox("Assign to Scanner:", ["CE1", "CE2", "Positional"])
+            chartink_data = st.text_area("Data Dump:", height=100)
+            
+            if st.button("Process Dump", type="primary", use_container_width=True):
+                if chartink_data:
+                    try:
+                        df_pasted = pd.read_csv(io.StringIO(chartink_data), sep='\t')
+                        if 'Symbol' in df_pasted.columns:
+                            rows_to_add = []
+                            for _, row in df_pasted.iterrows():
+                                new_row = [""] * len(scanner_headers)
+                                def set_sv(col, val):
+                                    if col in scanner_headers: new_row[scanner_headers.index(col)] = val
+                                set_sv("Date Added", datetime.today().strftime("%Y-%m-%d")); set_sv("Scanner", scan_type)
+                                set_sv("Symbol", str(row.get('Symbol', ''))); set_sv("Trigger Price", str(row.get('Close', '')))
+                                set_sv("Trigger Time", datetime.now().strftime("%I:%M %p")); set_sv("Status", "Monitoring")
+                                set_sv("Notes / Analysis", f"Manual Copy | Vol: {row.get('Volume', 'N/A')}"); set_sv("Live Price", "")
+                                rows_to_add.append(new_row)
+                            
+                            if rows_to_add:
+                                scanner_sheet.append_rows(rows_to_add)
+                                st.success(f"Saved {len(rows_to_add)} records.")
+                                st.rerun()
+                        else: st.error("Invalid format. Missing 'Symbol' column.")
+                    except Exception as e: st.error("Parse failed. Ensure TSV format.")
+    else:
+        st.info("System operational. Listening for incoming webhooks...")
