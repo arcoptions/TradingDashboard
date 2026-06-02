@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 import streamlit as st
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # --- 1. NLP PARSER ---
 def parse_telegram_tip(text):
@@ -210,8 +210,10 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if opt_updates: worksheet.batch_update(opt_updates)
         if scan_updates: scanner_sheet.batch_update(scan_updates)
         
-        current_time = datetime.now().strftime("%d-%b %I:%M %p")
-        try: settings_sheet.update_acell('B3', current_time)
+        # --- FIXED: Forces the timestamp string calculation to use local Indian Standard Time (IST) ---
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        current_time_str = ist_now.strftime("%d-%b %I:%M %p")
+        try: settings_sheet.update_acell('B3', current_time_str)
         except: pass
         
         return "Success"
@@ -221,7 +223,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
 # --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON ---
 def background_sync_loop(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     while True:
-        now = datetime.now()
+        # --- FIXED: Forces the market hours execution metrics to evaluate against local IST ---
+        now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         if now.weekday() < 5:
             start_market = now.replace(hour=9, minute=0, second=0, microsecond=0)
             end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
