@@ -121,11 +121,13 @@ st.markdown("""
             border-color: #E2E8F0;
         }
         
+        /* Clean target specifications for independent timestamp layouts */
         .sync-timestamp-text {
             font-size: 12px !important;
             color: #64748B !important;
             text-align: right !important;
-            margin-top: 4px;
+            margin-top: -6px !important;
+            padding-bottom: 14px !important;
             width: 100%;
         }
     </style>
@@ -438,7 +440,7 @@ if current_page == "Options Tracker":
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
             
-            # --- FIXED ALIGNMENT ENGINE: Locked column baselines via alignment container profiles ---
+            # --- HIGH-PRECISION ALIGNMENT: Detached timestamp parsing from structural layout rows ---
             f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
             with f_col1:
                 selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
@@ -447,10 +449,11 @@ if current_page == "Options Tracker":
             with f_col3:
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-                
-                try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
-                except: timestamp_val = "Pending"
-                st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
+            
+            # Timestamp matrix shifted completely below the column bounding lines
+            try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+            except: timestamp_val = "Pending"
+            st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
 
             filtered_df = initial_df.copy()
             if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
@@ -485,15 +488,15 @@ if current_page == "Options Tracker":
         st.info("Database connection established. No data available.")
 
 elif current_page == "Chartink Scanners":
-    col1, col2 = st.columns([8, 2])
+    col1, col2 = st.columns([8, 2], vertical_alignment="bottom")
     with col1: st.markdown("### Automated Scan Feeds")
     with col2:
         if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
             bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
         
-        try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
-        except: timestamp_val = "Pending"
-        st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
+    try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+    except: timestamp_val = "Pending"
+    st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
     
     scanner_data = scanner_sheet.get_all_records()
     df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
