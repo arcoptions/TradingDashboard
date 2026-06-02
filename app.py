@@ -175,11 +175,11 @@ def compute_signal_indicators(df):
                 
             min_entry = min([float(d) for d in digits])
             if live_price > min_entry:
-                signals.append("Above")
+                signals.append("🟢 Above")
             elif live_price < min_entry:
-                signals.append("Below")
+                signals.append("🔴 Below")
             else:
-                signals.append("At Entry")
+                signals.append("⚪ At Entry")
         except:
             signals.append("-")
             
@@ -210,7 +210,7 @@ def trade_entry_modal():
             elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
         else:
             if search_query:
-                st.warning(f"No matches found for '{search_query}'. Try typing just the root ticker symbol.")
+                st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just the root ticker symbol.")
             auto_symbol = search_query
 
         with st.form("entry_form", clear_on_submit=True):
@@ -319,6 +319,7 @@ if current_page == "Options Tracker":
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
         
+        # Calculate dynamic status columns right before view loading
         initial_df = compute_signal_indicators(initial_df)
         
         view_cols = [
@@ -328,7 +329,7 @@ if current_page == "Options Tracker":
             "Notes", "Security ID", "_Sheet_Row"
         ]
         
-        # FIX: Added '_Sheet_Row' to the exclusion tuple to completely preserve its math type!
+        # Explicitly protect the numeric type constraint on Row Context Indexes
         for col in view_cols:
             if col not in initial_df.columns: 
                 initial_df[col] = ""
@@ -358,7 +359,11 @@ if current_page == "Options Tracker":
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry"] 
 
         if st.session_state.get("viewing_trade_row"):
-            st.button("Back to Terminal", on_click=close_journal)
+            # Enforce clean reset mapping keys to avoid duplicate widget allocation warnings
+            if st.button("Back to Terminal", key="top_reset_view_btn"):
+                close_journal()
+                st.rerun()
+                
             trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
             
             if not trade_rows.empty:
@@ -429,8 +434,7 @@ if current_page == "Options Tracker":
                             st.success("Database synchronized.")
                             st.rerun()
             else:
-                # FIX: Removed the secondary duplicated button block here to enforce perfect stability
-                st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
+                st.error("Row context mismatch detected. Please click the reset execution button above to restore safety bounds.")
         else:
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
