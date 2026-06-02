@@ -27,6 +27,14 @@ st.markdown("""
             --arc-text-dark: #1A202C; 
         }
         
+        /* Force sidebar toggle button to the absolute front layer */
+        [data-testid="collapsedControl"] {
+            z-index: 999999 !important;
+        }
+        header {
+            z-index: 99998 !important;
+        }
+        
         div[data-testid="stSidebar"] .stButton > button,
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
         div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
@@ -440,7 +448,6 @@ if current_page == "Options Tracker":
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
             
-            # --- HIGH-PRECISION ALIGNMENT: Detached timestamp parsing from structural layout rows ---
             f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
             with f_col1:
                 selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
@@ -450,7 +457,6 @@ if current_page == "Options Tracker":
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
             
-            # Timestamp matrix shifted completely below the column bounding lines
             try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
             except: timestamp_val = "Pending"
             st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
