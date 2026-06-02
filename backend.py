@@ -134,7 +134,7 @@ def init_db():
         settings_sheet = sh.worksheet("Settings")
     else:
         settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
-        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""]], "A1:B2")
+        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""], ["Last Synced", "-"]], "A1:B3")
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
@@ -152,7 +152,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         df_opt = pd.DataFrame(opt_data)
         if not df_opt.empty and "Status (Watch/Active/Closed)" in df_opt.columns:
             df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
-            # Fixed crash loop by letting pandas native .isin handles empty strings implicitly
             active_opt = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
             for idx, row in active_opt.iterrows():
                 exch = str(row.get("Exchange", "")).strip()
@@ -210,6 +209,12 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         
         if opt_updates: worksheet.batch_update(opt_updates)
         if scan_updates: scanner_sheet.batch_update(scan_updates)
+        
+        # --- UPDATE TIMESTAMPS MATRIX ON SUCCESSFUL COMPILATION ---
+        current_time = datetime.now().strftime("%d-%b %I:%M %p")
+        try: settings_sheet.update_acell('B3', current_time)
+        except: pass
+        
         return "Success"
     else:
         return f"API Error: {response.status_code}"
