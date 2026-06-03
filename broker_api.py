@@ -9,27 +9,27 @@ import json
 from datetime import datetime, timezone, timedelta
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# --- DHAN OFFICIAL NIFTY SECTOR INDEX IDs & NIFTY50 WEIGHTAGE ---
-SECTOR_MAP = {
-    "Financial Services": {"id": 27, "weight": 35.0},
-    "IT": {"id": 11, "weight": 14.5}, 
-    "Oil & Gas / Energy": {"id": 12, "weight": 12.0},
-    "FMCG": {"id": 14, "weight": 9.0},
-    "Auto": {"id": 15, "weight": 7.0},
-    "Pharma": {"id": 16, "weight": 5.0},
-    "Metal": {"id": 17, "weight": 4.0},
-    "Realty": {"id": 18, "weight": 1.0},
-    "Media": {"id": 19, "weight": 0.5},
-    "Bank Nifty": {"id": 25, "weight": 0.1} # Hidden from map if needed, or displayed small
+# --- OFFICIAL NSE INDEX MAPPING ---
+SECTOR_SYMBOLS = {
+    "Financial Services": {"symbol": "NIFTY FIN SERVICE", "weight": 35.0},
+    "IT": {"symbol": "NIFTY IT", "weight": 14.5}, 
+    "Oil & Gas / Energy": {"symbol": "NIFTY ENERGY", "weight": 12.0},
+    "FMCG": {"symbol": "NIFTY FMCG", "weight": 9.0},
+    "Auto": {"symbol": "NIFTY AUTO", "weight": 7.0},
+    "Pharma": {"symbol": "NIFTY PHARMA", "weight": 5.0},
+    "Metal": {"symbol": "NIFTY METAL", "weight": 4.0},
+    "Realty": {"symbol": "NIFTY REALTY", "weight": 1.0},
+    "Media": {"symbol": "NIFTY MEDIA", "weight": 0.5}
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=12):
+def get_dhan_scrip_master(v=14):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
         if df.empty: return df
-        return df[df['SEM_EXM_EXCH_ID'] == 'NSE']
+        # Added 'IDX' to fetch Official Indices alongside standard NSE equities
+        return df[df['SEM_EXM_EXCH_ID'].isin(['NSE', 'IDX'])]
     except: return pd.DataFrame()
 
 def search_instruments(query):
@@ -70,10 +70,22 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         daily_token = settings_sheet.acell('B2').value
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
+    
+    # --- DYNAMIC SECTOR ID RESOLUTION ---
+    scrip_df = get_dhan_scrip_master()
+    idx_ids = [13] # Default Nifty 50 ID
+    sector_lookup = {}
+    
+    if not scrip_df.empty:
+        idx_df = scrip_df[scrip_df['SEM_EXM_EXCH_ID'] == 'IDX']
+        for sector_name, data in SECTOR_SYMBOLS.items():
+            match = idx_df[idx_df['SEM_TRADING_SYMBOL'] == data['symbol']]
+            if not match.empty:
+                sec_id = int(match.iloc[0]['SEM_SMST_SECURITY_ID'])
+                idx_ids.append(sec_id)
+                sector_lookup[sec_id] = {"name": sector_name, "weight": data["weight"]}
         
-    # Dynamically inject the Sector Index IDs into the polling payload alongside NIFTY 50 (13)
-    idx_ids = [13] + [data["id"] for data in SECTOR_MAP.values()]
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": idx_ids, "NSE_IDX": idx_ids}
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": idx_ids}
     row_map = [] 
     
     try:
@@ -130,7 +142,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             
             def get_index_pct(s_id):
                 item = data.get("IDX_I", {}).get(str(s_id), {})
-                if not item: item = data.get("NSE_IDX", {}).get(str(s_id), {})
                 lp = item.get("last_price")
                 cp = item.get("ohlc", {}).get("close") 
                 if lp and cp and float(cp) > 0:
@@ -138,28 +149,26 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     return (diff / float(cp)) * 100
                 return None
             
-            # 1. Write NIFTY 50 Math
+            # 1. Update NIFTY 50 (ID 13)
+            pct_n50_val = get_index_pct(13)
             item_n50 = data.get("IDX_I", {}).get("13", {})
             lp_n50 = item_n50.get("last_price")
-            cp_n50 = item_n50.get("ohlc", {}).get("close")
-            if lp_n50 and cp_n50 and float(cp_n50) > 0:
-                diff = float(lp_n50) - float(cp_n50)
-                pct = (diff / float(cp_n50)) * 100
-                settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},{diff:.2f},{pct:.2f}")
+            if pct_n50_val is not None:
+                diff = float(lp_n50) - float(item_n50.get("ohlc", {}).get("close"))
+                settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},{diff:.2f},{pct_n50_val:.2f}")
             elif lp_n50: settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},0.00,0.00")
 
-            # 2. Build Sector Heatmap JSON
+            # 2. Build Dynamic Sector Heatmap JSON
             heatmap_arr = []
-            for sector_name, info in SECTOR_MAP.items():
-                pct_chg = get_index_pct(info["id"])
+            for sec_id, info in sector_lookup.items():
+                pct_chg = get_index_pct(sec_id)
                 if pct_chg is not None:
                     heatmap_arr.append({
-                        "sector": sector_name,
+                        "sector": info["name"],
                         "change": round(pct_chg, 2),
                         "weight": info["weight"]
                     })
             
-            # Serialize and push safely to B12
             if heatmap_arr:
                 settings_sheet.update_acell('B12', json.dumps(heatmap_arr))
 
