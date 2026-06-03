@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import re
 from datetime import datetime
 import analytics
@@ -6,6 +7,27 @@ import broker_api as api
 
 @st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal(worksheet, sheet_headers):
+    # 1. Dynamically pull existing unique sources from database rows
+    try:
+        records = worksheet.get_all_records()
+        if records:
+            df_existing = pd.DataFrame(records)
+            col_name = "Idea Source (Chartink/Telegram/X/Self)"
+            if col_name in df_existing.columns:
+                # Clean out blank lines, null strings, or NaN cells
+                raw_sources = df_existing[col_name].astype(str).str.strip()
+                existing_sources = sorted(list(raw_sources[(raw_sources != "") & (raw_sources != "nan") & (raw_sources != "None")].unique()))
+            else:
+                existing_sources = []
+        else:
+            existing_sources = []
+    except:
+        existing_sources = []
+
+    # 2. Merge your permanent baseline favorites with whatever unique values are in the sheet
+    defaults = ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"]
+    source_options = sorted(list(set(defaults + existing_sources)))
+
     tab1, tab2 = st.tabs(["Quick Parse (Manual Entry)", "Bulk Import List"])
     
     with tab1:
@@ -30,11 +52,10 @@ def trade_entry_modal(worksheet, sheet_headers):
             auto_symbol = search_query
 
         with st.form("entry_form", clear_on_submit=True):
-            # Expanded to 4 columns to fit the new dynamic text override input
             col1, col2, col3, col4 = st.columns(4)
             with col1: date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
-            with col2: source_sel = st.selectbox("Source", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"])
-            with col3: custom_source = st.text_input("Custom Source", placeholder="Overrides Dropdown")
+            with col2: source_sel = st.selectbox("Source", source_options) # Dynamic Dropdown List
+            with col3: custom_source = st.text_input("Custom Source", placeholder="New source override")
             with col4: trade_type = st.selectbox("Type", ["Option", "Equity"], index=0 if parsed_data["trade_type"] == "Option" else 1)
 
             symbol = st.text_input("Validated Asset Name (Do not edit if auto-filled)", value=auto_symbol)
@@ -53,7 +74,6 @@ def trade_entry_modal(worksheet, sheet_headers):
             rationale = st.text_area("Rationale", placeholder="Why are you taking this trade?", height=68)
             
             if st.form_submit_button("Submit to Database", type="primary", use_container_width=True):
-                # Dynamically assign source based on the custom input field
                 final_source = custom_source.strip() if custom_source.strip() else source_sel
                 
                 new_row = [""] * len(sheet_headers)
@@ -82,7 +102,7 @@ def trade_entry_modal(worksheet, sheet_headers):
     with tab2:
         st.caption("Paste a massive block of raw tips here to bulk-process them into your Watchlist.")
         c1, c2 = st.columns(2)
-        with c1: bulk_source_sel = st.selectbox("Source:", ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"], key="bulk_src")
+        with c1: bulk_source_sel = st.selectbox("Source:", source_options, key="bulk_src") # Dynamic Dropdown List
         with c2: bulk_custom_source = st.text_input("Custom Source (Overrides Dropdown):", key="bulk_cust_src")
         bulk_text = st.text_area("Raw Text Block:", height=200)
         
