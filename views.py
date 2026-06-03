@@ -96,7 +96,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         }
-        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry", "Target Status"] 
+        
+        # REMOVED "Idea Source (Chartink/Telegram/X/Self)" FROM THE LOCK LIST
+        disabled_cols = ["Vs Entry", "Target Status"] 
 
         if st.session_state.get("viewing_trade_row"):
             if st.button("Back to Terminal", key="top_reset_view_btn"):
@@ -184,7 +186,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with f_col3:
                 if st.button("Sync Live Prices", use_container_width=True): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
             
-            # Read from safe cell B9
             try: timestamp_val = settings_sheet.acell('B9').value or "Pending"
             except: timestamp_val = "Pending"
             st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
