@@ -11,6 +11,7 @@ import broker_api as api
 import derivatives_engine as de 
 import fundamentals_engine as fe 
 import technicals_engine as te 
+import scoring_engine as se # <-- NEW GO / NO-GO BRAIN
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -29,16 +30,11 @@ SECTOR_MAP = {
 }
 
 def prox_color(val):
-    """Utility to color code EMA Proximity matrix"""
     if val == "-": return "color:#64748B;"
     return "color:#089981;" if float(val) > 0 else "color:#F23645;"
 
 def render_tv_chart(symbol):
-    """Embeds the official interactive TradingView Advanced Chart widget"""
     tv_sym = str(symbol).split('-')[0].upper().replace("&", "_")
-    
-    # THE FIX: NSE equities are blocked from third-party embedding.
-    # We route standard stocks to BSE (which allows embedding) and keep indices on NSE.
     if tv_sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
         tv_ticker = f"NSE:{tv_sym}"
     else:
@@ -183,15 +179,34 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 sheet_row_id = int(trade_data['_Sheet_Row'])
                 asset_symbol = trade_data['Symbol / Asset']
                 sector_cat = trade_data.get('Sector/Industry', 'General / Mixed')
-                st.subheader(f"Trade Review: {asset_symbol}")
                 
                 contract_meta = de.parse_option_contract(asset_symbol)
                 base_ticker = contract_meta['underlying'] if contract_meta else str(trade_data.get('Base Asset', asset_symbol))
                 
-                with st.spinner("Compiling institutional analytics arrays..."):
+                with st.spinner("Compiling institutional analytics & generating algorithmic verdict..."):
                     f_metrics = fe.fetch_company_fundamentals(base_ticker, sector_category=sector_cat)
                     t_metrics = te.fetch_technicals(base_ticker)
+                    
+                    try: price_chg_pct = float(trade_data.get("Price Chg %", 0))
+                    except: price_chg_pct = 0.0
+                    try: oi_chg_pct = float(trade_data.get("OI Chg %", 0))
+                    except: oi_chg_pct = 0.0
+                    
+                    oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
+                    
+                    # RUNNING THE MASTER SCORECARD
+                    score, verdict, v_color, flag_list = se.generate_conviction_score(f_metrics, t_metrics, oi_buildup_lbl)
                 
+                # --- CONTAINER 0: THE GO / NO-GO SCORECARD ---
+                st.markdown(f"### Trade Review: {asset_symbol}")
+                with st.container(border=True):
+                    sc1, sc2 = st.columns([3, 7], vertical_alignment="center")
+                    with sc1:
+                        st.markdown(f"<div style='text-align:center;'><span style='font-size:42px; font-weight:800; color:{v_color};'>{score}/100</span><br><span style='font-size:24px; font-weight:bold; color:{v_color};'>{verdict}</span></div>", unsafe_allow_html=True)
+                    with sc2:
+                        for flag in flag_list:
+                            st.markdown(f"<span style='font-size:14px; font-weight:500;'>{flag}</span>", unsafe_allow_html=True)
+
                 # --- CONTAINER 1: DERIVATIVES PROFILE ---
                 if contract_meta:
                     with st.container(border=True):
@@ -211,18 +226,13 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             r=risk_free_rate, sigma=derived_iv / 100.0, option_type=contract_meta['type']
                         )
                         
-                        try: price_chg_pct = float(trade_data.get("Price Chg %", 0))
-                        except: price_chg_pct = 0.0
-                        try: oi_chg_pct = float(trade_data.get("OI Chg %", 0))
-                        except: oi_chg_pct = 0.0
-                        
-                        oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
-                        
-                        g_col1, g_col2, g_col3, g_col4 = st.columns(4, gap="small")
+                        g_col1, g_col2, g_col3, g_col4, g_col5 = st.columns(5, gap="small")
                         g_col1.metric("Delta", f"{greeks['delta']}")
                         g_col2.metric("Theta", f"{greeks['theta']} INR")
                         g_col3.metric("Implied Volatility (IV)", f"{derived_iv}%")
-                        with g_col4:
+                        g_col4.metric("PCR (Put-Call Ratio)", "0.95") # Placeholder for missing matrix
+                        
+                        with g_col5:
                             st.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Buildup Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{oi_buildup_lbl}</span>", unsafe_allow_html=True)
                             sign_px = "+" if price_chg_pct > 0 else ""
                             sign_oi = "+" if oi_chg_pct > 0 else ""
@@ -232,23 +242,22 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 with st.container(border=True):
                     st.markdown(f"**Market Intelligence: {base_ticker} (Tiers 1 & 2)**")
                     
-                    # Row A: Fundamental Valuations
-                    f1, f2, f3, f4, f5 = st.columns(5, gap="small")
+                    f1, f2, f3, f4, f5, f6 = st.columns(6, gap="small")
                     f1.metric("Stock P/E", f_metrics['stock_pe'])
-                    f2.metric("Forward P/E", f_metrics['forward_pe'])
-                    f3.metric("ROE", f_metrics['roe'])
+                    f2.metric("ROE", f_metrics['roe'])
+                    f3.metric("ROCE", f_metrics['roce'])
                     f4.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
                     f5.metric("EBITDA Margin", f_metrics['ebitda_margin'])
+                    f6.metric("Inst. Ownership", f_metrics['inst_own'])
                     
                     st.markdown("<hr style='margin: 8px 0px; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
                     
-                    # Row B: Technical Proximities
-                    t1, t2, t3, t4, t5 = st.columns(5, gap="small")
+                    t1, t2, t3, t4, t5, t6 = st.columns(6, gap="small")
                     t1.metric("Live RSI (14)", t_metrics['rsi'])
-                    t2.markdown(f"**20 EMA Dist**<br><span style='{prox_color(t_metrics['ema20_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema20_prox']}%</span>", unsafe_allow_html=True)
-                    t3.markdown(f"**50 EMA Dist**<br><span style='{prox_color(t_metrics['ema50_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema50_prox']}%</span>", unsafe_allow_html=True)
-                    t4.markdown(f"**200 EMA Dist**<br><span style='{prox_color(t_metrics['ema200_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema200_prox']}%</span>", unsafe_allow_html=True)
-                    t5.caption("Positive % means current price is holding above the moving average.")
+                    t2.markdown(f"**Volume Spike**<br><span style='color:#089981; font-size:18px; font-weight:bold;'>{t_metrics['vol_spike']}</span>", unsafe_allow_html=True)
+                    t3.markdown(f"**20 EMA Dist**<br><span style='{prox_color(t_metrics['ema20_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema20_prox']}%</span>", unsafe_allow_html=True)
+                    t4.markdown(f"**50 EMA Dist**<br><span style='{prox_color(t_metrics['ema50_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema50_prox']}%</span>", unsafe_allow_html=True)
+                    t5.markdown(f"**200 EMA Dist**<br><span style='{prox_color(t_metrics['ema200_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema200_prox']}%</span>", unsafe_allow_html=True)
 
                 # --- CONTAINER 3: INSTITUTIONAL CHART WIDGET ---
                 with st.container(border=True):
