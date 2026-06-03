@@ -7,7 +7,7 @@ import plotly.express as px
 import analytics
 import database as db
 import broker_api as api
-import derivatives_engine as de # <-- IMPORTING YOUR NEW MATHEMATICAL ENGINE
+import derivatives_engine as de 
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -144,8 +144,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 # ==========================================================
                 contract_meta = de.parse_option_contract(asset_symbol)
                 
-                # Check if this is an Option contract (not spot equity)
-                if contract_meta and str(trade_data.get('Trade Type (Eq/Option)', '')).lower() in ['option', 'fno']:
+                # FIX: Removed the strict dependency on the Google Sheet column. 
+                # If the string parses as an option contract, display the Greeks!
+                if contract_meta:
                     st.markdown("### 🎟️ Derivatives Profile & Greeks")
                     
                     # 1. Fetching Variables 
