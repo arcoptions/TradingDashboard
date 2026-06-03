@@ -33,25 +33,32 @@ def init_db():
         
     if "Settings" in worksheet_list:
         settings_sheet = sh.worksheet("Settings")
+        # Automatically scales rows if working with a legacy 11-row worksheet
+        if settings_sheet.row_count < 15:
+            settings_sheet.resize(rows=15)
+            
+        # Safeguard: Only populate missing keys, never wipe out your active token
+        val_a12 = settings_sheet.acell('A12').value
+        if not val_a12 or str(val_a12).strip() == "":
+            settings_sheet.update_acell('A12', "Sector Heatmap JSON")
+            settings_sheet.update_acell('B12', "-")
     else:
-        # Expanded to 15 rows to safely hold JSON Heatmap payload
         settings_sheet = sh.add_worksheet(title="Settings", rows="15", cols="2")
-        
-    # Initialize bounds safely to prevent 400 Errors
-    settings_sheet.update([
-        ["Key", "Value"], 
-        ["Dhan Access Token", ""], 
-        ["Last Synced (Old)", "-"], 
-        ["Daemon Status", "-"],
-        ["Nifty 50 (Old)", "-"],
-        ["Bank Nifty", "-"],
-        ["Sensex", "-"],
-        ["Sync Interval", "60"],
-        ["New Timestamp", "-"],
-        ["New Nifty", "-"],
-        ["---", "---"],
-        ["Sector Heatmap JSON", "-"]
-    ], "A1:B12")
+        # Only runs on absolute fresh creation
+        settings_sheet.update([
+            ["Key", "Value"], 
+            ["Dhan Access Token", ""], 
+            ["Last Synced (Old)", "-"], 
+            ["Daemon Status", "-"],
+            ["Nifty 50 (Old)", "-"],
+            ["Bank Nifty", "-"],
+            ["Sensex", "-"],
+            ["Sync Interval", "60"],
+            ["New Timestamp", "-"],
+            ["New Nifty", "-"],
+            ["---", "---"],
+            ["Sector Heatmap JSON", "-"]
+        ], "A1:B12")
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
