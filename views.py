@@ -249,11 +249,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 color_continuous_midpoint=0
                             )
                             
+                            # Removed forced 'white' color to allow Plotly auto-contrast
                             fig.update_traces(
                                 textinfo="label+text",
                                 texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>",
                                 customdata=df_heat[['change']],
-                                textfont=dict(size=16, color="white")
+                                textfont=dict(size=16) 
                             )
                             fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=500)
                             st.plotly_chart(fig, use_container_width=True)
