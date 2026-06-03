@@ -7,16 +7,16 @@ import database as db
 import broker_api as api
 
 def format_index_display(name, raw_val):
-    if not raw_val or raw_val == "-": return f"{name} &nbsp; <span>-</span>"
+    if not raw_val or raw_val == "-": return f"<span style='color: #94A3B8; font-size: 13px; font-weight: 600;'>{name}</span> &nbsp; <span style='color: #F8FAFC; font-weight: 700; font-size: 15px;'>-</span>"
     parts = str(raw_val).split(",")
     if len(parts) == 3:
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
         sign = "+" if diff_f > 0 else ""
-        color = "#00B828" if diff_f >= 0 else "#E53935"
+        color = "#22C55E" if diff_f >= 0 else "#EF4444" 
         arrow = "▲" if diff_f >= 0 else "▼"
-        return f"{name} &nbsp; <span style='font-weight: 700;'>{lp}</span> &nbsp; <span style='color: {color}; font-weight: 700;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
-    return f"{name} &nbsp; <span>{raw_val}</span>"
+        return f"<span style='color: #94A3B8; font-size: 13px; font-weight: 600;'>{name}</span> &nbsp; <span style='color: #F8FAFC; font-weight: 700; font-size: 15px;'>{lp}</span> &nbsp; <span style='color: {color}; font-weight: 600; font-size: 14px;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
+    return f"<span style='color: #94A3B8; font-size: 13px; font-weight: 600;'>{name}</span> &nbsp; <span style='color: #F8FAFC; font-weight: 700; font-size: 15px;'>{raw_val}</span>"
 
 def render_top_ticker_tape(settings_sheet):
     try:
@@ -24,8 +24,8 @@ def render_top_ticker_tape(settings_sheet):
         banknifty = format_index_display("NIFTY BANK", settings_sheet.acell('B6').value)
         sensex = format_index_display("SENSEX", settings_sheet.acell('B7').value)
         
-        # Dark TradingView-Style Tape
-        st.markdown(f"<div class='index-tape'>{nifty} <span style='color: #475569; margin: 0 15px;'>|</span> {banknifty} <span style='color: #475569; margin: 0 15px;'>|</span> {sensex}</div>", unsafe_allow_html=True)
+        html = f"<div class='index-tape'>{nifty} <span class='index-divider'>|</span> {banknifty} <span class='index-divider'>|</span> {sensex}</div>"
+        st.markdown(html, unsafe_allow_html=True)
     except: pass
 
 def check_for_audio_alerts(df_act):
@@ -40,14 +40,13 @@ def check_for_audio_alerts(df_act):
                 sl_hits += 1
         except: pass
 
-    # Initialize counters on startup silently
+    # Initialize silently on boot to prevent a chime storm when the page first loads
     if "audio_initialized" not in st.session_state:
         st.session_state.target_hits = current_targets
         st.session_state.sl_hits = sl_hits
         st.session_state.audio_initialized = True
         return
 
-    # Trigger chimes ONLY if targets or SLs increase dynamically
     if current_targets > st.session_state.target_hits:
         st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
         st.session_state.target_hits = current_targets
@@ -206,6 +205,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     m2.metric("🟢 Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
                     m4.metric("🎯 Targets Reached", len(df_wl[df_wl['Target Status'] == '🎯 Reached']))
+                    st.write("")
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=db.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -213,14 +213,13 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab2:
                 df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    # ONLY ACTIVATE AUDIO FOR LIVE, ACTIVE TRADES
-                    check_for_audio_alerts(df_act)
-                    
+                    check_for_audio_alerts(df_act) # Audio is only invoked in the active session
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Active Positions", len(df_act))
                     m2.metric("🟢 Floating Profit", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Floating Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
                     m4.metric("🎯 Targets Reached", len(df_act[df_act['Target Status'] == '🎯 Reached']))
+                    st.write("")
                     st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=db.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -273,6 +272,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
                     m2.metric("🟢 Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
                     m4.metric("⚪ Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    st.write("")
                     st.data_editor(
                         df_filtered[scan_view_cols],
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
