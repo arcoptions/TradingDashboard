@@ -7,20 +7,25 @@ import database as db
 import broker_api as api
 
 def format_index_display(name, raw_val):
-    if not raw_val or raw_val == "-": return f"<span style='font-weight: 600; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 700; color: #1A202C;'>-</span>"
+    if not raw_val or raw_val == "-": 
+        return f"<span style='font-size: 18px; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 18px; color: #1A202C;'>-</span>"
+    
     parts = str(raw_val).split(",")
     if len(parts) == 3:
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
         sign = "+" if diff_f > 0 else ""
-        color = "#22C55E" if diff_f >= 0 else "#EF4444" 
+        color = "#089981" if diff_f >= 0 else "#F23645" # TradingView exact colors
         arrow = "▲" if diff_f >= 0 else "▼"
-        return f"<span style='font-weight: 600; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 700; font-size: 16px; color: #1A202C;'>{lp}</span> &nbsp; <span style='color: {color}; font-weight: 500; font-size: 15px;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
-    return f"<span style='font-weight: 600; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 700; font-size: 16px; color: #1A202C;'>{raw_val}</span>"
+        
+        # Matches the TradingView structure: NIFTY50   23332.95   -150.60 (0.64%) v
+        return f"<span style='font-size: 18px; color: #1A202C;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 18px; color: #1A202C;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 16px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
+        
+    return f"<span style='font-size: 18px; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 18px; color: #1A202C;'>{raw_val}</span>"
 
 def render_top_ticker_tape(settings_sheet):
     try:
-        nifty = format_index_display("NIFTY 50", settings_sheet.acell('B5').value)
+        nifty = format_index_display("NIFTY50", settings_sheet.acell('B5').value)
         html = f"<div class='index-tape'>{nifty}</div>"
         st.markdown(html, unsafe_allow_html=True)
     except: pass
