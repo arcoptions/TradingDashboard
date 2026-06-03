@@ -150,7 +150,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 # --- CONTAINER 1: DERIVATIVES PROFILE & GREEKS (COMPACT) ---
                 if contract_meta:
                     with st.container(border=True):
-                        st.markdown("#### Derivatives Profile and Greeks (Tier 3)")
+                        st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
                         try: live_option_price = float(trade_data.get('Live Price', 0))
                         except: live_option_price = 0.0
                         
@@ -185,9 +185,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
                 # --- CONTAINER 2: FUNDAMENTAL SCORECARD (ULTRA-COMPACT) ---
                 with st.container(border=True):
-                    st.markdown(f"#### Fundamental Scorecard: {base_ticker} (Tier 1)")
-                    
-                    c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
+                    st.markdown(f"**Fundamental Scorecard: {base_ticker} (Tier 1)**")
+                    c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.2, 3.2], gap="small")
                     
                     with c1:
                         st.metric("Stock P/E", f"{f_metrics['stock_pe']}")
@@ -200,23 +199,26 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         try:
                             if float(f_metrics['debt_to_equity']) > 2.0: 
                                 st.markdown("<span style='color:#F23645; font-size:14px;'>High Leverage</span>", unsafe_allow_html=True)
-                            else: 
-                                st.caption("Healthy Cap Structure")
+                            else: st.caption("Healthy Cap Structure")
                         except: st.caption("Leverage Rating")
                     with c4:
-                        st.metric("EBITDA Margin", f"{f_metrics['ebitda_margin']}")
-                        st.caption(f"PAT Margin: {f_metrics['pat_margin']}")
+                        st.metric("EBITDA", f"{f_metrics['ebitda_margin']}")
+                        st.caption(f"PAT: {f_metrics['pat_margin']}")
                     with c5:
                         if f_metrics['quarterly_perf']:
-                            df_q = pd.DataFrame(f_metrics['quarterly_perf'])
-                            # Fixed height prevents vertical bloat while keeping the table clean
-                            st.dataframe(df_q, use_container_width=True, hide_index=True, height=110)
+                            # Sleek, borderless HTML table to save massive vertical space
+                            html_tbl = "<table style='width:100%; font-size:14px; text-align:left; border-collapse: collapse; margin-top:5px;'>"
+                            html_tbl += "<tr style='border-bottom: 1px solid #E2E8F0;'><th style='padding:6px; color:#475569;'>Period</th><th style='padding:6px; color:#475569;'>Revenue</th><th style='padding:6px; color:#475569;'>Net Income</th></tr>"
+                            for row in f_metrics['quarterly_perf']:
+                                html_tbl += f"<tr style='border-bottom: 1px solid #F1F5F9;'><td style='padding:6px; font-weight:500;'>{row['Period']}</td><td style='padding:6px;'>{row['Revenue']}</td><td style='padding:6px;'>{row['Net Income']}</td></tr>"
+                            html_tbl += "</table>"
+                            st.markdown(html_tbl, unsafe_allow_html=True)
                         else:
-                            st.caption("Awaiting quarterly data.")
+                            st.caption("Awaiting quarterly data sync via secure fetch block.")
                 
-                # --- CONTAINER 3: CORE POSITIONS & JOURNAL (COMPACT) ---
+                # --- CONTAINER 3: CORE POSITIONS & JOURNAL (EXPANDER SQUASHED) ---
                 with st.container(border=True):
-                    st.markdown("#### Execution Parameters & Repair Matrix")
+                    st.markdown("**Execution Parameters & Repair Matrix**")
                     col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
                     
                     col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
@@ -235,46 +237,49 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             st.info("Awaiting exit price to calculate P&L.")
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    default_search = str(trade_data['Symbol / Asset']).split()[0]
-                    fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
-                    fix_results = api.search_instruments(fix_query)
-                    updated_symbol = str(trade_data['Symbol / Asset'])
-                    updated_sec_id = str(trade_data.get('Security ID', ''))
-                    updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
                     
-                    if not fix_results.empty:
-                        selected_fix = st.selectbox("Select Correct Contract & Expiry:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
-                        fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
-                        updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
-                        updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
-                        exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
-                        if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
-                        elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
-                            
-                    if st.button("Save & Re-Link Asset", type="primary", key="save_fix_contract", use_container_width=True):
-                        sym_col = sheet_headers.index("Symbol / Asset") + 1
-                        sec_col = sheet_headers.index("Security ID") + 1
-                        exch_col = sheet_headers.index("Exchange") + 1
-                        worksheet.update_cell(sheet_row_id, sym_col, updated_symbol)
-                        worksheet.update_cell(sheet_row_id, sec_col, updated_sec_id)
-                        worksheet.update_cell(sheet_row_id, exch_col, updated_exch)
-                        st.success(f"Successfully re-linked row {sheet_row_id} to official asset: {updated_symbol}!")
-                        st.session_state.viewing_trade = updated_symbol
-                        st.rerun()
-                    
-                    st.divider()
-                    with st.form("psychology_update_form"):
-                        curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
-                        curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
-                        new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
-                        new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
-                        if st.form_submit_button("Update Records", type="primary"):
-                            rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
-                            emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
-                            worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
-                            worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
-                            st.success("Database synchronized.")
+                    # 🛠 MASSIVE SPACE SAVER: Hidden inside an expander!
+                    with st.expander("🛠 Advanced Repair Tool & Psychology Journal"):
+                        default_search = str(trade_data['Symbol / Asset']).split()[0]
+                        fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                        fix_results = api.search_instruments(fix_query)
+                        updated_symbol = str(trade_data['Symbol / Asset'])
+                        updated_sec_id = str(trade_data.get('Security ID', ''))
+                        updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
+                        
+                        if not fix_results.empty:
+                            selected_fix = st.selectbox("Select Correct Contract & Expiry:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                            fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                            updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
+                            updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
+                            exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
+                            if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
+                            elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
+                                
+                        if st.button("Save & Re-Link Asset", type="primary", key="save_fix_contract", use_container_width=True):
+                            sym_col = sheet_headers.index("Symbol / Asset") + 1
+                            sec_col = sheet_headers.index("Security ID") + 1
+                            exch_col = sheet_headers.index("Exchange") + 1
+                            worksheet.update_cell(sheet_row_id, sym_col, updated_symbol)
+                            worksheet.update_cell(sheet_row_id, sec_col, updated_sec_id)
+                            worksheet.update_cell(sheet_row_id, exch_col, updated_exch)
+                            st.success(f"Successfully re-linked row {sheet_row_id} to official asset: {updated_symbol}!")
+                            st.session_state.viewing_trade = updated_symbol
                             st.rerun()
+                        
+                        st.divider()
+                        with st.form("psychology_update_form"):
+                            curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                            curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                            new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                            new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                            if st.form_submit_button("Update Records", type="primary"):
+                                rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                                emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
+                                worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                                worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                                st.success("Database synchronized.")
+                                st.rerun()
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("Unlink Review Canvas", use_container_width=True): close_journal(); st.rerun()
