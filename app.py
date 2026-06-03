@@ -3,7 +3,9 @@ import pandas as pd
 import io
 import re
 from datetime import datetime
-import backend as bk 
+import analytics
+import database as db
+import broker_api as api
 
 # --- PAGE CONFIG MUST BE FIRST ---
 st.set_page_config(
@@ -146,100 +148,11 @@ def close_journal():
 
 # --- DATABASE CONNECTION & GLOBAL AUTO-SCHEDULER ENGINE ---
 try:
-    worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = bk.init_db()
-    if "Notes" not in sheet_headers:
-        worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
-        sheet_headers.append("Notes")
-        
-    bk.start_cron_daemon_v4(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+    worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
+    api.start_cron_daemon_v5(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
-
-# --- RUNTIME SIGNAL CALCULATION ENGINE ---
-def compute_signal_indicators(df):
-    if df.empty:
-        return df
-    signals = []
-    target_signals = []
-    for idx, row in df.iterrows():
-        try:
-            live_val = str(row.get('Live Price', '')).strip()
-            range_val = str(row.get('Entry CMP / Range', '')).strip()
-            
-            if live_val in ['', 'nan', 'None'] or range_val in ['', 'nan', 'None']:
-                signals.append("-")
-            else:
-                live_price = float(live_val)
-                digits = re.findall(r'[\d\.]+', range_val)
-                if not digits:
-                    signals.append("-")
-                else:
-                    min_entry = min([float(d) for d in digits])
-                    if live_price > min_entry:
-                        signals.append("🟢 Above")
-                    elif live_price < min_entry:
-                        signals.append("🔴 Below")
-                    else:
-                        signals.append("⚪ At Entry")
-        except:
-            signals.append("-")
-
-        try:
-            live_val = str(row.get('Live Price', '')).strip()
-            t1_val = str(row.get('Target 1', '')).strip()
-            
-            if live_val in ['', 'nan', 'None'] or t1_val in ['', 'nan', 'None']:
-                target_signals.append("-")
-            else:
-                live_price = float(live_val)
-                t1_digits = re.findall(r'[\d\.]+', t1_val)
-                if not t1_digits:
-                    target_signals.append("-")
-                else:
-                    t1_price = float(t1_digits[0])
-                    if live_price >= t1_price:
-                        target_signals.append("🎯 Reached")
-                    else:
-                        target_signals.append("⏳ Pending")
-        except:
-            target_signals.append("-")
-            
-    df['Vs Entry'] = signals
-    df['Target Status'] = target_signals
-    return df
-
-def compute_scanner_signals(df):
-    if df.empty:
-        return df
-    signals = []
-    for idx, row in df.iterrows():
-        try:
-            live_val = str(row.get('Live Price', '')).strip()
-            trigger_val = str(row.get('Trigger Price', '')).strip()
-            
-            if live_val in ['', 'nan', 'None'] or trigger_val in ['', 'nan', 'None']:
-                signals.append("-")
-                continue
-                
-            live_price = float(live_val)
-            digits = re.findall(r'[\d\.]+', trigger_val)
-            if not digits:
-                signals.append("-")
-                continue
-                
-            trigger_price = float(digits[0])
-            if live_price > trigger_price:
-                signals.append("🟢 Above")
-            elif live_price < trigger_price:
-                signals.append("🔴 Below")
-            else:
-                signals.append("⚪ At Entry")
-        except:
-            signals.append("-")
-            
-    df['Vs Entry'] = signals
-    return df
 
 # --- MODAL: DATA ENTRY FORM ---
 @st.dialog("Log New Trade or Scan", width="large")
@@ -249,11 +162,11 @@ def trade_entry_modal():
     with tab1:
         st.caption("Paste a tip directly below to extract strike, range, stop loss, and targets automatically.")
         raw_tip = st.text_area("Tip Input:", key=f"qp_{st.session_state.qp_key}", height=100)
-        parsed_data = bk.parse_telegram_tip(raw_tip)
+        parsed_data = analytics.parse_telegram_tip(raw_tip)
         
         search_query = st.text_input("Refine Instrument Search", value=parsed_data["symbol"])
         auto_symbol, auto_sec_id, auto_exch = "", "", "NSE_EQ"
-        results = bk.search_instruments(search_query)
+        results = api.search_instruments(search_query)
         
         if not results.empty:
             selected_display = st.selectbox("Select Exact Option Expiry:", results['SEM_TRADING_SYMBOL'].tolist())
@@ -264,8 +177,7 @@ def trade_entry_modal():
             if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
             elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
         else:
-            if search_query:
-                st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just the root ticker symbol.")
+            if search_query: st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just the root ticker symbol.")
             auto_symbol = search_query
 
         with st.form("entry_form", clear_on_submit=True):
@@ -316,9 +228,9 @@ def trade_entry_modal():
             unique_lines = list(dict.fromkeys(raw_lines))
             rows_to_insert = []
             for line in unique_lines:
-                p_data = bk.parse_telegram_tip(line)
+                p_data = analytics.parse_telegram_tip(line)
                 if not p_data['symbol']: continue
-                t_sym, t_sec, t_exch = bk.resolve_instrument(p_data['symbol'])
+                t_sym, t_sec, t_exch = api.resolve_instrument(p_data['symbol'])
                 row = [""] * len(sheet_headers)
                 def set_v(col_name, val):
                     if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
@@ -340,24 +252,15 @@ with st.sidebar:
     except: st.markdown("## ARC Terminal")
     
     st.markdown("<br>", unsafe_allow_html=True)
-    
-    if st.button("Log New Trade", type="primary", use_container_width=True):
-        trade_entry_modal()
-        
+    if st.button("Log New Trade", type="primary", use_container_width=True): trade_entry_modal()
     st.markdown("<br>", unsafe_allow_html=True)
         
-    current_page = st.radio(
-        "Navigation",
-        ["Options Tracker", "Chartink Scanners"],
-        label_visibility="collapsed"
-    )
-    
+    current_page = st.radio("Navigation", ["Options Tracker", "Chartink Scanners"], label_visibility="collapsed")
     st.divider()
     with st.expander("Daily API Setup", expanded=False):
         st.caption("Paste today's generated Dhan Access Token here.")
         try: saved_token = settings_sheet.acell('B2').value or ""
         except: saved_token = ""
-            
         new_token = st.text_input("Today's Token:", value=saved_token, type="password")
         if st.button("Save Key", use_container_width=True):
             settings_sheet.update_acell('B2', new_token)
@@ -379,8 +282,7 @@ if current_page == "Options Tracker":
     if not initial_df.empty:
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
-        
-        initial_df = compute_signal_indicators(initial_df)
+        initial_df = analytics.compute_signal_indicators(initial_df)
         
         view_cols = [
             "Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", 
@@ -390,8 +292,7 @@ if current_page == "Options Tracker":
         ]
         
         for col in view_cols:
-            if col not in initial_df.columns: 
-                initial_df[col] = ""
+            if col not in initial_df.columns: initial_df[col] = ""
             elif col not in ["Journal", "_Sheet_Row"]:
                 initial_df[col] = initial_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
         
@@ -424,7 +325,6 @@ if current_page == "Options Tracker":
                 st.rerun()
                 
             trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
-            
             if not trade_rows.empty:
                 trade_data = trade_rows.iloc[0]
                 sheet_row_id = int(trade_data['_Sheet_Row'])
@@ -436,7 +336,6 @@ if current_page == "Options Tracker":
                     col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
                     col3.metric("Live Price", trade_data.get('Live Price', '-'))
                     col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
-                    
                     try:
                         entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
                         exit_val = float(str(trade_data['Exit Price']))
@@ -447,11 +346,9 @@ if current_page == "Options Tracker":
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown("### Advanced Repair Tool")
-                    
                     default_search = str(trade_data['Symbol / Asset']).split()[0]
                     fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
-                    fix_results = bk.search_instruments(fix_query)
-                    
+                    fix_results = api.search_instruments(fix_query)
                     updated_symbol = str(trade_data['Symbol / Asset'])
                     updated_sec_id = str(trade_data.get('Security ID', ''))
                     updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
@@ -484,7 +381,6 @@ if current_page == "Options Tracker":
                         curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
                         new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
                         new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
-                        
                         if st.form_submit_button("Update Records", type="primary"):
                             rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
                             emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
@@ -492,40 +388,23 @@ if current_page == "Options Tracker":
                             worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
                             st.success("Database synchronized.")
                             st.rerun()
-            else:
-                st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
+            else: st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
         else:
-            
-            # --- DATE CALENDAR ENGINE INITIALIZATION ---
             if "Trade Date" in initial_df.columns and not initial_df.empty:
                 parsed_dates = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
                 valid_dates = parsed_dates.dropna().unique()
-                if len(valid_dates) > 0:
-                    min_date = min(valid_dates)
-                    max_date = max(valid_dates)
-                else:
-                    min_date = datetime.today().date()
-                    max_date = datetime.today().date()
-            else:
-                min_date = datetime.today().date()
-                max_date = datetime.today().date()
+                if len(valid_dates) > 0: min_date, max_date = min(valid_dates), max(valid_dates)
+                else: min_date, max_date = datetime.today().date(), datetime.today().date()
+            else: min_date, max_date = datetime.today().date(), datetime.today().date()
 
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
             
             f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
-            with f_col1:
-                selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
+            with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
             with f_col2:
-                # Upgraded to Calendar Range Interface
-                selected_date_range = st.date_input(
-                    "Filter by Date Range",
-                    value=(min_date, max_date),
-                    min_value=min_date,
-                    max_value=max_date
-                )
+                selected_date_range = st.date_input("Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
             with f_col3:
-                if st.button("Sync Live Prices", use_container_width=True):
-                    bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+                if st.button("Sync Live Prices", use_container_width=True): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
             
             try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
             except: timestamp_val = "Pending"
@@ -535,7 +414,6 @@ if current_page == "Options Tracker":
             if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
                 filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
             
-            # --- CALENDAR FILTER APPLICATION ---
             if "Trade Date" in filtered_df.columns and not filtered_df.empty:
                 filtered_df['_Tmp_Date'] = pd.to_datetime(filtered_df["Trade Date"], errors='coerce').dt.date
                 if isinstance(selected_date_range, tuple) and len(selected_date_range) == 2:
@@ -556,9 +434,8 @@ if current_page == "Options Tracker":
                     m3.metric("🔴 Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
                     m4.metric("🎯 Targets Reached", len(df_wl[df_wl['Target Status'] == '🎯 Reached']))
                     st.write("")
-                    
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
-                        on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                        on_change=db.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
 
             with tab2:
@@ -570,20 +447,18 @@ if current_page == "Options Tracker":
                     m3.metric("🔴 Floating Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
                     m4.metric("🎯 Targets Reached", len(df_act[df_act['Target Status'] == '🎯 Reached']))
                     st.write("")
-                    
                     st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
-                        on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                        on_change=db.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
                     
             with tab3:
                 df_cls = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                 if not df_cls.empty:
                     st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
-                        on_change=bk.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
+                        on_change=db.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
                         disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                 else: st.info("No records found.")
-    else:
-        st.info("Database connection established. No data available.")
+    else: st.info("Database connection established. No data available.")
 
 elif current_page == "Chartink Scanners":
     col_t1, col_t2 = st.columns([9, 1], vertical_alignment="bottom")
@@ -597,7 +472,7 @@ elif current_page == "Chartink Scanners":
     with col1: st.write("")
     with col2:
         if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
-            bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+            api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
         
     try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
     except: timestamp_val = "Pending"
@@ -608,7 +483,7 @@ elif current_page == "Chartink Scanners":
     
     if not df_scan.empty:
         df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-        df_scan = compute_scanner_signals(df_scan)
+        df_scan = analytics.compute_scanner_signals(df_scan)
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
         scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
@@ -634,11 +509,10 @@ elif current_page == "Chartink Scanners":
                     m3.metric("🔴 Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
                     m4.metric("⚪ Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
                     st.write("")
-                    
                     st.data_editor(
                         df_filtered[scan_view_cols],
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
-                        on_change=bk.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers},
+                        on_change=db.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers},
                         column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
                     )
                 else: st.info(f"No active triggers for {filter_name}.")
@@ -675,5 +549,4 @@ elif current_page == "Chartink Scanners":
                                 st.rerun()
                         else: st.error("Invalid format. Missing 'Symbol' column.")
                     except Exception as e: st.error("Parse failed. Ensure TSV format.")
-    else:
-        st.info("System operational. Listening for incoming webhooks...")
+    else: st.info("System operational. Listening for incoming webhooks...")
