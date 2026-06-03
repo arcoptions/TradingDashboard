@@ -13,7 +13,6 @@ def init_db():
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     
-    # Structural list expansion for multi-asset details
     new_cols = ["Live Price", "Exit Price", "Notes", "Time Frame", "Setup Rating", "Raw Tip Text"]
     for col in new_cols:
         if col not in sheet_headers:
@@ -35,8 +34,10 @@ def init_db():
     if "Settings" in worksheet_list:
         settings_sheet = sh.worksheet("Settings")
     else:
-        settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
+        # Expanded to 15 rows to safely hold JSON Heatmap payload
+        settings_sheet = sh.add_worksheet(title="Settings", rows="15", cols="2")
         
+    # Initialize bounds safely to prevent 400 Errors
     settings_sheet.update([
         ["Key", "Value"], 
         ["Dhan Access Token", ""], 
@@ -47,8 +48,10 @@ def init_db():
         ["Sensex", "-"],
         ["Sync Interval", "60"],
         ["New Timestamp", "-"],
-        ["New Nifty", "-"]
-    ], "A1:B10")
+        ["New Nifty", "-"],
+        ["---", "---"],
+        ["Sector Heatmap JSON", "-"]
+    ], "A1:B12")
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
