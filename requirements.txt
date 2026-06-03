@@ -5,3 +5,4 @@ gspread
 google-auth
 streamlit-option-menu
 plotly
+yfinance>=0.2.40
