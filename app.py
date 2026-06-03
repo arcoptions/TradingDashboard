@@ -15,36 +15,17 @@ st.set_page_config(
 # --- CHAMPAGNE GOLD CSS FOR PREMIUM LIGHT THEME ---
 st.markdown("""
     <style>
+        /* Safely hide top right branding, but strictly preserve the native left-side controls */
         #MainMenu {visibility: hidden;}
-        [data-testid="stToolbar"] {visibility: hidden;} 
+        [data-testid="stToolbar"] {display: none !important;} 
         footer {visibility: hidden;}
-        .block-container {padding-top: 4rem; padding-bottom: 0rem;}
+        .block-container {padding-top: 3rem; padding-bottom: 0rem;}
         
         :root {
             --arc-gold-light: #F9E7BE;
             --arc-gold-mid: #D1A553;
             --arc-gold-dark: #B88A3B;
             --arc-text-dark: #1A202C; 
-        }
-        
-        /* AGGRESSIVE OVERRIDE FOR THE SIDEBAR TOGGLE BUTTON */
-        [data-testid="collapsedControl"] {
-            display: flex !important;
-            visibility: visible !important;
-            z-index: 999999 !important;
-            background-color: var(--arc-gold-light) !important;
-            border-radius: 6px !important;
-            margin: 15px !important;
-            border: 1px solid var(--arc-gold-dark) !important;
-            box-shadow: 0px 4px 12px rgba(0,0,0,0.15) !important;
-            transition: all 0.2s ease-in-out !important;
-        }
-        [data-testid="collapsedControl"]:hover {
-            background-color: var(--arc-gold-mid) !important;
-        }
-        [data-testid="collapsedControl"] svg {
-            fill: var(--arc-text-dark) !important;
-            color: var(--arc-text-dark) !important;
         }
         
         div[data-testid="stSidebar"] .stButton > button,
@@ -209,6 +190,38 @@ def compute_signal_indicators(df):
     df['Vs Entry'] = signals
     return df
 
+def compute_scanner_signals(df):
+    if df.empty:
+        return df
+    signals = []
+    for idx, row in df.iterrows():
+        try:
+            live_val = str(row.get('Live Price', '')).strip()
+            trigger_val = str(row.get('Trigger Price', '')).strip()
+            
+            if live_val in ['', 'nan', 'None'] or trigger_val in ['', 'nan', 'None']:
+                signals.append("-")
+                continue
+                
+            live_price = float(live_val)
+            digits = re.findall(r'[\d\.]+', trigger_val)
+            if not digits:
+                signals.append("-")
+                continue
+                
+            trigger_price = float(digits[0])
+            if live_price > trigger_price:
+                signals.append("🟢 Above")
+            elif live_price < trigger_price:
+                signals.append("🔴 Below")
+            else:
+                signals.append("⚪ At Entry")
+        except:
+            signals.append("-")
+            
+    df['Vs Entry'] = signals
+    return df
+
 # --- MODAL: DATA ENTRY FORM ---
 @st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal():
@@ -334,7 +347,13 @@ with st.sidebar:
 
 # --- PAGE ROUTING ---
 if current_page == "Options Tracker":
-    st.markdown("### Options Tracker")
+    col_t1, col_t2 = st.columns([9, 1])
+    with col_t1: st.markdown("### Options Tracker")
+    with col_t2: 
+        if st.button("⚙️ UI Reset", help="Click to force sidebar open if stuck", use_container_width=True):
+            import streamlit.components.v1 as components
+            components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
+            
     initial_data = worksheet.get_all_records()
     initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
@@ -505,8 +524,15 @@ if current_page == "Options Tracker":
         st.info("Database connection established. No data available.")
 
 elif current_page == "Chartink Scanners":
+    col_t1, col_t2 = st.columns([9, 1], vertical_alignment="bottom")
+    with col_t1: st.markdown("### Automated Scan Feeds")
+    with col_t2: 
+        if st.button("⚙️ UI Reset", help="Click to force sidebar open if stuck", use_container_width=True):
+            import streamlit.components.v1 as components
+            components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
+            
     col1, col2 = st.columns([8, 2], vertical_alignment="bottom")
-    with col1: st.markdown("### Automated Scan Feeds")
+    with col1: st.write("")
     with col2:
         if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
             bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
@@ -520,18 +546,20 @@ elif current_page == "Chartink Scanners":
     
     if not df_scan.empty:
         df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+        df_scan = compute_scanner_signals(df_scan)
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
-        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
+        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
             "_Sheet_Row": None,
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True),
+            "Vs Entry": st.column_config.TextColumn("Vs Entry"),
             "Trigger Price": st.column_config.TextColumn("Trigger Price"),
             "Live Price": st.column_config.TextColumn("Live Price"),
             "Trigger Time": st.column_config.TextColumn("Trigger Time"),
             "Notes / Analysis": st.column_config.TextColumn("Notes / Analysis")
         }
-        for col in ["Notes / Analysis", "Trigger Price", "Live Price", "Trigger Time"]:
+        for col in ["Notes / Analysis", "Trigger Price", "Live Price", "Trigger Time", "Vs Entry"]:
             if col in df_scan.columns: df_scan[col] = df_scan[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
 
         def render_scanner_tab(tab_obj, filter_name):
@@ -542,7 +570,7 @@ elif current_page == "Chartink Scanners":
                         df_filtered[scan_view_cols],
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
                         on_change=bk.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers},
-                        column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Trigger Time"]
+                        column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
                     )
                 else: st.info(f"No active triggers for {filter_name}.")
         
