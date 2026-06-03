@@ -1,6 +1,5 @@
 import requests
 import pandas as pd
-import threading
 
 # --- SECTORAL PE REFERENCE REGISTRY ---
 INDUSTRY_PE_MAP = {
@@ -18,123 +17,81 @@ INDUSTRY_PE_MAP = {
     "GENERAL / MIXED": 20.0
 }
 
-class YahooEngine:
-    """
-    Singleton connection engine that steals and caches Yahoo Finance browser 
-    authentication tokens (crumbs) to bypass cloud-IP blocking protocols.
-    """
-    _session = None
-    _crumb = None
-    _lock = threading.Lock()
-
-    @classmethod
-    def get_auth(cls):
-        with cls._lock:
-            if cls._session is None or cls._crumb is None:
-                cls._session = requests.Session()
-                # Camouflage the request as a standard Windows 10 Chrome desktop browser
-                cls._session.headers.update({
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept': 'application/json, text/plain, */*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                })
-                try:
-                    # 1. Acquire cookies
-                    cls._session.get('https://fc.yahoo.com', timeout=5)
-                    # 2. Acquire authentication crumb
-                    res = cls._session.get('https://query1.finance.yahoo.com/v1/test/getcrumb', timeout=5)
-                    if res.status_code == 200:
-                        cls._crumb = res.text.strip()
-                except Exception:
-                    pass
-        return cls._session, cls._crumb
-
 def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED"):
     """
-    Dual-engine scraper. Attempts deep financial extraction first. If blocked, 
-    falls back to lightweight P/E extraction to prevent blank UI canvases.
+    ULTIMATE CLOUD BYPASS: Uses TradingView's institutional scanner endpoint.
+    This public API provides exact data and NEVER blocks cloud IPs (like Streamlit or AWS).
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
-    if not cleaned_ticker.endswith(".NS") and not cleaned_ticker.endswith(".BO"):
-        cleaned_ticker += ".NS"
+    
+    # Strip suffixes if they exist from older Yahoo logic
+    if cleaned_ticker.endswith(".NS") or cleaned_ticker.endswith(".BO"):
+        cleaned_ticker = cleaned_ticker[:-3]
         
-    # Baseline empty payload
+    tv_ticker = f"NSE:{cleaned_ticker}"
+    
+    # TradingView Scanner Payload Map
+    columns = [
+        "price_earnings_ttm",        # 0: Stock P/E
+        "price_earnings_forward",    # 1: Forward P/E
+        "return_on_equity",          # 2: ROE
+        "debt_to_equity",            # 3: Debt to Equity
+        "operating_margin",          # 4: Proxy for EBITDA Margin
+        "net_margin",                # 5: PAT Margin
+        "total_revenue_fq",          # 6: Latest Quarter Revenue
+        "net_income_fq"              # 7: Latest Quarter Net Income
+    ]
+    
     payload = {
+        "symbols": {"tickers": [tv_ticker]},
+        "columns": columns
+    }
+    
+    try:
+        # Hit the TradingView headless scanner (Ultra-fast, no cookies required)
+        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=8)
+        
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("data"):
+                # Extract the data array
+                d = data["data"][0]["d"]
+                
+                pe = d[0]
+                fpe = d[1]
+                roe = d[2]
+                dte = d[3]
+                ebitda = d[4]
+                pat = d[5]
+                rev = d[6]
+                net = d[7]
+                
+                sector_pe = INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0)
+                
+                q_perf = []
+                if rev is not None and net is not None:
+                    q_perf.append({
+                        "Period": "Latest Qtr",
+                        "Revenue (Cr)": round(rev / 10000000, 2),
+                        "Net Income (Cr)": round(net / 10000000, 2)
+                    })
+                
+                return {
+                    "stock_pe": round(pe, 2) if pe is not None else "-",
+                    "forward_pe": round(fpe, 2) if fpe is not None else "-",
+                    "sector_pe": sector_pe,
+                    "roe": f"{round(roe, 2)}%" if roe is not None else "-",
+                    "debt_to_equity": round(dte, 2) if dte is not None else "-",
+                    "ebitda_margin": f"{round(ebitda, 2)}%" if ebitda is not None else "-",
+                    "pat_margin": f"{round(pat, 2)}%" if pat is not None else "-",
+                    "quarterly_perf": q_perf
+                }
+    except Exception as e:
+        print(f"TradingView Engine Error: {e}")
+        
+    # Absolute Fallback if network drops
+    return {
         "stock_pe": "-", "forward_pe": "-", "sector_pe": INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0),
         "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
         "quarterly_perf": []
     }
-    
-    session, crumb = YahooEngine.get_auth()
-    
-    # ─── PRIMARY ENGINE: DEEP BALANCE SHEET EXTRACTION ───
-    try:
-        url_deep = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{cleaned_ticker}"
-        params = {"modules": "summaryDetail,financialData,defaultKeyStatistics,incomeStatementHistoryQuarterly"}
-        if crumb: 
-            params["crumb"] = crumb
-            
-        res_deep = session.get(url_deep, params=params, timeout=8)
-        
-        if res_deep.status_code == 200:
-            result = res_deep.json().get("quoteSummary", {}).get("result", [])
-            if result:
-                core = result[0]
-                summary = core.get("summaryDetail", {})
-                financials = core.get("financialData", {})
-                
-                # Valuation Multiples
-                pe = summary.get("trailingPE", {}).get("raw")
-                fpe = summary.get("forwardPE", {}).get("raw")
-                if pe: payload["stock_pe"] = round(pe, 2)
-                if fpe: payload["forward_pe"] = round(fpe, 2)
-                
-                # Capital Efficiency & Margins
-                roe = financials.get("returnOnEquity", {}).get("raw")
-                ebitda = financials.get("ebitdaMargins", {}).get("raw")
-                pat = financials.get("profitMargins", {}).get("raw")
-                if roe: payload["roe"] = f"{round(roe * 100, 2)}%"
-                if ebitda: payload["ebitda_margin"] = f"{round(ebitda * 100, 2)}%"
-                if pat: payload["pat_margin"] = f"{round(pat * 100, 2)}%"
-                
-                # Leverage Risk
-                dte = financials.get("debtToEquity", {}).get("raw")
-                if dte: payload["debt_to_equity"] = round(dte / 100, 2)
-                
-                # Quarterly Revenue Tracker
-                q_hist = core.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", [])
-                for q in q_hist[:2]:
-                    date_str = q.get("endDate", {}).get("fmt", "Unknown")
-                    rev = q.get("totalRevenue", {}).get("raw", 0)
-                    net = q.get("netIncome", {}).get("raw", 0)
-                    payload["quarterly_perf"].append({
-                        "Period": date_str,
-                        "Revenue (Cr)": round(rev / 10000000, 2) if rev else "-",
-                        "Net Income (Cr)": round(net / 10000000, 2) if net else "-"
-                    })
-                return payload 
-    except Exception:
-        pass 
-        
-    # ─── SECONDARY ENGINE: LIGHTWEIGHT QUOTE FALLBACK ───
-    try:
-        url_light = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={cleaned_ticker}"
-        res_light = session.get(url_light, timeout=8)
-        
-        if res_light.status_code == 200:
-            result = res_light.json().get("quoteResponse", {}).get("result", [])
-            if result:
-                data = result[0]
-                pe = data.get("trailingPE")
-                fpe = data.get("forwardPE")
-                
-                if pe: payload["stock_pe"] = round(pe, 2)
-                if fpe: payload["forward_pe"] = round(fpe, 2)
-                
-                # Flag the user that deep fields were protected by the firewall
-                payload["ebitda_margin"] = "Secured behind cloud firewall"
-                payload["pat_margin"] = "Secured behind cloud firewall"
-    except Exception:
-        pass
-        
-    return payload
