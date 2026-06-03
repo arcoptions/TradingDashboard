@@ -13,8 +13,8 @@ def init_db():
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     
-    # Multi-Asset Data Column Expansion
-    new_cols = ["Live Price", "Exit Price", "Notes", "Time Frame", "Setup Rating", "Raw Tip Text"]
+    # --- ADDED NEW OI TRACKING COLUMNS TO SCHEMA ---
+    new_cols = ["Live Price", "Exit Price", "Notes", "Time Frame", "Setup Rating", "Raw Tip Text", "Price Chg %", "OI Chg %"]
     for col in new_cols:
         if col not in sheet_headers:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
@@ -35,18 +35,15 @@ def init_db():
     if "Settings" in worksheet_list:
         settings_sheet = sh.worksheet("Settings")
         
-        # Grid Protection: Automatically scales rows if working with a legacy 11-row worksheet
         if settings_sheet.row_count < 15:
             settings_sheet.resize(rows=15)
             
-        # Token Isolation: Safeguard to only populate missing keys without wiping your token
         val_a12 = settings_sheet.acell('A12').value
         if not val_a12 or str(val_a12).strip() == "":
             settings_sheet.update_acell('A12', "Sector Heatmap JSON")
             settings_sheet.update_acell('B12', "-")
     else:
         settings_sheet = sh.add_worksheet(title="Settings", rows="15", cols="2")
-        # Only runs on absolute fresh creation
         settings_sheet.update([
             ["Key", "Value"], 
             ["Dhan Access Token", ""], 
