@@ -23,7 +23,7 @@ SECTOR_SYMBOLS = {
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=15):
+def get_dhan_scrip_master(v=16):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -118,7 +118,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
     
-    # ─── Switched to robust QUOTE endpoint for EOD previous_close tracking ───
     url = "https://api.dhan.co/v2/marketfeed/quote"
     try: response = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e: return f"HTTP Connection Timeout: {e}"
@@ -139,8 +138,19 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # ─── Hierarchy of Truth EOD Parser ───
-            def get_index_metrics(s_id):
+            # --- EOD ROLLOVER STATE EXTRACTION ---
+            try:
+                old_n50_raw = settings_sheet.acell('B10').value
+                old_n50_pct = float(old_n50_raw.split(',')[2]) if old_n50_raw and old_n50_raw != "-" else None
+            except: old_n50_pct = None
+            
+            try:
+                raw_json = settings_sheet.acell('B12').value
+                existing_heatmap = json.loads(raw_json) if raw_json and str(raw_json).strip() not in ["", "-"] else []
+                old_sector_map = {item["sector"]: item["change"] for item in existing_heatmap if item["change"] != 0}
+            except: old_sector_map = {}
+            
+            def get_index_metrics(s_id, sector_name=None):
                 item = data.get("IDX_I", {}).get(str(s_id), {})
                 if not item: item = data.get("NSE_IDX", {}).get(str(s_id), {})
                 
@@ -148,21 +158,31 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 if not lp: return None, None, None
                 
                 lp_f = float(lp)
-                prev_c = item.get("previous_close")
                 ohlc_c = item.get("ohlc", {}).get("close")
+                ohlc_o = item.get("ohlc", {}).get("open")
                 
-                # 1. Use pure 'previous_close' if available
-                if prev_c and float(prev_c) > 0:
-                    cp_f = float(prev_c)
-                # 2. Use 'ohlc.close' IF it hasn't rolled over to equal the last price yet
-                elif ohlc_c and float(ohlc_c) > 0 and float(ohlc_c) != lp_f:
+                if ohlc_c and float(ohlc_c) > 0 and float(ohlc_c) != lp_f:
                     cp_f = float(ohlc_c)
-                # 3. Flatline fallback
                 else:
-                    cp_f = lp_f
+                    cp_f = lp_f 
                     
                 diff = lp_f - cp_f
                 pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
+                
+                # --- State Persistence Fallback for Off-Market Hours ---
+                if diff == 0.0:
+                    if sector_name and sector_name in old_sector_map:
+                        pct = old_sector_map[sector_name]
+                        diff = (pct / 100) * lp_f 
+                    elif s_id == 13 and old_n50_pct is not None:
+                        pct = old_n50_pct
+                        diff = (pct / 100) * lp_f
+                    elif ohlc_o and float(ohlc_o) > 0:
+                        # Final Fallback: If sheet is blank, approximate using Intraday Open
+                        cp_f = float(ohlc_o)
+                        diff = lp_f - cp_f
+                        pct = (diff / cp_f) * 100
+                        
                 return lp_f, diff, pct
             
             # 1. Update NIFTY 50 (ID 13)
@@ -173,7 +193,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             # 2. Build Dynamic Sector Heatmap JSON
             heatmap_arr = []
             for sec_id, info in sector_lookup.items():
-                lp_sec, diff_sec, pct_sec = get_index_metrics(sec_id)
+                lp_sec, diff_sec, pct_sec = get_index_metrics(sec_id, sector_name=info["name"])
                 if pct_sec is not None:
                     heatmap_arr.append({
                         "sector": info["name"],
