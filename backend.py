@@ -7,6 +7,7 @@ import streamlit as st
 import threading
 import time
 from datetime import datetime, timezone, timedelta
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # --- 1. NLP PARSER ---
 def parse_telegram_tip(text):
@@ -134,12 +135,12 @@ def init_db():
         settings_sheet = sh.worksheet("Settings")
     else:
         settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
-        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""], ["Last Synced", "-"]], "A1:B3")
+        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""], ["Last Synced", "-"], ["Daemon Status", "-"]], "A1:B4")
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
-# --- 4. CORE DATA REFRESH LOGIC (WITH EXPLICIT TIMEOUT PROTECTION) ---
-def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None):
+# --- 4. CORE DATA REFRESH LOGIC ---
+def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     try:
         daily_token = settings_sheet.acell('B2').value
         if not daily_token:
@@ -185,14 +186,11 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     if not payload: 
         return "No targets mapped"
         
-    # Safely resolve Dhan Client ID based on execution context (Main Thread UI Click vs Background Daemon)
-    client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
-        
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'access-token': daily_token, 
-        'client-id': client_id_to_use
+        'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
     
     url = "https://api.dhan.co/v2/marketfeed/ohlc"
@@ -226,6 +224,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             current_time_str = ist_now.strftime("%d-%b %I:%M %p")
             settings_sheet.update_acell('B3', current_time_str)
+            settings_sheet.update_acell('B4', "Running smoothly")
         except Exception as e:
             return f"Spreadsheet Write Failure: {e}"
             
@@ -234,22 +233,21 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         return f"API Error: {response.status_code}"
 
 # --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON (ANTI-EXPIRATION SYSTEM) ---
-def background_sync_loop(gcp_creds_dict, dhan_client_id):
-    """Persistent background tracking daemon passing pre-loaded secrets to bypass UI threading restrictions."""
+def background_sync_loop():
+    """Bound to Streamlit context via add_script_run_ctx to guarantee st.secrets access"""
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
     while True:
         now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         
+        # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
         if now.weekday() < 5:
-            # Shifted to explicitly track from 9:15 AM
             start_market = now.replace(hour=9, minute=15, second=0, microsecond=0)
             end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
             
             if start_market <= now <= end_market:
                 try:
-                    # Dynamically instantiate fresh workspace links via injected raw dictionary
-                    credentials = Credentials.from_service_account_info(gcp_creds_dict, scopes=scopes)
+                    credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
                     gc = gspread.authorize(credentials)
                     sh = gc.open("Comprehensive Trading Tracker 2026")
                     
@@ -260,23 +258,21 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     bg_sheet_headers = bg_worksheet.row_values(1)
                     bg_scanner_headers = bg_scanner_sheet.row_values(1)
                     
-                    execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_sheet_headers, bg_scanner_headers, background_client_id=dhan_client_id)
-                except Exception:
-                    pass # Prevent thread crashing on temporary database locks
+                    result = execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_sheet_headers, bg_scanner_headers)
+                    
+                    if result != "Success":
+                        bg_settings_sheet.update_acell('B4', f"Error {now.strftime('%H:%M')}: {result}")
+                        
+                except Exception as e:
+                    pass 
                     
         time.sleep(300)
 
+# FORCE CACHE BUST: Renamed to v4 to guarantee Streamlit deletes the old dead thread and boots this one
 @st.cache_resource
-def start_automated_scheduler(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
-    # Extract structural secrets into basic memory variables BEFORE entering the detached daemon thread
-    gcp_creds = dict(st.secrets["gcp_service_account"])
-    dhan_id = st.secrets["dhan"]["dhan_client_id"]
-    
-    cron_worker = threading.Thread(
-        target=background_sync_loop,
-        args=(gcp_creds, dhan_id),
-        daemon=True
-    )
+def start_cron_daemon_v4(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+    cron_worker = threading.Thread(target=background_sync_loop, daemon=True)
+    add_script_run_ctx(cron_worker) # Forces thread to inherit UI's access to st.secrets
     cron_worker.start()
     return True
 
