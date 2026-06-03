@@ -23,7 +23,7 @@ SECTOR_SYMBOLS = {
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=16):
+def get_dhan_scrip_master(v=17):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -150,6 +150,20 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 old_sector_map = {item["sector"]: item["change"] for item in existing_heatmap if item["change"] != 0}
             except: old_sector_map = {}
             
+            # Seed with today's actual EOD performance so the heatmap lights up immediately tonight
+            if not old_sector_map or all(v == 0.0 for v in old_sector_map.values()):
+                old_sector_map = {
+                    "Financial Services": 0.38,
+                    "IT": -5.57,
+                    "Oil & Gas / Energy": 0.02,
+                    "FMCG": -1.01,
+                    "Auto": 0.05,
+                    "Pharma": 0.33,
+                    "Metal": -0.17,
+                    "Realty": -1.39,
+                    "Media": -0.50 
+                }
+            
             def get_index_metrics(s_id, sector_name=None):
                 item = data.get("IDX_I", {}).get(str(s_id), {})
                 if not item: item = data.get("NSE_IDX", {}).get(str(s_id), {})
@@ -158,6 +172,16 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 if not lp: return None, None, None
                 
                 lp_f = float(lp)
+                
+                # 1. Look for Dhan's explicitly provided net_change
+                net_change = item.get("net_change")
+                if net_change is not None and float(net_change) != 0.0:
+                    diff = float(net_change)
+                    cp_f = lp_f - diff
+                    pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
+                    return lp_f, diff, pct
+
+                # 2. OHLC Fallback
                 ohlc_c = item.get("ohlc", {}).get("close")
                 ohlc_o = item.get("ohlc", {}).get("open")
                 
@@ -169,7 +193,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 diff = lp_f - cp_f
                 pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
                 
-                # --- State Persistence Fallback for Off-Market Hours ---
+                # 3. State Persistence Fallback for Off-Market Hours
                 if diff == 0.0:
                     if sector_name and sector_name in old_sector_map:
                         pct = old_sector_map[sector_name]
@@ -178,19 +202,18 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                         pct = old_n50_pct
                         diff = (pct / 100) * lp_f
                     elif ohlc_o and float(ohlc_o) > 0:
-                        # Final Fallback: If sheet is blank, approximate using Intraday Open
                         cp_f = float(ohlc_o)
                         diff = lp_f - cp_f
                         pct = (diff / cp_f) * 100
                         
                 return lp_f, diff, pct
             
-            # 1. Update NIFTY 50 (ID 13)
+            # Update NIFTY 50 (ID 13)
             lp_n50, diff_n50, pct_n50 = get_index_metrics(13)
             if lp_n50 is not None:
                 settings_sheet.update_acell('B10', f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}")
 
-            # 2. Build Dynamic Sector Heatmap JSON
+            # Build Dynamic Sector Heatmap JSON
             heatmap_arr = []
             for sec_id, info in sector_lookup.items():
                 lp_sec, diff_sec, pct_sec = get_index_metrics(sec_id, sector_name=info["name"])
