@@ -1,6 +1,5 @@
-import yfinance as yf
-import pandas as pd
 import requests
+import pandas as pd
 
 # --- SECTORAL PE REFERENCE REGISTRY ---
 INDUSTRY_PE_MAP = {
@@ -20,60 +19,72 @@ INDUSTRY_PE_MAP = {
 
 def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED"):
     """
-    Connects to Yahoo Finance using an emulated browser session to bypass cloud provider IP blocks.
-    Automatically formats Indian equities to their native exchange trackers (.NS).
+    Direct API Interceptor: Bypasses the fragile yfinance library to hit Yahoo's raw 
+    backend JSON endpoints directly. This prevents Streamlit Cloud IP blocking.
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
     
+    # Format for Indian Equities
     if not cleaned_ticker.endswith(".NS") and not cleaned_ticker.endswith(".BO"):
         cleaned_ticker += ".NS"
         
     try:
-        # Create an emulated desktop browser session to prevent Yahoo from dropping the request
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive'
-        })
+        # Hitting the raw 'query2' backend endpoint directly
+        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{cleaned_ticker}?modules=summaryDetail,financialData,defaultKeyStatistics,incomeStatementHistoryQuarterly"
         
-        stock = yf.Ticker(cleaned_ticker, session=session)
-        info = stock.info
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            raise Exception(f"API Blocked or Unavailable: Status {response.status_code}")
+            
+        data = response.json()
+        result = data.get("quoteSummary", {}).get("result", [])
+        
+        if not result:
+            raise Exception("Ticker data not found in Yahoo backend.")
+            
+        core_data = result[0]
+        summary = core_data.get("summaryDetail", {})
+        financials = core_data.get("financialData", {})
         
         # 1. Valuation Metrics Extraction
-        stock_pe = info.get("trailingPE") or info.get("forwardPE")
-        forward_pe = info.get("forwardPE")
+        stock_pe = summary.get("trailingPE", {}).get("raw")
+        forward_pe = summary.get("forwardPE", {}).get("raw")
         sector_pe = INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0)
         
         # 2. Capital Efficiency & Profitability Margins
-        roe = info.get("returnOnEquity")
-        ebitda_margin = info.get("ebitdaMargins")
-        pat_margin = info.get("profitMargins")
+        roe = financials.get("returnOnEquity", {}).get("raw")
+        ebitda_margin = financials.get("ebitdaMargins", {}).get("raw")
+        pat_margin = financials.get("profitMargins", {}).get("raw")
         
-        # 3. Leverage Ratios
-        debt_to_equity = info.get("debtToEquity")
+        # 3. Leverage Ratios (Raw returns as percentage e.g., 125.5 for 1.25x)
+        debt_to_equity = financials.get("debtToEquity", {}).get("raw")
         
         # 4. Quarterly Balance Sheet Trends (YoY Matrix)
-        financials = stock.quarterly_financials
         quarterly_perf = []
+        income_stmt = core_data.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", [])
         
-        if financials is not None and not financials.empty:
-            target_columns = financials.columns[:2]
-            for col in target_columns:
-                q_name = col.strftime("%b-%Y") if hasattr(col, "strftime") else str(col)
-                rev = financials.loc["Total Revenue"].iloc[financials.columns.get_loc(col)] if "Total Revenue" in financials.index else 0
-                net_inc = financials.loc["Net Income"].iloc[financials.columns.get_loc(col)] if "Net Income" in financials.index else 0
-                
-                rev_crores = round(rev / 10000000, 2) if rev and not pd.isna(rev) else "-"
-                net_crores = round(net_inc / 10000000, 2) if net_inc and not pd.isna(net_inc) else "-"
-                
-                quarterly_perf.append({
-                    "Period": q_name,
-                    "Revenue (Cr)": rev_crores,
-                    "Net Income (Cr)": net_crores
-                })
-                
+        # Safely grab the 2 most recent reporting periods
+        for q in income_stmt[:2]:
+            date_str = q.get("endDate", {}).get("fmt", "Unknown")
+            rev = q.get("totalRevenue", {}).get("raw", 0)
+            net_inc = q.get("netIncome", {}).get("raw", 0)
+            
+            # Convert raw numeric fields into cleaner Crore representations
+            rev_crores = round(rev / 10000000, 2) if rev else "-"
+            net_crores = round(net_inc / 10000000, 2) if net_inc else "-"
+            
+            quarterly_perf.append({
+                "Period": date_str,
+                "Revenue (Cr)": rev_crores,
+                "Net Income (Cr)": net_crores
+            })
+            
         return {
             "stock_pe": round(stock_pe, 2) if stock_pe else "-",
             "forward_pe": round(forward_pe, 2) if forward_pe else "-",
@@ -85,7 +96,9 @@ def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED")
             "quarterly_perf": quarterly_perf
         }
         
-    except Exception:
+    except Exception as e:
+        # Graceful fallback data dictionary if the network request drops
+        print(f"Fundamental Engine Override: {e}")
         return {
             "stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0,
             "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
