@@ -2,7 +2,8 @@ import requests
 
 def fetch_technicals(ticker_symbol):
     """
-    Fetches real-time technical momentum indicators and calculates Moving Average Proximity.
+    Fetches Technical Proximities and the new Volume Spike % metric 
+    (Proxy for Institutional Delivery Volume).
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
     if cleaned_ticker.endswith(".NS") or cleaned_ticker.endswith(".BO"):
@@ -12,7 +13,7 @@ def fetch_technicals(ticker_symbol):
 
     payload = {
         "symbols": {"tickers": [f"NSE:{tv_ticker}"]},
-        "columns": ["close", "EMA20", "EMA50", "EMA200", "RSI"]
+        "columns": ["close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"]
     }
 
     try:
@@ -24,20 +25,26 @@ def fetch_technicals(ticker_symbol):
             ema50 = d[2]
             ema200 = d[3]
             rsi = d[4]
+            vol = d[5]
+            avg_vol = d[6]
 
-            # Calculates percentage distance from the moving average
             def calc_prox(val):
                 if val and close: 
                     return round(((close - val) / val) * 100, 2)
                 return "-"
 
+            vol_spike = "-"
+            if vol and avg_vol and avg_vol > 0:
+                vol_spike = f"{round((vol / avg_vol) * 100, 2)}%"
+
             return {
                 "rsi": round(rsi, 2) if rsi else "-",
                 "ema20_prox": calc_prox(ema20),
                 "ema50_prox": calc_prox(ema50),
-                "ema200_prox": calc_prox(ema200)
+                "ema200_prox": calc_prox(ema200),
+                "vol_spike": vol_spike
             }
     except Exception as e:
         print(f"TV Technical Engine Error: {e}")
 
-    return {"rsi": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}
+    return {"rsi": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-", "vol_spike": "-"}
