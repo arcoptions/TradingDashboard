@@ -15,7 +15,6 @@ st.set_page_config(
 # --- CHAMPAGNE GOLD CSS FOR PREMIUM LIGHT THEME ---
 st.markdown("""
     <style>
-        /* Safely hide top right branding, but strictly preserve the native left-side controls */
         #MainMenu {visibility: hidden;}
         [data-testid="stToolbar"] {display: none !important;} 
         footer {visibility: hidden;}
@@ -152,7 +151,7 @@ try:
         worksheet.update_cell(1, len(sheet_headers) + 1, "Notes")
         sheet_headers.append("Notes")
         
-    bk.start_automated_scheduler(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+    bk.start_cron_daemon_v4(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
@@ -164,7 +163,6 @@ def compute_signal_indicators(df):
     signals = []
     target_signals = []
     for idx, row in df.iterrows():
-        # 1. Entry tracking indicator logic
         try:
             live_val = str(row.get('Live Price', '')).strip()
             range_val = str(row.get('Entry CMP / Range', '')).strip()
@@ -187,7 +185,6 @@ def compute_signal_indicators(df):
         except:
             signals.append("-")
 
-        # 2. Target 1 Reached detection logic
         try:
             live_val = str(row.get('Live Price', '')).strip()
             t1_val = str(row.get('Target 1', '')).strip()
@@ -498,14 +495,34 @@ if current_page == "Options Tracker":
             else:
                 st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
         else:
+            
+            # --- DATE CALENDAR ENGINE INITIALIZATION ---
+            if "Trade Date" in initial_df.columns and not initial_df.empty:
+                parsed_dates = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
+                valid_dates = parsed_dates.dropna().unique()
+                if len(valid_dates) > 0:
+                    min_date = min(valid_dates)
+                    max_date = max(valid_dates)
+                else:
+                    min_date = datetime.today().date()
+                    max_date = datetime.today().date()
+            else:
+                min_date = datetime.today().date()
+                max_date = datetime.today().date()
+
             all_sources = sorted(list(initial_df["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in initial_df.columns else []
-            all_dates = sorted(list(initial_df["Trade Date"].dropna().unique()), reverse=True) if "Trade Date" in initial_df.columns else []
             
             f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
             with f_col1:
                 selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
             with f_col2:
-                selected_dates = st.multiselect("Filter by Trade Date", options=all_dates, default=all_dates)
+                # Upgraded to Calendar Range Interface
+                selected_date_range = st.date_input(
+                    "Filter by Date Range",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date
+                )
             with f_col3:
                 if st.button("Sync Live Prices", use_container_width=True):
                     bk.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
@@ -517,15 +534,22 @@ if current_page == "Options Tracker":
             filtered_df = initial_df.copy()
             if "Idea Source (Chartink/Telegram/X/Self)" in filtered_df.columns and selected_sources:
                 filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
-            if "Trade Date" in filtered_df.columns and selected_dates:
-                filtered_df = filtered_df[filtered_df["Trade Date"].isin(selected_dates)]
+            
+            # --- CALENDAR FILTER APPLICATION ---
+            if "Trade Date" in filtered_df.columns and not filtered_df.empty:
+                filtered_df['_Tmp_Date'] = pd.to_datetime(filtered_df["Trade Date"], errors='coerce').dt.date
+                if isinstance(selected_date_range, tuple) and len(selected_date_range) == 2:
+                    start_d, end_d = selected_date_range
+                    filtered_df = filtered_df[(filtered_df['_Tmp_Date'] >= start_d) & (filtered_df['_Tmp_Date'] <= end_d)]
+                elif isinstance(selected_date_range, tuple) and len(selected_date_range) == 1:
+                    filtered_df = filtered_df[filtered_df['_Tmp_Date'] == selected_date_range[0]]
+                filtered_df = filtered_df.drop(columns=['_Tmp_Date'])
                     
             tab1, tab2, tab3 = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
             
             with tab1:
                 df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    # --- PERFORMANCE DASHBOARD WIDGET ---
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Assets", len(df_wl))
                     m2.metric("🟢 Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
@@ -540,7 +564,6 @@ if current_page == "Options Tracker":
             with tab2:
                 df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    # --- PERFORMANCE DASHBOARD WIDGET ---
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Active Positions", len(df_act))
                     m2.metric("🟢 Floating Profit", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
@@ -605,7 +628,6 @@ elif current_page == "Chartink Scanners":
             with tab_obj:
                 df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
                 if not df_filtered.empty:
-                    # --- PERFORMANCE DASHBOARD WIDGET ---
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Triggers", len(df_filtered))
                     m2.metric("🟢 Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
