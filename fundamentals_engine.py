@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import threading
 
 # --- SECTORAL PE REFERENCE REGISTRY ---
 INDUSTRY_PE_MAP = {
@@ -17,90 +18,123 @@ INDUSTRY_PE_MAP = {
     "GENERAL / MIXED": 20.0
 }
 
+class YahooEngine:
+    """
+    Singleton connection engine that steals and caches Yahoo Finance browser 
+    authentication tokens (crumbs) to bypass cloud-IP blocking protocols.
+    """
+    _session = None
+    _crumb = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_auth(cls):
+        with cls._lock:
+            if cls._session is None or cls._crumb is None:
+                cls._session = requests.Session()
+                # Camouflage the request as a standard Windows 10 Chrome desktop browser
+                cls._session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                })
+                try:
+                    # 1. Acquire cookies
+                    cls._session.get('https://fc.yahoo.com', timeout=5)
+                    # 2. Acquire authentication crumb
+                    res = cls._session.get('https://query1.finance.yahoo.com/v1/test/getcrumb', timeout=5)
+                    if res.status_code == 200:
+                        cls._crumb = res.text.strip()
+                except Exception:
+                    pass
+        return cls._session, cls._crumb
+
 def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED"):
     """
-    Direct API Interceptor: Bypasses the fragile yfinance library to hit Yahoo's raw 
-    backend JSON endpoints directly. This prevents Streamlit Cloud IP blocking.
+    Dual-engine scraper. Attempts deep financial extraction first. If blocked, 
+    falls back to lightweight P/E extraction to prevent blank UI canvases.
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
-    
-    # Format for Indian Equities
     if not cleaned_ticker.endswith(".NS") and not cleaned_ticker.endswith(".BO"):
         cleaned_ticker += ".NS"
         
+    # Baseline empty payload
+    payload = {
+        "stock_pe": "-", "forward_pe": "-", "sector_pe": INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0),
+        "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
+        "quarterly_perf": []
+    }
+    
+    session, crumb = YahooEngine.get_auth()
+    
+    # ─── PRIMARY ENGINE: DEEP BALANCE SHEET EXTRACTION ───
     try:
-        # Hitting the raw 'query2' backend endpoint directly
-        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{cleaned_ticker}?modules=summaryDetail,financialData,defaultKeyStatistics,incomeStatementHistoryQuarterly"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            raise Exception(f"API Blocked or Unavailable: Status {response.status_code}")
+        url_deep = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{cleaned_ticker}"
+        params = {"modules": "summaryDetail,financialData,defaultKeyStatistics,incomeStatementHistoryQuarterly"}
+        if crumb: 
+            params["crumb"] = crumb
             
-        data = response.json()
-        result = data.get("quoteSummary", {}).get("result", [])
+        res_deep = session.get(url_deep, params=params, timeout=8)
         
-        if not result:
-            raise Exception("Ticker data not found in Yahoo backend.")
-            
-        core_data = result[0]
-        summary = core_data.get("summaryDetail", {})
-        financials = core_data.get("financialData", {})
+        if res_deep.status_code == 200:
+            result = res_deep.json().get("quoteSummary", {}).get("result", [])
+            if result:
+                core = result[0]
+                summary = core.get("summaryDetail", {})
+                financials = core.get("financialData", {})
+                
+                # Valuation Multiples
+                pe = summary.get("trailingPE", {}).get("raw")
+                fpe = summary.get("forwardPE", {}).get("raw")
+                if pe: payload["stock_pe"] = round(pe, 2)
+                if fpe: payload["forward_pe"] = round(fpe, 2)
+                
+                # Capital Efficiency & Margins
+                roe = financials.get("returnOnEquity", {}).get("raw")
+                ebitda = financials.get("ebitdaMargins", {}).get("raw")
+                pat = financials.get("profitMargins", {}).get("raw")
+                if roe: payload["roe"] = f"{round(roe * 100, 2)}%"
+                if ebitda: payload["ebitda_margin"] = f"{round(ebitda * 100, 2)}%"
+                if pat: payload["pat_margin"] = f"{round(pat * 100, 2)}%"
+                
+                # Leverage Risk
+                dte = financials.get("debtToEquity", {}).get("raw")
+                if dte: payload["debt_to_equity"] = round(dte / 100, 2)
+                
+                # Quarterly Revenue Tracker
+                q_hist = core.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", [])
+                for q in q_hist[:2]:
+                    date_str = q.get("endDate", {}).get("fmt", "Unknown")
+                    rev = q.get("totalRevenue", {}).get("raw", 0)
+                    net = q.get("netIncome", {}).get("raw", 0)
+                    payload["quarterly_perf"].append({
+                        "Period": date_str,
+                        "Revenue (Cr)": round(rev / 10000000, 2) if rev else "-",
+                        "Net Income (Cr)": round(net / 10000000, 2) if net else "-"
+                    })
+                return payload 
+    except Exception:
+        pass 
         
-        # 1. Valuation Metrics Extraction
-        stock_pe = summary.get("trailingPE", {}).get("raw")
-        forward_pe = summary.get("forwardPE", {}).get("raw")
-        sector_pe = INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0)
+    # ─── SECONDARY ENGINE: LIGHTWEIGHT QUOTE FALLBACK ───
+    try:
+        url_light = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={cleaned_ticker}"
+        res_light = session.get(url_light, timeout=8)
         
-        # 2. Capital Efficiency & Profitability Margins
-        roe = financials.get("returnOnEquity", {}).get("raw")
-        ebitda_margin = financials.get("ebitdaMargins", {}).get("raw")
-        pat_margin = financials.get("profitMargins", {}).get("raw")
+        if res_light.status_code == 200:
+            result = res_light.json().get("quoteResponse", {}).get("result", [])
+            if result:
+                data = result[0]
+                pe = data.get("trailingPE")
+                fpe = data.get("forwardPE")
+                
+                if pe: payload["stock_pe"] = round(pe, 2)
+                if fpe: payload["forward_pe"] = round(fpe, 2)
+                
+                # Flag the user that deep fields were protected by the firewall
+                payload["ebitda_margin"] = "Secured behind cloud firewall"
+                payload["pat_margin"] = "Secured behind cloud firewall"
+    except Exception:
+        pass
         
-        # 3. Leverage Ratios (Raw returns as percentage e.g., 125.5 for 1.25x)
-        debt_to_equity = financials.get("debtToEquity", {}).get("raw")
-        
-        # 4. Quarterly Balance Sheet Trends (YoY Matrix)
-        quarterly_perf = []
-        income_stmt = core_data.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", [])
-        
-        # Safely grab the 2 most recent reporting periods
-        for q in income_stmt[:2]:
-            date_str = q.get("endDate", {}).get("fmt", "Unknown")
-            rev = q.get("totalRevenue", {}).get("raw", 0)
-            net_inc = q.get("netIncome", {}).get("raw", 0)
-            
-            # Convert raw numeric fields into cleaner Crore representations
-            rev_crores = round(rev / 10000000, 2) if rev else "-"
-            net_crores = round(net_inc / 10000000, 2) if net_inc else "-"
-            
-            quarterly_perf.append({
-                "Period": date_str,
-                "Revenue (Cr)": rev_crores,
-                "Net Income (Cr)": net_crores
-            })
-            
-        return {
-            "stock_pe": round(stock_pe, 2) if stock_pe else "-",
-            "forward_pe": round(forward_pe, 2) if forward_pe else "-",
-            "sector_pe": sector_pe,
-            "roe": f"{round(roe * 100, 2)}%" if roe else "-",
-            "debt_to_equity": round(debt_to_equity / 100, 2) if debt_to_equity else "-",
-            "ebitda_margin": f"{round(ebitda_margin * 100, 2)}%" if ebitda_margin else "-",
-            "pat_margin": f"{round(pat_margin * 100, 2)}%" if pat_margin else "-",
-            "quarterly_perf": quarterly_perf
-        }
-        
-    except Exception as e:
-        # Graceful fallback data dictionary if the network request drops
-        print(f"Fundamental Engine Override: {e}")
-        return {
-            "stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0,
-            "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
-            "quarterly_perf": []
-        }
+    return payload
