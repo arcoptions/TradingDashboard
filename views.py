@@ -31,16 +31,11 @@ def format_index_display(name, raw_val):
     if len(parts) == 3:
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
-        
-        # Shows flat percentages as Grey instead of hiding them
         if diff_f == 0 and pct_f == 0:
-            color = "#64748B" 
-            sign, arrow = "", ""
-        else:
-            sign = "+" if diff_f > 0 else ""
-            color = "#089981" if diff_f >= 0 else "#F23645" 
-            arrow = "▲" if diff_f >= 0 else "▼"
-            
+            return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span>"
+        sign = "+" if diff_f > 0 else ""
+        color = "#089981" if diff_f >= 0 else "#F23645" 
+        arrow = "▲" if diff_f >= 0 else "▼"
         return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
     return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
 
@@ -139,13 +134,75 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 trade_data = trade_rows.iloc[0]
                 sheet_row_id = int(trade_data['_Sheet_Row'])
                 st.subheader(f"Trade Review: {trade_data['Symbol / Asset']}")
-                if st.button("Unlink Review Canvas"): close_journal(); st.rerun()
+                
+                # --- RESTORED CANVAS COMPONENTS ---
+                with st.container(border=True):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                    col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                    col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                    col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
+                    try:
+                        entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                        exit_val = float(str(trade_data['Exit Price']))
+                        pnl = exit_val - entry_val
+                        if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                        else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                    except: pass
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("### Advanced Repair Tool")
+                    default_search = str(trade_data['Symbol / Asset']).split()[0]
+                    fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                    fix_results = api.search_instruments(fix_query)
+                    updated_symbol = str(trade_data['Symbol / Asset'])
+                    updated_sec_id = str(trade_data.get('Security ID', ''))
+                    updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
+                    
+                    if not fix_results.empty:
+                        selected_fix = st.selectbox("Select Correct Contract & Expiry:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                        fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                        updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
+                        updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
+                        exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
+                        if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
+                        elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
+                    else:
+                        if fix_query: st.warning(f"No match found for '{fix_query}'. Try looking up the root ticker symbol.")
+                            
+                    if st.button("Save & Re-Link Asset", type="primary", key="save_fix_contract", use_container_width=True):
+                        sym_col = sheet_headers.index("Symbol / Asset") + 1
+                        sec_col = sheet_headers.index("Security ID") + 1
+                        exch_col = sheet_headers.index("Exchange") + 1
+                        worksheet.update_cell(sheet_row_id, sym_col, updated_symbol)
+                        worksheet.update_cell(sheet_row_id, sec_col, updated_sec_id)
+                        worksheet.update_cell(sheet_row_id, exch_col, updated_exch)
+                        st.success(f"Successfully re-linked row {sheet_row_id} to official asset: {updated_symbol}!")
+                        st.session_state.viewing_trade = updated_symbol
+                        st.rerun()
+                    
+                    st.divider()
+                    with st.form("psychology_update_form"):
+                        curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                        curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                        new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                        new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                        if st.form_submit_button("Update Records", type="primary"):
+                            rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                            emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
+                            worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                            worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                            st.success("Database synchronized.")
+                            st.rerun()
+                
+                # Render Unlink button at the very bottom
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Unlink Review Canvas", use_container_width=True): close_journal(); st.rerun()
             else: st.error("Row connection failure.")
         else:
             df_stocks = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # --- 1. TOP LEVEL TABS + HEATMAP ---
             tab_stocks, tab_options, tab_heatmap = st.tabs(["📈 Stocks", "🎟️ Options", "🗺️ Sector Heatmap"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -183,7 +240,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         filtered_df = filtered_df[filtered_df['_Tmp_Date'] == selected_date_range[0]]
                     filtered_df = filtered_df.drop(columns=['_Tmp_Date'])
                 
-                # --- 3. THIRD LEVEL TABS ---
                 sub_wl, sub_act, sub_cls = st.tabs(["Watchlist", "Active", "Closed"])
                 
                 with sub_wl:
@@ -224,7 +280,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             with tab_options: render_asset_dashboard(df_options, "Options")
             
-            # --- PLOTLY SECTOR HEATMAP RENDERING ---
             with tab_heatmap:
                 try: 
                     timestamp_val = settings_sheet.acell('B9').value or "Pending"
