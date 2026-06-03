@@ -10,7 +10,7 @@ import database as db
 import broker_api as api
 import derivatives_engine as de 
 import fundamentals_engine as fe 
-import technicals_engine as te # <-- NEW TECHNICAL ENGINE
+import technicals_engine as te 
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -35,8 +35,14 @@ def prox_color(val):
 
 def render_tv_chart(symbol):
     """Embeds the official interactive TradingView Advanced Chart widget"""
-    tv_sym = symbol.split('-')[0].upper()
-    tv_ticker = f"BSE:{tv_sym}" if tv_sym in ["SENSEX"] else f"NSE:{tv_sym}"
+    tv_sym = str(symbol).split('-')[0].upper().replace("&", "_")
+    
+    # THE FIX: NSE equities are blocked from third-party embedding.
+    # We route standard stocks to BSE (which allows embedding) and keep indices on NSE.
+    if tv_sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        tv_ticker = f"NSE:{tv_sym}"
+    else:
+        tv_ticker = f"BSE:{tv_sym}"
     
     html = f"""
     <div class="tradingview-widget-container" style="height: 400px; width: 100%;">
