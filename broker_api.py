@@ -126,10 +126,10 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     return f"{float(lp):.2f},0.00,0.00"
                 return "-"
 
-            # WRITING TO THE NEW ISOLATED CELLS (B10 & B11)
-            settings_sheet.update_acell('B11', get_nifty_data())
+            # Safe bound writes
+            settings_sheet.update_acell('B10', get_nifty_data())
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            settings_sheet.update_acell('B10', ist_now.strftime("%d-%b %I:%M %p"))
+            settings_sheet.update_acell('B9', ist_now.strftime("%d-%b %I:%M %p"))
             
         except Exception as e: return f"Spreadsheet Write Failure: {e}"
         return "Success"
