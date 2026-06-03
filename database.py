@@ -13,6 +13,7 @@ def init_db():
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
     
+    # 1. Multi-Asset Data Column Expansion
     new_cols = ["Live Price", "Exit Price", "Notes", "Time Frame", "Setup Rating", "Raw Tip Text"]
     for col in new_cols:
         if col not in sheet_headers:
@@ -33,11 +34,12 @@ def init_db():
         
     if "Settings" in worksheet_list:
         settings_sheet = sh.worksheet("Settings")
-        # Automatically scales rows if working with a legacy 11-row worksheet
+        
+        # 2. Grid Protection: Automatically scales rows if working with a legacy 11-row worksheet
         if settings_sheet.row_count < 15:
             settings_sheet.resize(rows=15)
             
-        # Safeguard: Only populate missing keys, never wipe out your active token
+        # 3. Token Isolation: Safeguard to only populate missing keys without wiping your token
         val_a12 = settings_sheet.acell('A12').value
         if not val_a12 or str(val_a12).strip() == "":
             settings_sheet.update_acell('A12', "Sector Heatmap JSON")
