@@ -502,6 +502,14 @@ if current_page == "Options Tracker":
             with tab1:
                 df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
+                    # --- PERFORMANCE DASHBOARD WIDGET ---
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Assets", len(df_wl))
+                    m2.metric("🟢 Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
+                    m3.metric("🔴 Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
+                    m4.metric("⚪ At Entry / Pending", len(df_wl[df_wl['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    st.write("")
+                    
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -509,6 +517,14 @@ if current_page == "Options Tracker":
             with tab2:
                 df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
+                    # --- PERFORMANCE DASHBOARD WIDGET ---
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Active Positions", len(df_act))
+                    m2.metric("🟢 Floating Profit", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
+                    m3.metric("🔴 Floating Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
+                    m4.metric("⚪ Flat Positions", len(df_act[df_act['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    st.write("")
+                    
                     st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=bk.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -566,6 +582,14 @@ elif current_page == "Chartink Scanners":
             with tab_obj:
                 df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
                 if not df_filtered.empty:
+                    # --- PERFORMANCE DASHBOARD WIDGET ---
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Triggers", len(df_filtered))
+                    m2.metric("🟢 Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
+                    m3.metric("🔴 Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
+                    m4.metric("⚪ Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    st.write("")
+                    
                     st.data_editor(
                         df_filtered[scan_view_cols],
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
