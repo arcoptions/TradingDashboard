@@ -23,12 +23,11 @@ SECTOR_SYMBOLS = {
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=14):
+def get_dhan_scrip_master(v=15):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
         if df.empty: return df
-        # Added 'IDX' to fetch Official Indices alongside standard NSE equities
         return df[df['SEM_EXM_EXCH_ID'].isin(['NSE', 'IDX'])]
     except: return pd.DataFrame()
 
@@ -71,9 +70,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
     
-    # --- DYNAMIC SECTOR ID RESOLUTION ---
     scrip_df = get_dhan_scrip_master()
-    idx_ids = [13] # Default Nifty 50 ID
+    idx_ids = [13] 
     sector_lookup = {}
     
     if not scrip_df.empty:
@@ -120,7 +118,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
     
-    url = "https://api.dhan.co/v2/marketfeed/ohlc"
+    # ─── Switched to robust QUOTE endpoint for EOD previous_close tracking ───
+    url = "https://api.dhan.co/v2/marketfeed/quote"
     try: response = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e: return f"HTTP Connection Timeout: {e}"
     
@@ -140,32 +139,45 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            def get_index_pct(s_id):
+            # ─── Hierarchy of Truth EOD Parser ───
+            def get_index_metrics(s_id):
                 item = data.get("IDX_I", {}).get(str(s_id), {})
+                if not item: item = data.get("NSE_IDX", {}).get(str(s_id), {})
+                
                 lp = item.get("last_price")
-                cp = item.get("ohlc", {}).get("close") 
-                if lp and cp and float(cp) > 0:
-                    diff = float(lp) - float(cp)
-                    return (diff / float(cp)) * 100
-                return None
+                if not lp: return None, None, None
+                
+                lp_f = float(lp)
+                prev_c = item.get("previous_close")
+                ohlc_c = item.get("ohlc", {}).get("close")
+                
+                # 1. Use pure 'previous_close' if available
+                if prev_c and float(prev_c) > 0:
+                    cp_f = float(prev_c)
+                # 2. Use 'ohlc.close' IF it hasn't rolled over to equal the last price yet
+                elif ohlc_c and float(ohlc_c) > 0 and float(ohlc_c) != lp_f:
+                    cp_f = float(ohlc_c)
+                # 3. Flatline fallback
+                else:
+                    cp_f = lp_f
+                    
+                diff = lp_f - cp_f
+                pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
+                return lp_f, diff, pct
             
             # 1. Update NIFTY 50 (ID 13)
-            pct_n50_val = get_index_pct(13)
-            item_n50 = data.get("IDX_I", {}).get("13", {})
-            lp_n50 = item_n50.get("last_price")
-            if pct_n50_val is not None:
-                diff = float(lp_n50) - float(item_n50.get("ohlc", {}).get("close"))
-                settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},{diff:.2f},{pct_n50_val:.2f}")
-            elif lp_n50: settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},0.00,0.00")
+            lp_n50, diff_n50, pct_n50 = get_index_metrics(13)
+            if lp_n50 is not None:
+                settings_sheet.update_acell('B10', f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}")
 
             # 2. Build Dynamic Sector Heatmap JSON
             heatmap_arr = []
             for sec_id, info in sector_lookup.items():
-                pct_chg = get_index_pct(sec_id)
-                if pct_chg is not None:
+                lp_sec, diff_sec, pct_sec = get_index_metrics(sec_id)
+                if pct_sec is not None:
                     heatmap_arr.append({
                         "sector": info["name"],
-                        "change": round(pct_chg, 2),
+                        "change": round(pct_sec, 2),
                         "weight": info["weight"]
                     })
             
@@ -205,7 +217,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
         time.sleep(sleep_timer)
 
 @st.cache_resource
-def start_cron_daemon_v9(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v10(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
