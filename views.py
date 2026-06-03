@@ -147,7 +147,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 with st.spinner("Compiling institutional analytics arrays..."):
                     f_metrics = fe.fetch_company_fundamentals(base_ticker, sector_category=sector_cat)
                 
-                # --- CONTAINER 1: DERIVATIVES PROFILE & GREEKS ---
+                # --- CONTAINER 1: DERIVATIVES PROFILE & GREEKS (COMPACT) ---
                 if contract_meta:
                     with st.container(border=True):
                         st.markdown("#### Derivatives Profile and Greeks (Tier 3)")
@@ -173,7 +173,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         
                         oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
                         
-                        g_col1, g_col2, g_col3, g_col4 = st.columns(4)
+                        g_col1, g_col2, g_col3, g_col4 = st.columns(4, gap="small")
                         g_col1.metric("Delta", f"{greeks['delta']}")
                         g_col2.metric("Theta", f"{greeks['theta']} INR")
                         g_col3.metric("Implied Volatility (IV)", f"{derived_iv}%")
@@ -183,56 +183,56 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             sign_oi = "+" if oi_chg_pct > 0 else ""
                             st.caption(f"Price: {sign_px}{price_chg_pct}% | OI: {sign_oi}{oi_chg_pct}%")
 
-                # --- CONTAINER 2: FUNDAMENTAL SCORECARD ---
+                # --- CONTAINER 2: FUNDAMENTAL SCORECARD (ULTRA-COMPACT) ---
                 with st.container(border=True):
                     st.markdown(f"#### Fundamental Scorecard: {base_ticker} (Tier 1)")
                     
-                    c_col1, c_col2, c_col3, c_col4 = st.columns(4)
-                    with c_col1:
-                        st.metric("Stock P/E Ratio", f"{f_metrics['stock_pe']}")
-                        st.caption(f"Sector Average P/E: {f_metrics['sector_pe']}")
-                    with c_col2:
+                    c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
+                    
+                    with c1:
+                        st.metric("Stock P/E", f"{f_metrics['stock_pe']}")
+                        st.caption(f"Sector Avg: {f_metrics['sector_pe']}")
+                    with c2:
                         st.metric("Forward P/E", f"{f_metrics['forward_pe']}")
-                        st.caption("Next Year Valuation Gauge")
-                    with c_col3:
-                        st.metric("Return on Equity (ROE)", f"{f_metrics['roe']}")
-                        st.caption("Capital Optimization Velocity")
-                    with c_col4:
+                        st.caption(f"ROE: {f_metrics['roe']}")
+                    with c3:
                         st.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
                         try:
-                            if float(f_metrics['debt_to_equity']) > 2.0: st.error("High Debt Leverage Warning")
-                            else: st.caption("Healthy Capital Structure Floor")
-                        except: st.caption("Capital Structure Map")
-                        
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    e_col1, e_col2 = st.columns([4, 6])
-                    with e_col1:
-                        st.markdown("**Corporate Profitability Profile**")
-                        st.markdown(f"Operating EBITDA Margin: **{f_metrics['ebitda_margin']}**")
-                        st.markdown(f"Net PAT Profit Margin: **{f_metrics['pat_margin']}**")
-                    with e_col2:
-                        st.markdown("**Recent Reporting Trends (Crores)**")
+                            if float(f_metrics['debt_to_equity']) > 2.0: 
+                                st.markdown("<span style='color:#F23645; font-size:14px;'>High Leverage</span>", unsafe_allow_html=True)
+                            else: 
+                                st.caption("Healthy Cap Structure")
+                        except: st.caption("Leverage Rating")
+                    with c4:
+                        st.metric("EBITDA Margin", f"{f_metrics['ebitda_margin']}")
+                        st.caption(f"PAT Margin: {f_metrics['pat_margin']}")
+                    with c5:
                         if f_metrics['quarterly_perf']:
                             df_q = pd.DataFrame(f_metrics['quarterly_perf'])
-                            st.dataframe(df_q, use_container_width=True, hide_index=True)
+                            # Fixed height prevents vertical bloat while keeping the table clean
+                            st.dataframe(df_q, use_container_width=True, hide_index=True, height=110)
                         else:
-                            st.caption("Awaiting fresh quarter financial declarations stream data.")
+                            st.caption("Awaiting quarterly data.")
                 
-                # --- CONTAINER 3: CORE POSITIONS & JOURNAL ---
+                # --- CONTAINER 3: CORE POSITIONS & JOURNAL (COMPACT) ---
                 with st.container(border=True):
-                    st.markdown("#### Execution Parameters and Core Repair Matrix")
-                    col1, col2, col3, col4 = st.columns(4)
+                    st.markdown("#### Execution Parameters & Repair Matrix")
+                    col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
+                    
                     col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
                     col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
                     col3.metric("Live Price", trade_data.get('Live Price', '-'))
                     col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
-                    try:
-                        entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
-                        exit_val = float(str(trade_data['Exit Price']))
-                        pnl = exit_val - entry_val
-                        if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
-                        else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                    except: pass
+                    
+                    with col5:
+                        try:
+                            entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                            exit_val = float(str(trade_data['Exit Price']))
+                            pnl = exit_val - entry_val
+                            if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                            else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                        except: 
+                            st.info("Awaiting exit price to calculate P&L.")
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     default_search = str(trade_data['Symbol / Asset']).split()[0]
