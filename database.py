@@ -32,21 +32,21 @@ def init_db():
     if "Settings" in worksheet_list:
         settings_sheet = sh.worksheet("Settings")
     else:
-        settings_sheet = sh.add_worksheet(title="Settings", rows="15", cols="2")
-        # Extended to isolate the new data from the old zombie threads
-        settings_sheet.update([
-            ["Key", "Value"], 
-            ["Dhan Access Token", ""], 
-            ["Last Synced (Old)", "-"], 
-            ["Daemon Status", "-"],
-            ["Nifty 50 (Old)", "-"],
-            ["Bank Nifty", "-"],
-            ["Sensex", "-"],
-            ["Sync Interval", "60"],
-            ["---", "---"],
-            ["New Timestamp", "-"],
-            ["New Nifty String", "-"]
-        ], "A1:B11")
+        settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
+        
+    # Strictly bound to a 10-row grid to avoid API Error 400
+    settings_sheet.update([
+        ["Key", "Value"], 
+        ["Dhan Access Token", ""], 
+        ["Last Synced (Old)", "-"], 
+        ["Daemon Status", "-"],
+        ["Nifty 50 (Old)", "-"],
+        ["Bank Nifty", "-"],
+        ["Sensex", "-"],
+        ["Sync Interval", "60"],
+        ["New Timestamp", "-"],
+        ["New Nifty", "-"]
+    ], "A1:B10")
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
