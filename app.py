@@ -56,10 +56,13 @@ st.markdown("""
 if "viewing_trade" not in st.session_state: st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
 if "qp_key" not in st.session_state: st.session_state.qp_key = 0
+if "target_hits" not in st.session_state: st.session_state.target_hits = 0
+if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
 
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
-    api.start_cron_daemon_v8(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+    # Safely targets the new v9 daemon
+    api.start_cron_daemon_v9(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
@@ -73,7 +76,7 @@ with st.sidebar:
         modals.trade_entry_modal(worksheet, sheet_headers)
         
     st.markdown("<br>", unsafe_allow_html=True)
-    current_page = st.radio("Navigation", ["Options Tracker", "Chartink Scanners"], label_visibility="collapsed")
+    current_page = st.radio("Navigation", ["Options & Stocks Terminal", "Chartink Scanners"], label_visibility="collapsed")
     st.divider()
     
     with st.expander("API & Sync Setup", expanded=False):
@@ -95,7 +98,7 @@ with st.sidebar:
             st.success("Settings Locked.")
             st.rerun()
 
-if current_page == "Options Tracker":
+if current_page == "Options & Stocks Terminal":
     views.render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 elif current_page == "Chartink Scanners":
     views.render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
