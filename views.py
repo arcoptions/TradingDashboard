@@ -15,7 +15,6 @@ def format_index_display(name, raw_val):
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
         
-        # Guard against zero-change bugs
         if diff_f == 0 and pct_f == 0:
             return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span>"
 
@@ -29,7 +28,6 @@ def format_index_display(name, raw_val):
 
 def render_top_ticker_tape(settings_sheet):
     try:
-        # Read from safely bounded cell B10
         nifty = format_index_display("NIFTY50", settings_sheet.acell('B10').value)
         html = f"<div class='index-tape'>{nifty}</div>"
         st.markdown(html, unsafe_allow_html=True)
@@ -82,6 +80,20 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         initial_df["Journal"] = False
         initial_df = analytics.compute_signal_indicators(initial_df)
         
+        # --- DYNAMIC SOURCE COMPILATION FOR INLINE SELECTBOX CONFIG ---
+        try:
+            col_target = "Idea Source (Chartink/Telegram/X/Self)"
+            if col_target in initial_df.columns:
+                raw_srcs = initial_df[col_target].astype(str).str.strip()
+                existing_sources = sorted(list(raw_srcs[(raw_srcs != "") & (raw_srcs != "nan") & (raw_srcs != "None")].unique()))
+            else:
+                existing_sources = []
+        except:
+            existing_sources = []
+            
+        defaults = ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"]
+        dynamic_source_list = sorted(list(set(defaults + existing_sources)))
+
         view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", "Status (Watch/Active/Closed)", "Vs Entry", "Target Status", "Entry CMP / Range", "Add-On / Dip Levels", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "Notes", "Security ID", "_Sheet_Row"]
         for col in view_cols:
             if col not in initial_df.columns: initial_df[col] = ""
@@ -90,14 +102,13 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         initial_df["Journal"] = initial_df["Journal"].replace({'': False, 'False': False, 'True': True}).astype(bool)
 
         table_column_config = {
+            # Converted Column to an interactive dynamic Selectbox Dropdown
+            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("Source", options=dynamic_source_list, required=True),
             "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
             "Symbol / Asset": st.column_config.TextColumn("Option Contract"), 
-            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Source"), 
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         }
-        
-        # REMOVED "Idea Source (Chartink/Telegram/X/Self)" FROM THE LOCK LIST
         disabled_cols = ["Vs Entry", "Target Status"] 
 
         if st.session_state.get("viewing_trade_row"):
