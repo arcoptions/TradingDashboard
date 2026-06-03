@@ -12,7 +12,10 @@ def init_db():
     
     worksheet = sh.sheet1
     sheet_headers = worksheet.row_values(1)
-    for col in ["Live Price", "Exit Price", "Notes"]:
+    
+    # Structural list expansion for multi-asset details
+    new_cols = ["Live Price", "Exit Price", "Notes", "Time Frame", "Setup Rating", "Raw Tip Text"]
+    for col in new_cols:
         if col not in sheet_headers:
             worksheet.update_cell(1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
@@ -34,7 +37,6 @@ def init_db():
     else:
         settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
         
-    # Strictly bound to a 10-row grid to avoid API Error 400
     settings_sheet.update([
         ["Key", "Value"], 
         ["Dhan Access Token", ""], 
