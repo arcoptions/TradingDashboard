@@ -56,7 +56,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
         
-    # Appended IDX_I payload to track live index numbers
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13, 26000, 1]}
     row_map = [] 
     
@@ -111,12 +110,17 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # --- INDEX WRITE-BACK LOGIC ---
             if "IDX_I" in data:
-                n_price = data["IDX_I"].get("13", {}).get("last_price", "-")
-                bn_price = data["IDX_I"].get("26000", {}).get("last_price", "-")
-                sx_price = data["IDX_I"].get("1", {}).get("last_price", "-")
-                settings_sheet.update([["Nifty 50", str(n_price)], ["Bank Nifty", str(bn_price)], ["Sensex", str(sx_price)]], "A5:B7")
+                def get_idx_data(s_id):
+                    item = data["IDX_I"].get(str(s_id), {})
+                    lp, cp = item.get("last_price"), item.get("ohlc", {}).get("close")
+                    if lp and cp and float(cp) > 0:
+                        diff = float(lp) - float(cp)
+                        pct = (diff / float(cp)) * 100
+                        return f"{float(lp):.2f},{diff:.2f},{pct:.2f}"
+                    return str(lp) if lp else "-"
+
+                settings_sheet.update([["Nifty 50", get_idx_data(13)], ["Bank Nifty", get_idx_data(26000)], ["Sensex", get_idx_data(1)]], "A5:B7")
 
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             settings_sheet.update_acell('B3', ist_now.strftime("%d-%b %I:%M %p"))
@@ -128,7 +132,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
 def background_sync_loop(gcp_creds_dict, dhan_client_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     while True:
-        # Dynamic sleep interval fallback
         sleep_timer = 60 
         now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         
@@ -144,7 +147,6 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     
                     bg_worksheet, bg_scanner_sheet, bg_settings_sheet = sh.sheet1, sh.worksheet("Scanners"), sh.worksheet("Settings")
                     
-                    # Fetch dynamic loop time directly from the db
                     try: sleep_timer = int(bg_settings_sheet.acell('B8').value)
                     except: pass
                     
