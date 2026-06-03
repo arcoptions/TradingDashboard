@@ -33,7 +33,17 @@ def init_db():
         settings_sheet = sh.worksheet("Settings")
     else:
         settings_sheet = sh.add_worksheet(title="Settings", rows="10", cols="2")
-        settings_sheet.update([["Key", "Value"], ["Dhan Access Token", ""], ["Last Synced", "-"], ["Daemon Status", "-"]], "A1:B4")
+        # Expanded to hold index data and user timing configurations
+        settings_sheet.update([
+            ["Key", "Value"], 
+            ["Dhan Access Token", ""], 
+            ["Last Synced", "-"], 
+            ["Daemon Status", "-"],
+            ["Nifty 50", "-"],
+            ["Bank Nifty", "-"],
+            ["Sensex", "-"],
+            ["Sync Interval", "60"]
+        ], "A1:B8")
         
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
