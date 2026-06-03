@@ -39,16 +39,30 @@ st.markdown("""
         div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {color: var(--arc-text-dark) !important;}
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {background-color: transparent !important; border: 1px solid #E2E8F0 !important;}
         .sync-timestamp-text {font-size: 12px !important; color: #64748B !important; text-align: right !important; margin-top: -6px !important; padding-bottom: 14px !important; width: 100%;}
-        .index-tape {font-size: 14px; font-weight: 600; padding: 10px 15px; border-radius: 6px; background-color: #F8FAFC; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 15px;}
-        .index-tape span {color: var(--arc-gold-dark); font-weight: 800;}
+        
+        /* Dark Theme TradingView-Style Ticker Tape */
+        .index-tape {
+            font-size: 15px; 
+            font-weight: 600; 
+            padding: 14px 20px; 
+            border-radius: 8px; 
+            background-color: #1A202C; 
+            color: #F8FAFC;
+            border: 1px solid #334155; 
+            text-align: center; 
+            margin-bottom: 20px;
+            letter-spacing: 0.5px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
     </style>
 """, unsafe_allow_html=True)
 
 if "viewing_trade" not in st.session_state: st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
 if "qp_key" not in st.session_state: st.session_state.qp_key = 0
-if "target_hits" not in st.session_state: st.session_state.target_hits = 0
-if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
 
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
