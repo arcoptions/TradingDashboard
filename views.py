@@ -8,7 +8,7 @@ import analytics
 import database as db
 import broker_api as api
 import derivatives_engine as de 
-import fundamentals_engine as fe # <-- INTEGRATING THE CORNERSTONE VALUE ENGINE
+import fundamentals_engine as fe 
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -81,7 +81,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
     col_t1, col_t2 = st.columns([9, 1])
     with col_t1: st.markdown("### ARC Trading Terminal")
     with col_t2: 
-        if st.button("⚙️ UI Reset", help="Reset tracking dashboard", use_container_width=True):
+        if st.button("UI Reset", help="Reset tracking dashboard", use_container_width=True):
             import streamlit.components.v1 as components
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
@@ -141,104 +141,86 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 sector_cat = trade_data.get('Sector/Industry', 'General / Mixed')
                 st.subheader(f"Trade Review: {asset_symbol}")
                 
-                # ==========================================================
-                # MULTI-TIER COHERENT ANALYTICS PANEL
-                # ==========================================================
                 contract_meta = de.parse_option_contract(asset_symbol)
                 base_ticker = contract_meta['underlying'] if contract_meta else str(trade_data.get('Base Asset', asset_symbol))
                 
-                # Core Engine Queries executed programmatically
                 with st.spinner("Compiling institutional analytics arrays..."):
                     f_metrics = fe.fetch_company_fundamentals(base_ticker, sector_category=sector_cat)
                 
-                # --- LAYOUT BLOCK 1: DERIVATIVES PROFILE & GREEKS ---
+                # --- CONTAINER 1: DERIVATIVES PROFILE & GREEKS ---
                 if contract_meta:
-                    st.markdown("### 🎟 *Derivatives Profile & Greeks* (Tier 3)")
-                    try: live_option_price = float(trade_data.get('Live Price', 0))
-                    except: live_option_price = 0.0
-                    
-                    underlying_spot_price = contract_meta['strike'] 
-                    risk_free_rate = 0.07 
-                    
-                    derived_iv = de.implied_volatility(
-                        target_price=live_option_price, S=underlying_spot_price, K=contract_meta['strike'],
-                        T=contract_meta['time_years'], r=risk_free_rate, option_type=contract_meta['type']
-                    )
-                    greeks = de.calculate_greeks(
-                        S=underlying_spot_price, K=contract_meta['strike'], T=contract_meta['time_years'],
-                        r=risk_free_rate, sigma=derived_iv / 100.0, option_type=contract_meta['type']
-                    )
-                    
-                    try: price_chg_pct = float(trade_data.get("Price Chg %", 0))
-                    except: price_chg_pct = 0.0
-                    try: oi_chg_pct = float(trade_data.get("OI Chg %", 0))
-                    except: oi_chg_pct = 0.0
-                    
-                    oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
-                    
-                    g_col1, g_col2, g_col3, g_col4 = st.columns(4)
-                    g_col1.metric("Delta (Δ)", f"{greeks['delta']}")
-                    g_col2.metric("Theta (Θ)", f"{greeks['theta']} ₹")
-                    g_col3.metric("Implied Volatility (IV)", f"{derived_iv}%")
-                    with g_col4:
-                        st.markdown(f"**OI Buildup Matrix**<br><span style='font-size:20px; font-weight:bold; color:{oi_color};'>{oi_buildup_lbl}</span>", unsafe_allow_html=True)
-                        sign_px = "+" if price_chg_pct > 0 else ""
-                        sign_oi = "+" if oi_chg_pct > 0 else ""
-                        st.caption(f"Px: {sign_px}{price_chg_pct}% | OI: {sign_oi}{oi_chg_pct}%")
-                    st.divider()
-
-                # --- LAYOUT BLOCK 2: THE FUNDAMENTAL SCORECARD ---
-                st.markdown(f"### 📊 *Fundamental Scorecard: {base_ticker}* (Tier 1)")
-                
-                c_col1, c_col2, c_col3, c_col4 = st.columns(4)
-                
-                # Valuation Spread Field
-                with c_col1:
-                    st.metric("Stock P/E Ratio", f"{f_metrics['stock_pe']}")
-                    st.caption(f"Sector Average P/E: {f_metrics['sector_pe']}")
-                
-                # Forward Valuation Focus 
-                with c_col2:
-                    st.metric("Forward P/E", f"{f_metrics['forward_pe']}")
-                    st.caption("Next Year Valuation Gauge")
-                    
-                # Capital Allocation Matrix
-                with c_col3:
-                    st.metric("Return on Equity (ROE)", f"{f_metrics['roe']}")
-                    st.caption("Capital Optimization Velocity")
-                    
-                # Solvency Strain Vector
-                with c_col4:
-                    st.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
-                    # Color safety warning alerts for high debt parameters
-                    try:
-                        if float(f_metrics['debt_to_equity']) > 2.0: st.error("⚠️ High Debt Leverage Risk")
-                        else: st.caption("Healthy Balance Sheet Floor")
-                    except: st.caption("Capital Structure Map")
-                    
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # Earnings Engine Column Block Configuration
-                e_col1, e_col2 = st.columns([1, 1])
-                with e_col1:
-                    st.markdown("**Corporate Profitability Profile**")
-                    st.markdown(f"* EBITDA Operating Margin: **{f_metrics['ebitda_margin']}**")
-                    st.markdown(f"* Net PAT Profit Margin: **{f_metrics['pat_margin']}**")
-                
-                with e_col2:
-                    st.markdown("**Recent Reporting Trends (Crores)**")
-                    if f_metrics['quarterly_perf']:
-                        df_q = pd.DataFrame(f_metrics['quarterly_perf'])
-                        st.dataframe(df_q, use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("No historical quarterly breakdown tables mapped for index group.")
+                    with st.container(border=True):
+                        st.markdown("#### Derivatives Profile and Greeks (Tier 3)")
+                        try: live_option_price = float(trade_data.get('Live Price', 0))
+                        except: live_option_price = 0.0
                         
-                st.divider()
-                
-                # ==========================================================
-                # STANDARD JOURNAL ARCHITECTURE & FORMS
-                # ==========================================================
+                        underlying_spot_price = contract_meta['strike'] 
+                        risk_free_rate = 0.07 
+                        
+                        derived_iv = de.implied_volatility(
+                            target_price=live_option_price, S=underlying_spot_price, K=contract_meta['strike'],
+                            T=contract_meta['time_years'], r=risk_free_rate, option_type=contract_meta['type']
+                        )
+                        greeks = de.calculate_greeks(
+                            S=underlying_spot_price, K=contract_meta['strike'], T=contract_meta['time_years'],
+                            r=risk_free_rate, sigma=derived_iv / 100.0, option_type=contract_meta['type']
+                        )
+                        
+                        try: price_chg_pct = float(trade_data.get("Price Chg %", 0))
+                        except: price_chg_pct = 0.0
+                        try: oi_chg_pct = float(trade_data.get("OI Chg %", 0))
+                        except: oi_chg_pct = 0.0
+                        
+                        oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
+                        
+                        g_col1, g_col2, g_col3, g_col4 = st.columns(4)
+                        g_col1.metric("Delta", f"{greeks['delta']}")
+                        g_col2.metric("Theta", f"{greeks['theta']} INR")
+                        g_col3.metric("Implied Volatility (IV)", f"{derived_iv}%")
+                        with g_col4:
+                            st.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Buildup Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{oi_buildup_lbl}</span>", unsafe_allow_html=True)
+                            sign_px = "+" if price_chg_pct > 0 else ""
+                            sign_oi = "+" if oi_chg_pct > 0 else ""
+                            st.caption(f"Price: {sign_px}{price_chg_pct}% | OI: {sign_oi}{oi_chg_pct}%")
+
+                # --- CONTAINER 2: FUNDAMENTAL SCORECARD ---
                 with st.container(border=True):
+                    st.markdown(f"#### Fundamental Scorecard: {base_ticker} (Tier 1)")
+                    
+                    c_col1, c_col2, c_col3, c_col4 = st.columns(4)
+                    with c_col1:
+                        st.metric("Stock P/E Ratio", f"{f_metrics['stock_pe']}")
+                        st.caption(f"Sector Average P/E: {f_metrics['sector_pe']}")
+                    with c_col2:
+                        st.metric("Forward P/E", f"{f_metrics['forward_pe']}")
+                        st.caption("Next Year Valuation Gauge")
+                    with c_col3:
+                        st.metric("Return on Equity (ROE)", f"{f_metrics['roe']}")
+                        st.caption("Capital Optimization Velocity")
+                    with c_col4:
+                        st.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
+                        try:
+                            if float(f_metrics['debt_to_equity']) > 2.0: st.error("High Debt Leverage Warning")
+                            else: st.caption("Healthy Capital Structure Floor")
+                        except: st.caption("Capital Structure Map")
+                        
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    e_col1, e_col2 = st.columns([4, 6])
+                    with e_col1:
+                        st.markdown("**Corporate Profitability Profile**")
+                        st.markdown(f"Operating EBITDA Margin: **{f_metrics['ebitda_margin']}**")
+                        st.markdown(f"Net PAT Profit Margin: **{f_metrics['pat_margin']}**")
+                    with e_col2:
+                        st.markdown("**Recent Reporting Trends (Crores)**")
+                        if f_metrics['quarterly_perf']:
+                            df_q = pd.DataFrame(f_metrics['quarterly_perf'])
+                            st.dataframe(df_q, use_container_width=True, hide_index=True)
+                        else:
+                            st.caption("Awaiting fresh quarter financial declarations stream data.")
+                
+                # --- CONTAINER 3: CORE POSITIONS & JOURNAL ---
+                with st.container(border=True):
+                    st.markdown("#### Execution Parameters and Core Repair Matrix")
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
                     col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
@@ -253,7 +235,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     except: pass
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    st.markdown("### Advanced Repair Tool")
                     default_search = str(trade_data['Symbol / Asset']).split()[0]
                     fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
                     fix_results = api.search_instruments(fix_query)
@@ -269,8 +250,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
                         if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
                         elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
-                    else:
-                        if fix_query: st.warning(f"No match found for '{fix_query}'. Try looking up the root ticker symbol.")
                             
                     if st.button("Save & Re-Link Asset", type="primary", key="save_fix_contract", use_container_width=True):
                         sym_col = sheet_headers.index("Symbol / Asset") + 1
@@ -304,7 +283,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            tab_stocks, tab_options, tab_heatmap = st.tabs(["📈 Stocks", "🎟️ Options", "🗺️ Sector Heatmap"])
+            tab_stocks, tab_options, tab_heatmap = st.tabs(["Stocks", "Options", "Sector Heatmap"])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -348,9 +327,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     if not df_wl.empty:
                         m1, m2, m3, m4 = st.columns(4)
                         m1.metric("Total Assets", len(df_wl))
-                        m2.metric("🟢 Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
-                        m3.metric("🔴 Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
-                        m4.metric("🎯 Target Reached", len(df_wl[df_wl['Target Status'] == '🎯 Reached']))
+                        m2.metric("Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
+                        m3.metric("Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
+                        m4.metric("Target Reached", len(df_wl[df_wl['Target Status'] == '🎯 Reached']))
                         st.write("")
                         st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"wl_{asset_type}",
                             on_change=db.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": f"wl_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
@@ -362,9 +341,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         check_for_audio_alerts(df_act)
                         m1, m2, m3, m4 = st.columns(4)
                         m1.metric("Active Positions", len(df_act))
-                        m2.metric("🟢 Realized Gain", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
-                        m3.metric("🔴 Realized Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
-                        m4.metric("🎯 Targets Secured", len(df_act[df_act['Target Status'] == '🎯 Reached']))
+                        m2.metric("Realized Gain", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
+                        m3.metric("Realized Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
+                        m4.metric("Targets Secured", len(df_act[df_act['Target Status'] == '🎯 Reached']))
                         st.write("")
                         st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"act_{asset_type}",
                             on_change=db.run_background_sync, kwargs={"df_filtered": df_act, "state_key": f"act_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
@@ -382,10 +361,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_options: render_asset_dashboard(df_options, "Options")
             
             with tab_heatmap:
-                try: 
-                    timestamp_val = settings_sheet.acell('B9').value or "Pending"
-                except: 
-                    timestamp_val = "Pending"
+                try: timestamp_val = settings_sheet.acell('B9').value or "Pending"
+                except: timestamp_val = "Pending"
                 
                 st.markdown("#### Live NIFTY Sector Performance")
                 st.caption(f"Visualizing official NSE sectoral index flows. Last updated: {timestamp_val}")
@@ -401,30 +378,19 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         
                         if not df_heat.empty:
                             fig = px.treemap(
-                                df_heat, 
-                                path=['sector'], 
-                                values='weight', 
-                                color='change',
-                                color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], 
-                                color_continuous_midpoint=0
+                                df_heat, path=['sector'], values='weight', color='change',
+                                color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
                             )
-                            
                             fig.update_traces(
-                                textinfo="label+text",
-                                texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>",
-                                customdata=df_heat[['change']],
-                                textfont=dict(size=16) 
+                                textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>",
+                                customdata=df_heat[['change']], textfont=dict(size=16) 
                             )
                             fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=500)
                             st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.info("Dataframe parsed successfully but contains no rows.")
-                    else:
-                        st.info("Awaiting initial live JSON broadcast stream. Please click 'Sync Live Market Map' to initialize.")
-                except json.JSONDecodeError:
-                    st.warning("Data payload is preparing its structure. Click 'Sync Live Market Map' to force refresh.")
-                except Exception as e:
-                    st.error(f"Visualization Component Alert: {e}")
+                        else: st.info("Dataframe parsed successfully but contains no rows.")
+                    else: st.info("Awaiting initial live JSON broadcast stream. Please click 'Sync Live Market Map' to initialize.")
+                except json.JSONDecodeError: st.warning("Data payload is preparing its structure. Click 'Sync Live Market Map' to force refresh.")
+                except Exception as e: st.error(f"Visualization Component Alert: {e}")
             
     else: st.info("Portfolio clean. Waiting for data mapping initialization.")
 
@@ -433,7 +399,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
     col_t1, col_t2 = st.columns([9, 1], vertical_alignment="bottom")
     with col_t1: st.markdown("### Automated Scan Feeds")
     with col_t2: 
-        if st.button("⚙️ UI Reset", help="Reset systems context layer", use_container_width=True):
+        if st.button("UI Reset", help="Reset systems context layer", use_container_width=True):
             import streamlit.components.v1 as components
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
@@ -464,9 +430,9 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
                 if not df_filtered.empty:
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Triggers", len(df_filtered))
-                    m2.metric("🟢 Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
-                    m3.metric("🔴 Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
-                    m4.metric("⚪ Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    m2.metric("Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
+                    m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
+                    m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
                     st.write("")
                     st.data_editor(
                         df_filtered[scan_view_cols],
