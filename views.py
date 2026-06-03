@@ -8,31 +8,35 @@ import broker_api as api
 
 def format_index_display(name, raw_val):
     if not raw_val or raw_val == "-": 
-        return f"<span style='font-size: 18px; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 18px; color: #1A202C;'>-</span>"
+        return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
     
     parts = str(raw_val).split(",")
     if len(parts) == 3:
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
+        
+        # Guard against zero-change bugs
+        if diff_f == 0 and pct_f == 0:
+            return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span>"
+
         sign = "+" if diff_f > 0 else ""
-        color = "#089981" if diff_f >= 0 else "#F23645" # TradingView exact colors
+        color = "#089981" if diff_f >= 0 else "#F23645" # Exact TradingView Hex Codes
         arrow = "▲" if diff_f >= 0 else "▼"
         
-        # Matches the TradingView structure: NIFTY50   23332.95   -150.60 (0.64%) v
-        return f"<span style='font-size: 18px; color: #1A202C;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 18px; color: #1A202C;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 16px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
+        return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
         
-    return f"<span style='font-size: 18px; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 18px; color: #1A202C;'>{raw_val}</span>"
+    return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
 
 def render_top_ticker_tape(settings_sheet):
     try:
-        nifty = format_index_display("NIFTY50", settings_sheet.acell('B5').value)
+        # Read from NEW isolated cell B11
+        nifty = format_index_display("NIFTY50", settings_sheet.acell('B11').value)
         html = f"<div class='index-tape'>{nifty}</div>"
         st.markdown(html, unsafe_allow_html=True)
     except: pass
 
 def check_for_audio_alerts(df_act):
     current_targets = len(df_act[df_act['Target Status'] == '🎯 Reached'])
-    
     sl_hits = 0
     for idx, row in df_act.iterrows():
         try:
@@ -180,7 +184,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with f_col3:
                 if st.button("Sync Live Prices", use_container_width=True): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
             
-            try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+            # Read from NEW isolated cell B10
+            try: timestamp_val = settings_sheet.acell('B10').value or "Pending"
             except: timestamp_val = "Pending"
             st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
 
@@ -249,7 +254,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
         if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
             api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
         
-    try: timestamp_val = settings_sheet.acell('B3').value or "Pending"
+    try: timestamp_val = settings_sheet.acell('B10').value or "Pending"
     except: timestamp_val = "Pending"
     st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
     
