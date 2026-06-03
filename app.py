@@ -162,32 +162,54 @@ def compute_signal_indicators(df):
     if df.empty:
         return df
     signals = []
+    target_signals = []
     for idx, row in df.iterrows():
+        # 1. Entry tracking indicator logic
         try:
             live_val = str(row.get('Live Price', '')).strip()
             range_val = str(row.get('Entry CMP / Range', '')).strip()
             
             if live_val in ['', 'nan', 'None'] or range_val in ['', 'nan', 'None']:
                 signals.append("-")
-                continue
-                
-            live_price = float(live_val)
-            digits = re.findall(r'[\d\.]+', range_val)
-            if not digits:
-                signals.append("-")
-                continue
-                
-            min_entry = min([float(d) for d in digits])
-            if live_price > min_entry:
-                signals.append("🟢 Above")
-            elif live_price < min_entry:
-                signals.append("🔴 Below")
             else:
-                signals.append("⚪ At Entry")
+                live_price = float(live_val)
+                digits = re.findall(r'[\d\.]+', range_val)
+                if not digits:
+                    signals.append("-")
+                else:
+                    min_entry = min([float(d) for d in digits])
+                    if live_price > min_entry:
+                        signals.append("🟢 Above")
+                    elif live_price < min_entry:
+                        signals.append("🔴 Below")
+                    else:
+                        signals.append("⚪ At Entry")
         except:
             signals.append("-")
+
+        # 2. Target 1 Reached detection logic
+        try:
+            live_val = str(row.get('Live Price', '')).strip()
+            t1_val = str(row.get('Target 1', '')).strip()
+            
+            if live_val in ['', 'nan', 'None'] or t1_val in ['', 'nan', 'None']:
+                target_signals.append("-")
+            else:
+                live_price = float(live_val)
+                t1_digits = re.findall(r'[\d\.]+', t1_val)
+                if not t1_digits:
+                    target_signals.append("-")
+                else:
+                    t1_price = float(t1_digits[0])
+                    if live_price >= t1_price:
+                        target_signals.append("🎯 Reached")
+                    else:
+                        target_signals.append("⏳ Pending")
+        except:
+            target_signals.append("-")
             
     df['Vs Entry'] = signals
+    df['Target Status'] = target_signals
     return df
 
 def compute_scanner_signals(df):
@@ -365,7 +387,7 @@ if current_page == "Options Tracker":
         
         view_cols = [
             "Idea Source (Chartink/Telegram/X/Self)", "Journal", "Symbol / Asset", 
-            "Status (Watch/Active/Closed)", "Vs Entry", "Entry CMP / Range", "Add-On / Dip Levels", 
+            "Status (Watch/Active/Closed)", "Vs Entry", "Target Status", "Entry CMP / Range", "Add-On / Dip Levels", 
             "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", 
             "Notes", "Security ID", "_Sheet_Row"
         ]
@@ -385,6 +407,7 @@ if current_page == "Options Tracker":
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
             "Vs Entry": st.column_config.TextColumn("Vs Entry"),
+            "Target Status": st.column_config.TextColumn("Target Status"),
             "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
             "Add-On / Dip Levels": st.column_config.TextColumn("Add-On Levels"),
             "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss"),
@@ -396,7 +419,7 @@ if current_page == "Options Tracker":
             "Security ID": st.column_config.TextColumn("Security ID"),
         }
         
-        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry"] 
+        disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry", "Target Status"] 
 
         if st.session_state.get("viewing_trade_row"):
             if st.button("Back to Terminal", key="top_reset_view_btn"):
@@ -507,7 +530,7 @@ if current_page == "Options Tracker":
                     m1.metric("Total Assets", len(df_wl))
                     m2.metric("🟢 Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
-                    m4.metric("⚪ At Entry / Pending", len(df_wl[df_wl['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    m4.metric("🎯 Targets Reached", len(df_wl[df_wl['Target Status'] == '🎯 Reached']))
                     st.write("")
                     
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
@@ -522,7 +545,7 @@ if current_page == "Options Tracker":
                     m1.metric("Total Active Positions", len(df_act))
                     m2.metric("🟢 Floating Profit", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Floating Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
-                    m4.metric("⚪ Flat Positions", len(df_act[df_act['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    m4.metric("🎯 Targets Reached", len(df_act[df_act['Target Status'] == '🎯 Reached']))
                     st.write("")
                     
                     st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
