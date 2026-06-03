@@ -56,7 +56,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
         
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": []}
+    # Appended IDX_I payload to track live index numbers
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13, 26000, 1]}
     row_map = [] 
     
     try:
@@ -110,6 +111,13 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
+            # --- INDEX WRITE-BACK LOGIC ---
+            if "IDX_I" in data:
+                n_price = data["IDX_I"].get("13", {}).get("last_price", "-")
+                bn_price = data["IDX_I"].get("26000", {}).get("last_price", "-")
+                sx_price = data["IDX_I"].get("1", {}).get("last_price", "-")
+                settings_sheet.update([["Nifty 50", str(n_price)], ["Bank Nifty", str(bn_price)], ["Sensex", str(sx_price)]], "A5:B7")
+
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             settings_sheet.update_acell('B3', ist_now.strftime("%d-%b %I:%M %p"))
             settings_sheet.update_acell('B4', "Running smoothly")
@@ -120,7 +128,10 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
 def background_sync_loop(gcp_creds_dict, dhan_client_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     while True:
+        # Dynamic sleep interval fallback
+        sleep_timer = 60 
         now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        
         if now.weekday() < 5:
             start_market = now.replace(hour=9, minute=15, second=0, microsecond=0)
             end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -132,14 +143,19 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     sh = gc.open("Comprehensive Trading Tracker 2026")
                     
                     bg_worksheet, bg_scanner_sheet, bg_settings_sheet = sh.sheet1, sh.worksheet("Scanners"), sh.worksheet("Settings")
-                    result = execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_worksheet.row_values(1), bg_scanner_sheet.row_values(1), background_client_id=dhan_client_id)
                     
+                    # Fetch dynamic loop time directly from the db
+                    try: sleep_timer = int(bg_settings_sheet.acell('B8').value)
+                    except: pass
+                    
+                    result = execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_worksheet.row_values(1), bg_scanner_sheet.row_values(1), background_client_id=dhan_client_id)
                     if result != "Success": bg_settings_sheet.update_acell('B4', f"Error {now.strftime('%H:%M')}: {result}")
                 except Exception: pass 
-        time.sleep(60) # 1 MINUTE DELAY
+                
+        time.sleep(sleep_timer)
 
 @st.cache_resource
-def start_cron_daemon_v5(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v6(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
