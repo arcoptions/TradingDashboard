@@ -135,7 +135,8 @@ def render_top_ticker_tape(settings_sheet):
 
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
-    
+    # Define which columns are read-only / auto-calculated
+    disabled_cols = ["Decision", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
     col_t1, col_t2 = st.columns([9, 1])
     with col_t1: st.markdown("### ARC Trading Terminal")
     with col_t2: 
