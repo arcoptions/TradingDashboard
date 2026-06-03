@@ -92,7 +92,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
     
-    url = "https://api.dhan.co/v2/marketfeed/quote"
+    # Restored to reliable OHLC endpoint
+    url = "https://api.dhan.co/v2/marketfeed/ohlc"
     try: response = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e: return f"HTTP Connection Timeout: {e}"
     
@@ -112,24 +113,20 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # Focused Nifty Calculation Logic
+            # Focused Nifty Calculation Logic based strictly on OHLC math
             def get_nifty_data():
                 item = data.get("IDX_I", {}).get("13", {})
                 lp = item.get("last_price")
-                cp = item.get("previous_close")
+                cp = item.get("ohlc", {}).get("close") # Guaranteed previous day close metric
                 
-                # Deep fallback if previous_close is missing or exactly zero
-                if not cp or float(cp) == 0:
-                    cp = item.get("ohlc", {}).get("close")
-                    
-                if lp:
+                if lp and cp and float(cp) > 0:
                     lp_f = float(lp)
-                    if cp and float(cp) > 0:
-                        cp_f = float(cp)
-                        diff = lp_f - cp_f
-                        pct = (diff / cp_f) * 100
-                        return f"{lp_f:.2f},{diff:.2f},{pct:.2f}"
-                    return f"{lp_f:.2f},0.00,0.00"
+                    cp_f = float(cp)
+                    diff = lp_f - cp_f
+                    pct = (diff / cp_f) * 100
+                    return f"{lp_f:.2f},{diff:.2f},{pct:.2f}"
+                elif lp:
+                    return f"{float(lp):.2f},0.00,0.00"
                 return "-"
 
             settings_sheet.update_acell('B5', get_nifty_data())
@@ -167,8 +164,9 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                 
         time.sleep(sleep_timer)
 
+# CACHE BUST v7: Forces Streamlit to drop the old failing thread
 @st.cache_resource
-def start_cron_daemon_v6(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v7(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
