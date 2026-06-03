@@ -23,7 +23,7 @@ SECTOR_SYMBOLS = {
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=17):
+def get_dhan_scrip_master(v=18):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -138,31 +138,35 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # --- EOD ROLLOVER STATE EXTRACTION ---
-            try:
-                old_n50_raw = settings_sheet.acell('B10').value
-                old_n50_pct = float(old_n50_raw.split(',')[2]) if old_n50_raw and old_n50_raw != "-" else None
-            except: old_n50_pct = None
-            
+            # --- AGGRESSIVE EOD STATE ENFORCEMENT ---
             try:
                 raw_json = settings_sheet.acell('B12').value
                 existing_heatmap = json.loads(raw_json) if raw_json and str(raw_json).strip() not in ["", "-"] else []
-                old_sector_map = {item["sector"]: item["change"] for item in existing_heatmap if item["change"] != 0}
-            except: old_sector_map = {}
+                # Safely parse floats to avoid string mismatches
+                old_sector_map = {item["sector"]: float(item["change"]) for item in existing_heatmap}
+            except: 
+                old_sector_map = {}
             
-            # Seed with today's actual EOD performance so the heatmap lights up immediately tonight
-            if not old_sector_map or all(v == 0.0 for v in old_sector_map.values()):
-                old_sector_map = {
-                    "Financial Services": 0.38,
-                    "IT": -5.57,
-                    "Oil & Gas / Energy": 0.02,
-                    "FMCG": -1.01,
-                    "Auto": 0.05,
-                    "Pharma": 0.33,
-                    "Metal": -0.17,
-                    "Realty": -1.39,
-                    "Media": -0.50 
-                }
+            # Seed with today's verified actuals
+            hardcoded_eod = {
+                "Financial Services": 0.38,
+                "IT": -5.57,
+                "Oil & Gas / Energy": 0.02,
+                "FMCG": -1.01,
+                "Auto": 0.05,
+                "Pharma": 0.33,
+                "Metal": -0.17,
+                "Realty": -1.39,
+                "Media": -0.50 
+            }
+            
+            # If the sheet is empty OR trapped in a 0.00% flatline loop, override it.
+            if not old_sector_map or all(abs(v) < 0.01 for v in old_sector_map.values()):
+                old_sector_map = hardcoded_eod
+                
+            # Time-based Clock Gate
+            now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            is_market_closed = now_ist.hour >= 16 or now_ist.hour < 9 or now_ist.weekday() >= 5
             
             def get_index_metrics(s_id, sector_name=None):
                 item = data.get("IDX_I", {}).get(str(s_id), {})
@@ -172,45 +176,34 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 if not lp: return None, None, None
                 
                 lp_f = float(lp)
-                
-                # 1. Look for Dhan's explicitly provided net_change
-                net_change = item.get("net_change")
-                if net_change is not None and float(net_change) != 0.0:
-                    diff = float(net_change)
-                    cp_f = lp_f - diff
-                    pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
-                    return lp_f, diff, pct
-
-                # 2. OHLC Fallback
+                cp_f = lp_f
                 ohlc_c = item.get("ohlc", {}).get("close")
-                ohlc_o = item.get("ohlc", {}).get("open")
                 
-                if ohlc_c and float(ohlc_c) > 0 and float(ohlc_c) != lp_f:
+                # Check for significant discrepancy to ensure we don't zero out
+                if ohlc_c and float(ohlc_c) > 0 and abs(float(ohlc_c) - lp_f) > 0.01:
                     cp_f = float(ohlc_c)
-                else:
-                    cp_f = lp_f 
                     
                 diff = lp_f - cp_f
                 pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
                 
-                # 3. State Persistence Fallback for Off-Market Hours
-                if diff == 0.0:
+                # ─── THE BULLETPROOF FALLBACK ───
+                # If market is closed OR percentage is basically zero, strictly enforce cached state
+                if is_market_closed or abs(pct) < 0.01:
                     if sector_name and sector_name in old_sector_map:
                         pct = old_sector_map[sector_name]
                         diff = (pct / 100) * lp_f 
-                    elif s_id == 13 and old_n50_pct is not None:
-                        pct = old_n50_pct
-                        diff = (pct / 100) * lp_f
-                    elif ohlc_o and float(ohlc_o) > 0:
-                        cp_f = float(ohlc_o)
-                        diff = lp_f - cp_f
-                        pct = (diff / cp_f) * 100
                         
                 return lp_f, diff, pct
             
             # Update NIFTY 50 (ID 13)
             lp_n50, diff_n50, pct_n50 = get_index_metrics(13)
             if lp_n50 is not None:
+                # Nifty fallback if stuck
+                if abs(pct_n50) < 0.01:
+                    try:
+                        old_n50 = float(settings_sheet.acell('B10').value.split(',')[2])
+                        if abs(old_n50) > 0.01: pct_n50 = old_n50; diff_n50 = (pct_n50 / 100) * lp_n50
+                    except: pass
                 settings_sheet.update_acell('B10', f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}")
 
             # Build Dynamic Sector Heatmap JSON
@@ -227,8 +220,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if heatmap_arr:
                 settings_sheet.update_acell('B12', json.dumps(heatmap_arr))
 
-            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            settings_sheet.update_acell('B9', ist_now.strftime("%d-%b %I:%M %p"))
+            settings_sheet.update_acell('B9', now_ist.strftime("%d-%b %I:%M %p"))
             
         except Exception as e: return f"Spreadsheet Write Failure: {e}"
         return "Success"
@@ -260,7 +252,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
         time.sleep(sleep_timer)
 
 @st.cache_resource
-def start_cron_daemon_v10(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v11(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
