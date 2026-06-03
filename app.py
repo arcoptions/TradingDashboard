@@ -40,13 +40,13 @@ st.markdown("""
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {background-color: transparent !important; border: 1px solid #E2E8F0 !important;}
         .sync-timestamp-text {font-size: 12px !important; color: #64748B !important; text-align: right !important; margin-top: -6px !important; padding-bottom: 14px !important; width: 100%;}
         
-        /* Light Theme Nifty-Only Tape styling */
+        /* Light Theme Nifty-Only Transparent Tape styling */
         .index-tape {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            padding: 8px 12px; 
+            padding: 8px 0px; 
             background-color: transparent; 
             text-align: left; 
-            margin-bottom: 20px;
+            margin-bottom: 10px;
             display: inline-flex;
             align-items: center;
         }
@@ -56,12 +56,10 @@ st.markdown("""
 if "viewing_trade" not in st.session_state: st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
 if "qp_key" not in st.session_state: st.session_state.qp_key = 0
-if "target_hits" not in st.session_state: st.session_state.target_hits = 0
-if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
 
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
-    api.start_cron_daemon_v7(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+    api.start_cron_daemon_v8(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
