@@ -1,6 +1,4 @@
 import requests
-import pandas as pd
-import yfinance as yf
 
 # --- SECTORAL PE REFERENCE REGISTRY ---
 INDUSTRY_PE_MAP = {
@@ -11,27 +9,19 @@ INDUSTRY_PE_MAP = {
 
 def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED"):
     """
-    HYBRID ENGINE: 
-    1. TradingView API for 100% reliable core valuation ratios.
-    2. Secure yfinance session for historical QoQ absolute earnings tables.
+    Pure TradingView Engine: 100% reliable, cloud-unblockable core ratios.
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
-    
     if cleaned_ticker.endswith(".NS") or cleaned_ticker.endswith(".BO"):
         tv_ticker = cleaned_ticker[:-3]
     else:
         tv_ticker = cleaned_ticker
-        
-    yf_ticker = f"{tv_ticker}.NS"
 
-    # Baseline payload structure
     metrics = {
         "stock_pe": "-", "forward_pe": "-", "sector_pe": INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0),
-        "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
-        "quarterly_perf": []
+        "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-"
     }
 
-    # ─── PART 1: TRADINGVIEW (For Unblockable Core Ratios) ───
     tv_payload = {
         "symbols": {"tickers": [f"NSE:{tv_ticker}"]},
         "columns": [
@@ -51,33 +41,6 @@ def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED")
             metrics["ebitda_margin"] = f"{round(d[4], 2)}%" if d[4] is not None else "-"
             metrics["pat_margin"] = f"{round(d[5], 2)}%" if d[5] is not None else "-"
     except Exception as e:
-        print(f"TV Engine Error: {e}")
-
-    # ─── PART 2: YFINANCE SECURE SESSION (For QoQ Earnings Comparison) ───
-    try:
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'
-        })
-        
-        stock = yf.Ticker(yf_ticker, session=session)
-        q_fin = stock.quarterly_financials
-        
-        if q_fin is not None and not q_fin.empty:
-            # Slice the top 2 columns (Latest Quarter and Previous Quarter)
-            target_cols = q_fin.columns[:2]
-            
-            for col in target_cols:
-                q_name = col.strftime("%b %Y") if hasattr(col, "strftime") else str(col)
-                rev = q_fin.loc["Total Revenue", col] if "Total Revenue" in q_fin.index else None
-                net = q_fin.loc["Net Income", col] if "Net Income" in q_fin.index else None
-                
-                metrics["quarterly_perf"].append({
-                    "Period": q_name,
-                    "Revenue": f"₹{round(rev/10000000, 2)} Cr" if pd.notna(rev) else "-",
-                    "Net Income": f"₹{round(net/10000000, 2)} Cr" if pd.notna(net) else "-"
-                })
-    except Exception as e:
-        print(f"YF Table Error: {e}")
+        print(f"TV Fundamental Engine Error: {e}")
         
     return metrics
