@@ -139,7 +139,7 @@ def init_db():
     return worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers
 
 # --- 4. CORE DATA REFRESH LOGIC (WITH EXPLICIT TIMEOUT PROTECTION) ---
-def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
+def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None):
     try:
         daily_token = settings_sheet.acell('B2').value
         if not daily_token:
@@ -185,16 +185,18 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     if not payload: 
         return "No targets mapped"
         
+    # Safely resolve Dhan Client ID based on execution context (Main Thread UI Click vs Background Daemon)
+    client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
+        
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'access-token': daily_token, 
-        'client-id': st.secrets["dhan"]["dhan_client_id"]
+        'client-id': client_id_to_use
     }
     
     url = "https://api.dhan.co/v2/marketfeed/ohlc"
     try:
-        # Added explicit timeout limits to eliminate silent thread hangs
         response = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e:
         return f"HTTP Connection Timeout: {e}"
@@ -232,21 +234,22 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         return f"API Error: {response.status_code}"
 
 # --- 5. AUTOMATED WEEKDAY CRON LOOP DAEMON (ANTI-EXPIRATION SYSTEM) ---
-def background_sync_loop():
-    """Persistent background tracking daemon with built-in re-authorization."""
+def background_sync_loop(gcp_creds_dict, dhan_client_id):
+    """Persistent background tracking daemon passing pre-loaded secrets to bypass UI threading restrictions."""
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
     while True:
         now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         
         if now.weekday() < 5:
-            start_market = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            # Shifted to explicitly track from 9:15 AM
+            start_market = now.replace(hour=9, minute=15, second=0, microsecond=0)
             end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
             
             if start_market <= now <= end_market:
                 try:
-                    # Dynamically instantiate fresh workspace links to prevent 60-min token drop timeouts
-                    credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+                    # Dynamically instantiate fresh workspace links via injected raw dictionary
+                    credentials = Credentials.from_service_account_info(gcp_creds_dict, scopes=scopes)
                     gc = gspread.authorize(credentials)
                     sh = gc.open("Comprehensive Trading Tracker 2026")
                     
@@ -257,7 +260,7 @@ def background_sync_loop():
                     bg_sheet_headers = bg_worksheet.row_values(1)
                     bg_scanner_headers = bg_scanner_sheet.row_values(1)
                     
-                    execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_sheet_headers, bg_scanner_headers)
+                    execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_sheet_headers, bg_scanner_headers, background_client_id=dhan_client_id)
                 except Exception:
                     pass # Prevent thread crashing on temporary database locks
                     
@@ -265,9 +268,13 @@ def background_sync_loop():
 
 @st.cache_resource
 def start_automated_scheduler(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
-    # Decoupled parameter bindings so the execution context controls its own memory footprint
+    # Extract structural secrets into basic memory variables BEFORE entering the detached daemon thread
+    gcp_creds = dict(st.secrets["gcp_service_account"])
+    dhan_id = st.secrets["dhan"]["dhan_client_id"]
+    
     cron_worker = threading.Thread(
         target=background_sync_loop,
+        args=(gcp_creds, dhan_id),
         daemon=True
     )
     cron_worker.start()
