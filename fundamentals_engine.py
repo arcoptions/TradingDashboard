@@ -9,7 +9,8 @@ INDUSTRY_PE_MAP = {
 
 def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED"):
     """
-    Pure TradingView Engine: 100% reliable, cloud-unblockable core ratios.
+    Upgraded TradingView Engine: Now extracts ROCE and Institutional Ownership
+    to complete the Tier 1 missing data matrix.
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
     if cleaned_ticker.endswith(".NS") or cleaned_ticker.endswith(".BO"):
@@ -19,14 +20,16 @@ def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED")
 
     metrics = {
         "stock_pe": "-", "forward_pe": "-", "sector_pe": INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0),
-        "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-"
+        "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
+        "roce": "-", "inst_own": "-"
     }
 
     tv_payload = {
         "symbols": {"tickers": [f"NSE:{tv_ticker}"]},
         "columns": [
             "price_earnings_ttm", "price_earnings_forward", "return_on_equity",
-            "debt_to_equity", "operating_margin", "net_margin"
+            "debt_to_equity", "operating_margin", "net_margin", 
+            "return_on_invested_capital", "institutions_ownership"
         ]
     }
     
@@ -40,6 +43,8 @@ def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED")
             metrics["debt_to_equity"] = round(d[3], 2) if d[3] is not None else "-"
             metrics["ebitda_margin"] = f"{round(d[4], 2)}%" if d[4] is not None else "-"
             metrics["pat_margin"] = f"{round(d[5], 2)}%" if d[5] is not None else "-"
+            metrics["roce"] = f"{round(d[6], 2)}%" if d[6] is not None else "-"
+            metrics["inst_own"] = f"{round(d[7], 2)}%" if d[7] is not None else "-"
     except Exception as e:
         print(f"TV Fundamental Engine Error: {e}")
         
