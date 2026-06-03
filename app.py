@@ -43,15 +43,12 @@ st.markdown("""
         /* Light Theme Nifty-Only Tape styling */
         .index-tape {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            padding: 10px 16px; 
-            border-radius: 6px; 
+            padding: 8px 12px; 
             background-color: transparent; 
-            border: 1px solid #E2E8F0; 
             text-align: left; 
             margin-bottom: 20px;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -64,7 +61,7 @@ if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
 
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
-    api.start_cron_daemon_v6(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+    api.start_cron_daemon_v7(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 except Exception as e:
     st.error(f"Database Connection Failed: {e}")
     st.stop()
