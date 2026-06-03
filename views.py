@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import re
 import json
@@ -9,6 +10,7 @@ import database as db
 import broker_api as api
 import derivatives_engine as de 
 import fundamentals_engine as fe 
+import technicals_engine as te # <-- NEW TECHNICAL ENGINE
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -25,6 +27,42 @@ SECTOR_MAP = {
     "PNBGILTS": "Finance", "IFCI": "Finance",
     "NIFTY": "Market Index", "BANKNIFTY": "Sector Index"
 }
+
+def prox_color(val):
+    """Utility to color code EMA Proximity matrix"""
+    if val == "-": return "color:#64748B;"
+    return "color:#089981;" if float(val) > 0 else "color:#F23645;"
+
+def render_tv_chart(symbol):
+    """Embeds the official interactive TradingView Advanced Chart widget"""
+    tv_sym = symbol.split('-')[0].upper()
+    tv_ticker = f"BSE:{tv_sym}" if tv_sym in ["SENSEX"] else f"NSE:{tv_sym}"
+    
+    html = f"""
+    <div class="tradingview-widget-container" style="height: 400px; width: 100%;">
+      <div id="tv_chart" style="height: 400px; width: 100%;"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget({{
+        "autosize": true,
+        "symbol": "{tv_ticker}",
+        "interval": "D",
+        "timezone": "Asia/Kolkata",
+        "theme": "light",
+        "style": "1",
+        "locale": "in",
+        "enable_publishing": false,
+        "backgroundColor": "#ffffff",
+        "gridColor": "#F1F5F9",
+        "hide_top_toolbar": false,
+        "hide_legend": false,
+        "save_image": false,
+        "container_id": "tv_chart"
+      }});
+      </script>
+    </div>
+    """
+    components.html(html, height=400)
 
 def format_index_display(name, raw_val):
     if not raw_val or raw_val == "-": 
@@ -146,8 +184,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 with st.spinner("Compiling institutional analytics arrays..."):
                     f_metrics = fe.fetch_company_fundamentals(base_ticker, sector_category=sector_cat)
+                    t_metrics = te.fetch_technicals(base_ticker)
                 
-                # --- CONTAINER 1: DERIVATIVES PROFILE & GREEKS (COMPACT) ---
+                # --- CONTAINER 1: DERIVATIVES PROFILE ---
                 if contract_meta:
                     with st.container(border=True):
                         st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
@@ -183,40 +222,34 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             sign_oi = "+" if oi_chg_pct > 0 else ""
                             st.caption(f"Price: {sign_px}{price_chg_pct}% | OI: {sign_oi}{oi_chg_pct}%")
 
-                # --- CONTAINER 2: FUNDAMENTAL SCORECARD (ULTRA-COMPACT) ---
+                # --- CONTAINER 2: MARKET INTELLIGENCE (Fundamentals + Technicals) ---
                 with st.container(border=True):
-                    st.markdown(f"**Fundamental Scorecard: {base_ticker} (Tier 1)**")
-                    c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.2, 3.2], gap="small")
+                    st.markdown(f"**Market Intelligence: {base_ticker} (Tiers 1 & 2)**")
                     
-                    with c1:
-                        st.metric("Stock P/E", f"{f_metrics['stock_pe']}")
-                        st.caption(f"Sector Avg: {f_metrics['sector_pe']}")
-                    with c2:
-                        st.metric("Forward P/E", f"{f_metrics['forward_pe']}")
-                        st.caption(f"ROE: {f_metrics['roe']}")
-                    with c3:
-                        st.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
-                        try:
-                            if float(f_metrics['debt_to_equity']) > 2.0: 
-                                st.markdown("<span style='color:#F23645; font-size:14px;'>High Leverage</span>", unsafe_allow_html=True)
-                            else: st.caption("Healthy Cap Structure")
-                        except: st.caption("Leverage Rating")
-                    with c4:
-                        st.metric("EBITDA", f"{f_metrics['ebitda_margin']}")
-                        st.caption(f"PAT: {f_metrics['pat_margin']}")
-                    with c5:
-                        if f_metrics['quarterly_perf']:
-                            # Sleek, borderless HTML table to save massive vertical space
-                            html_tbl = "<table style='width:100%; font-size:14px; text-align:left; border-collapse: collapse; margin-top:5px;'>"
-                            html_tbl += "<tr style='border-bottom: 1px solid #E2E8F0;'><th style='padding:6px; color:#475569;'>Period</th><th style='padding:6px; color:#475569;'>Revenue</th><th style='padding:6px; color:#475569;'>Net Income</th></tr>"
-                            for row in f_metrics['quarterly_perf']:
-                                html_tbl += f"<tr style='border-bottom: 1px solid #F1F5F9;'><td style='padding:6px; font-weight:500;'>{row['Period']}</td><td style='padding:6px;'>{row['Revenue']}</td><td style='padding:6px;'>{row['Net Income']}</td></tr>"
-                            html_tbl += "</table>"
-                            st.markdown(html_tbl, unsafe_allow_html=True)
-                        else:
-                            st.caption("Awaiting quarterly data sync via secure fetch block.")
+                    # Row A: Fundamental Valuations
+                    f1, f2, f3, f4, f5 = st.columns(5, gap="small")
+                    f1.metric("Stock P/E", f_metrics['stock_pe'])
+                    f2.metric("Forward P/E", f_metrics['forward_pe'])
+                    f3.metric("ROE", f_metrics['roe'])
+                    f4.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
+                    f5.metric("EBITDA Margin", f_metrics['ebitda_margin'])
+                    
+                    st.markdown("<hr style='margin: 8px 0px; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+                    
+                    # Row B: Technical Proximities
+                    t1, t2, t3, t4, t5 = st.columns(5, gap="small")
+                    t1.metric("Live RSI (14)", t_metrics['rsi'])
+                    t2.markdown(f"**20 EMA Dist**<br><span style='{prox_color(t_metrics['ema20_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema20_prox']}%</span>", unsafe_allow_html=True)
+                    t3.markdown(f"**50 EMA Dist**<br><span style='{prox_color(t_metrics['ema50_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema50_prox']}%</span>", unsafe_allow_html=True)
+                    t4.markdown(f"**200 EMA Dist**<br><span style='{prox_color(t_metrics['ema200_prox'])} font-size:18px; font-weight:bold;'>{t_metrics['ema200_prox']}%</span>", unsafe_allow_html=True)
+                    t5.caption("Positive % means current price is holding above the moving average.")
+
+                # --- CONTAINER 3: INSTITUTIONAL CHART WIDGET ---
+                with st.container(border=True):
+                    st.markdown(f"**Interactive Chart & Price Action**")
+                    render_tv_chart(base_ticker)
                 
-                # --- CONTAINER 3: CORE POSITIONS & JOURNAL (EXPANDER SQUASHED) ---
+                # --- CONTAINER 4: CORE POSITIONS & JOURNAL ---
                 with st.container(border=True):
                     st.markdown("**Execution Parameters & Repair Matrix**")
                     col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
@@ -238,7 +271,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # 🛠 MASSIVE SPACE SAVER: Hidden inside an expander!
                     with st.expander("🛠 Advanced Repair Tool & Psychology Journal"):
                         default_search = str(trade_data['Symbol / Asset']).split()[0]
                         fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
