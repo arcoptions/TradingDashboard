@@ -6,27 +6,44 @@ import analytics
 import database as db
 import broker_api as api
 
+def format_index_display(raw_val):
+    if not raw_val or raw_val == "-": return "-"
+    parts = raw_val.split(",")
+    if len(parts) == 3:
+        lp, diff, pct = parts
+        diff_f, pct_f = float(diff), float(pct)
+        sign = "+" if diff_f >= 0 else ""
+        color = "#00B828" if diff_f >= 0 else "#E53935"
+        return f"{lp} <span style='color: {color}; font-weight: 600;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%)</span>"
+    return raw_val
+
 def render_top_ticker_tape(settings_sheet):
     try:
-        nifty = settings_sheet.acell('B5').value or "-"
-        banknifty = settings_sheet.acell('B6').value or "-"
-        sensex = settings_sheet.acell('B7').value or "-"
+        nifty = format_index_display(settings_sheet.acell('B5').value)
+        banknifty = format_index_display(settings_sheet.acell('B6').value)
+        sensex = format_index_display(settings_sheet.acell('B7').value)
         st.markdown(f"<div class='index-tape'>NIFTY 50: <span>{nifty}</span> &nbsp;&nbsp;|&nbsp;&nbsp; NIFTY BANK: <span>{banknifty}</span> &nbsp;&nbsp;|&nbsp;&nbsp; SENSEX: <span>{sensex}</span></div>", unsafe_allow_html=True)
     except: pass
 
 def check_for_audio_alerts(df):
     current_targets = len(df[df['Target Status'] == '🎯 Reached'])
-    current_sls = len(df[df['Vs Entry'] == '🔴 Below'])
     
+    sl_hits = 0
+    for idx, row in df.iterrows():
+        try:
+            live = float(str(row.get('Live Price', '')).strip())
+            sl_digits = re.findall(r'[\d\.]+', str(row.get('Stop Loss (SL)', '')).strip())
+            if sl_digits and live <= float(sl_digits[0]):
+                sl_hits += 1
+        except: pass
+
     if current_targets > st.session_state.target_hits:
-        # Plays a positive chime (Assuming browser isn't blocking autoplay)
         st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
         st.session_state.target_hits = current_targets
         
-    if current_sls > st.session_state.sl_hits:
-        # Plays a negative chime
+    if sl_hits > st.session_state.sl_hits:
         st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.sl_hits = current_sls
+        st.session_state.sl_hits = sl_hits
 
 def close_journal():
     st.session_state.viewing_trade = None
@@ -62,7 +79,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             "Symbol / Asset": st.column_config.TextColumn("Option Contract"), 
             "Idea Source (Chartink/Telegram/X/Self)": st.column_config.TextColumn("Source"), 
             "_Sheet_Row": None, 
-            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True)
+            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         }
         disabled_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Vs Entry", "Target Status"] 
 
@@ -76,9 +93,66 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 trade_data = trade_rows.iloc[0]
                 sheet_row_id = int(trade_data['_Sheet_Row'])
                 st.subheader(f"Trade Review: {trade_data['Symbol / Asset']}")
-                # Condensed editor logic to save space here...
-                if st.button("Unlink and Return"): close_journal(); st.rerun()
-            else: st.error("Row context lost. Click back.")
+                
+                with st.container(border=True):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                    col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                    col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                    col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
+                    try:
+                        entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                        exit_val = float(str(trade_data['Exit Price']))
+                        pnl = exit_val - entry_val
+                        if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                        else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                    except: pass
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("### Advanced Repair Tool")
+                    default_search = str(trade_data['Symbol / Asset']).split()[0]
+                    fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                    fix_results = api.search_instruments(fix_query)
+                    updated_symbol = str(trade_data['Symbol / Asset'])
+                    updated_sec_id = str(trade_data.get('Security ID', ''))
+                    updated_exch = str(trade_data.get('Exchange', 'NSE_EQ'))
+                    
+                    if not fix_results.empty:
+                        selected_fix = st.selectbox("Select Correct Contract & Expiry:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                        fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                        updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
+                        updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
+                        exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
+                        if exch == "NSE" and seg == "E": updated_exch = "NSE_EQ"
+                        elif exch == "NSE" and seg == "D": updated_exch = "NSE_FNO"
+                    else:
+                        if fix_query: st.warning(f"No match found for '{fix_query}'. Try looking up the root ticker symbol.")
+                            
+                    if st.button("Save & Re-Link Contract", type="primary", key="save_fix_contract", use_container_width=True):
+                        sym_col = sheet_headers.index("Symbol / Asset") + 1
+                        sec_col = sheet_headers.index("Security ID") + 1
+                        exch_col = sheet_headers.index("Exchange") + 1
+                        worksheet.update_cell(sheet_row_id, sym_col, updated_symbol)
+                        worksheet.update_cell(sheet_row_id, sec_col, updated_sec_id)
+                        worksheet.update_cell(sheet_row_id, exch_col, updated_exch)
+                        st.success(f"Successfully re-linked row {sheet_row_id} to official asset: {updated_symbol}!")
+                        st.session_state.viewing_trade = updated_symbol
+                        st.rerun()
+                    
+                    st.divider()
+                    with st.form("psychology_update_form"):
+                        curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                        curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                        new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                        new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                        if st.form_submit_button("Update Records", type="primary"):
+                            rat_col = sheet_headers.index("Strategic Rationale (Why I took it)") + 1
+                            emo_col = sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1
+                            worksheet.update_cell(sheet_row_id, rat_col, str(new_rationale))
+                            worksheet.update_cell(sheet_row_id, emo_col, str(new_emotions))
+                            st.success("Database synchronized.")
+                            st.rerun()
+            else: st.error("Row context lost or mismatch detected. Click the top button to reset the view canvas safely.")
         else:
             if "Trade Date" in initial_df.columns and not initial_df.empty:
                 parsed_dates = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
@@ -116,12 +190,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab1:
                 df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                 if not df_wl.empty:
-                    check_for_audio_alerts(df_wl)
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Assets", len(df_wl))
                     m2.metric("🟢 Above Entry", len(df_wl[df_wl['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Below Entry", len(df_wl[df_wl['Vs Entry'] == '🔴 Below']))
                     m4.metric("🎯 Targets Reached", len(df_wl[df_wl['Target Status'] == '🎯 Reached']))
+                    st.write("")
                     st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="wl_editor",
                         on_change=db.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": "wl_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
@@ -129,14 +203,25 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab2:
                 df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
+                    check_for_audio_alerts(df_act)
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Active Positions", len(df_act))
                     m2.metric("🟢 Floating Profit", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Floating Loss", len(df_act[df_act['Vs Entry'] == '🔴 Below']))
                     m4.metric("🎯 Targets Reached", len(df_act[df_act['Target Status'] == '🎯 Reached']))
+                    st.write("")
                     st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key="act_editor",
                         on_change=db.run_background_sync, kwargs={"df_filtered": df_act, "state_key": "act_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 else: st.info("No records found.")
+                    
+            with tab3:
+                df_cls = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
+                if not df_cls.empty:
+                    st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key="cls_editor",
+                        on_change=db.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": "cls_editor", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, 
+                        disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
+                else: st.info("No records found.")
+    else: st.info("Database connection established. No data available.")
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
@@ -177,6 +262,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
                     m2.metric("🟢 Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
                     m3.metric("🔴 Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
                     m4.metric("⚪ Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    st.write("")
                     st.data_editor(
                         df_filtered[scan_view_cols],
                         use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
