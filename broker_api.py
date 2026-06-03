@@ -5,8 +5,23 @@ from google.oauth2.service_account import Credentials
 import streamlit as st
 import threading
 import time
+import json
 from datetime import datetime, timezone, timedelta
 from streamlit.runtime.scriptrunner import add_script_run_ctx
+
+# --- DHAN OFFICIAL NIFTY SECTOR INDEX IDs & NIFTY50 WEIGHTAGE ---
+SECTOR_MAP = {
+    "Financial Services": {"id": 27, "weight": 35.0},
+    "IT": {"id": 11, "weight": 14.5}, 
+    "Oil & Gas / Energy": {"id": 12, "weight": 12.0},
+    "FMCG": {"id": 14, "weight": 9.0},
+    "Auto": {"id": 15, "weight": 7.0},
+    "Pharma": {"id": 16, "weight": 5.0},
+    "Metal": {"id": 17, "weight": 4.0},
+    "Realty": {"id": 18, "weight": 1.0},
+    "Media": {"id": 19, "weight": 0.5},
+    "Bank Nifty": {"id": 25, "weight": 0.1} # Hidden from map if needed, or displayed small
+}
 
 @st.cache_data(ttl=43200)
 def get_dhan_scrip_master(v=12):
@@ -56,7 +71,9 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
         
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13]}
+    # Dynamically inject the Sector Index IDs into the polling payload alongside NIFTY 50 (13)
+    idx_ids = [13] + [data["id"] for data in SECTOR_MAP.values()]
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": idx_ids, "NSE_IDX": idx_ids}
     row_map = [] 
     
     try:
@@ -111,23 +128,41 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            def get_nifty_data():
-                item = data.get("IDX_I", {}).get("13", {})
+            def get_index_pct(s_id):
+                item = data.get("IDX_I", {}).get(str(s_id), {})
+                if not item: item = data.get("NSE_IDX", {}).get(str(s_id), {})
                 lp = item.get("last_price")
                 cp = item.get("ohlc", {}).get("close") 
-                
                 if lp and cp and float(cp) > 0:
-                    lp_f = float(lp)
-                    cp_f = float(cp)
-                    diff = lp_f - cp_f
-                    pct = (diff / cp_f) * 100
-                    return f"{lp_f:.2f},{diff:.2f},{pct:.2f}"
-                elif lp:
-                    return f"{float(lp):.2f},0.00,0.00"
-                return "-"
+                    diff = float(lp) - float(cp)
+                    return (diff / float(cp)) * 100
+                return None
+            
+            # 1. Write NIFTY 50 Math
+            item_n50 = data.get("IDX_I", {}).get("13", {})
+            lp_n50 = item_n50.get("last_price")
+            cp_n50 = item_n50.get("ohlc", {}).get("close")
+            if lp_n50 and cp_n50 and float(cp_n50) > 0:
+                diff = float(lp_n50) - float(cp_n50)
+                pct = (diff / float(cp_n50)) * 100
+                settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},{diff:.2f},{pct:.2f}")
+            elif lp_n50: settings_sheet.update_acell('B10', f"{float(lp_n50):.2f},0.00,0.00")
 
-            # Safe bound writes
-            settings_sheet.update_acell('B10', get_nifty_data())
+            # 2. Build Sector Heatmap JSON
+            heatmap_arr = []
+            for sector_name, info in SECTOR_MAP.items():
+                pct_chg = get_index_pct(info["id"])
+                if pct_chg is not None:
+                    heatmap_arr.append({
+                        "sector": sector_name,
+                        "change": round(pct_chg, 2),
+                        "weight": info["weight"]
+                    })
+            
+            # Serialize and push safely to B12
+            if heatmap_arr:
+                settings_sheet.update_acell('B12', json.dumps(heatmap_arr))
+
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             settings_sheet.update_acell('B9', ist_now.strftime("%d-%b %I:%M %p"))
             
@@ -161,7 +196,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
         time.sleep(sleep_timer)
 
 @st.cache_resource
-def start_cron_daemon_v8(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v9(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
