@@ -8,6 +8,7 @@ import analytics
 import database as db
 import broker_api as api
 import derivatives_engine as de 
+import fundamentals_engine as fe # <-- INTEGRATING THE CORNERSTONE VALUE ENGINE
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -137,13 +138,22 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 trade_data = trade_rows.iloc[0]
                 sheet_row_id = int(trade_data['_Sheet_Row'])
                 asset_symbol = trade_data['Symbol / Asset']
+                sector_cat = trade_data.get('Sector/Industry', 'General / Mixed')
                 st.subheader(f"Trade Review: {asset_symbol}")
                 
+                # ==========================================================
+                # MULTI-TIER COHERENT ANALYTICS PANEL
+                # ==========================================================
                 contract_meta = de.parse_option_contract(asset_symbol)
+                base_ticker = contract_meta['underlying'] if contract_meta else str(trade_data.get('Base Asset', asset_symbol))
                 
+                # Core Engine Queries executed programmatically
+                with st.spinner("Compiling institutional analytics arrays..."):
+                    f_metrics = fe.fetch_company_fundamentals(base_ticker, sector_category=sector_cat)
+                
+                # --- LAYOUT BLOCK 1: DERIVATIVES PROFILE & GREEKS ---
                 if contract_meta:
-                    st.markdown("### 🎟️ Derivatives Profile & Greeks")
-                    
+                    st.markdown("### 🎟 *Derivatives Profile & Greeks* (Tier 3)")
                     try: live_option_price = float(trade_data.get('Live Price', 0))
                     except: live_option_price = 0.0
                     
@@ -151,50 +161,83 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     risk_free_rate = 0.07 
                     
                     derived_iv = de.implied_volatility(
-                        target_price=live_option_price,
-                        S=underlying_spot_price,
-                        K=contract_meta['strike'],
-                        T=contract_meta['time_years'],
-                        r=risk_free_rate,
-                        option_type=contract_meta['type']
+                        target_price=live_option_price, S=underlying_spot_price, K=contract_meta['strike'],
+                        T=contract_meta['time_years'], r=risk_free_rate, option_type=contract_meta['type']
                     )
-                    
                     greeks = de.calculate_greeks(
-                        S=underlying_spot_price,
-                        K=contract_meta['strike'],
-                        T=contract_meta['time_years'],
-                        r=risk_free_rate,
-                        sigma=derived_iv / 100.0,
-                        option_type=contract_meta['type']
+                        S=underlying_spot_price, K=contract_meta['strike'], T=contract_meta['time_years'],
+                        r=risk_free_rate, sigma=derived_iv / 100.0, option_type=contract_meta['type']
                     )
                     
-                    # --- DYNAMIC OPEN INTEREST WIRING ---
                     try: price_chg_pct = float(trade_data.get("Price Chg %", 0))
                     except: price_chg_pct = 0.0
-                    
                     try: oi_chg_pct = float(trade_data.get("OI Chg %", 0))
                     except: oi_chg_pct = 0.0
                     
                     oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
                     
                     g_col1, g_col2, g_col3, g_col4 = st.columns(4)
-                    with g_col1:
-                        st.metric("Delta (Δ)", f"{greeks['delta']}")
-                        st.caption("Price Sensitivity")
-                    with g_col2:
-                        st.metric("Theta (Θ)", f"{greeks['theta']} ₹")
-                        st.caption(f"1-Day Premium Decay. Expiry: {contract_meta['expiry_date']}")
-                    with g_col3:
-                        st.metric("Implied Volatility (IV)", f"{derived_iv}%")
-                        st.caption("Pricing Congestion Band")
+                    g_col1.metric("Delta (Δ)", f"{greeks['delta']}")
+                    g_col2.metric("Theta (Θ)", f"{greeks['theta']} ₹")
+                    g_col3.metric("Implied Volatility (IV)", f"{derived_iv}%")
                     with g_col4:
                         st.markdown(f"**OI Buildup Matrix**<br><span style='font-size:20px; font-weight:bold; color:{oi_color};'>{oi_buildup_lbl}</span>", unsafe_allow_html=True)
                         sign_px = "+" if price_chg_pct > 0 else ""
                         sign_oi = "+" if oi_chg_pct > 0 else ""
                         st.caption(f"Px: {sign_px}{price_chg_pct}% | OI: {sign_oi}{oi_chg_pct}%")
-                        
                     st.divider()
+
+                # --- LAYOUT BLOCK 2: THE FUNDAMENTAL SCORECARD ---
+                st.markdown(f"### 📊 *Fundamental Scorecard: {base_ticker}* (Tier 1)")
                 
+                c_col1, c_col2, c_col3, c_col4 = st.columns(4)
+                
+                # Valuation Spread Field
+                with c_col1:
+                    st.metric("Stock P/E Ratio", f"{f_metrics['stock_pe']}")
+                    st.caption(f"Sector Average P/E: {f_metrics['sector_pe']}")
+                
+                # Forward Valuation Focus 
+                with c_col2:
+                    st.metric("Forward P/E", f"{f_metrics['forward_pe']}")
+                    st.caption("Next Year Valuation Gauge")
+                    
+                # Capital Allocation Matrix
+                with c_col3:
+                    st.metric("Return on Equity (ROE)", f"{f_metrics['roe']}")
+                    st.caption("Capital Optimization Velocity")
+                    
+                # Solvency Strain Vector
+                with c_col4:
+                    st.metric("Debt to Equity", f"{f_metrics['debt_to_equity']}x")
+                    # Color safety warning alerts for high debt parameters
+                    try:
+                        if float(f_metrics['debt_to_equity']) > 2.0: st.error("⚠️ High Debt Leverage Risk")
+                        else: st.caption("Healthy Balance Sheet Floor")
+                    except: st.caption("Capital Structure Map")
+                    
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # Earnings Engine Column Block Configuration
+                e_col1, e_col2 = st.columns([1, 1])
+                with e_col1:
+                    st.markdown("**Corporate Profitability Profile**")
+                    st.markdown(f"* EBITDA Operating Margin: **{f_metrics['ebitda_margin']}**")
+                    st.markdown(f"* Net PAT Profit Margin: **{f_metrics['pat_margin']}**")
+                
+                with e_col2:
+                    st.markdown("**Recent Reporting Trends (Crores)**")
+                    if f_metrics['quarterly_perf']:
+                        df_q = pd.DataFrame(f_metrics['quarterly_perf'])
+                        st.dataframe(df_q, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No historical quarterly breakdown tables mapped for index group.")
+                        
+                st.divider()
+                
+                # ==========================================================
+                # STANDARD JOURNAL ARCHITECTURE & FORMS
+                # ==========================================================
                 with st.container(border=True):
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
