@@ -9,7 +9,6 @@ import json
 from datetime import datetime, timezone, timedelta
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# --- OFFICIAL NSE INDEX MAPPING ---
 SECTOR_SYMBOLS = {
     "Financial Services": {"symbol": "NIFTY FIN SERVICE", "weight": 35.0},
     "IT": {"symbol": "NIFTY IT", "weight": 14.5}, 
@@ -23,7 +22,7 @@ SECTOR_SYMBOLS = {
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=18):
+def get_dhan_scrip_master(v=19):
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -125,46 +124,59 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     if response.status_code == 200:
         data = response.json().get("data", {})
         opt_updates, scan_updates = [], []
-        opt_col_idx, scan_col_idx = sheet_headers.index("Live Price") + 1, scanner_headers.index("Live Price") + 1
+        
+        opt_col_idx = sheet_headers.index("Live Price") + 1
+        scan_col_idx = scanner_headers.index("Live Price") + 1
+        
+        # Mapping the new OI & Price change indices dynamically
+        price_chg_col_idx = sheet_headers.index("Price Chg %") + 1 if "Price Chg %" in sheet_headers else None
+        oi_chg_col_idx = sheet_headers.index("OI Chg %") + 1 if "OI Chg %" in sheet_headers else None
         
         for item in row_map:
             exch, sec_id = item["exch"], item["sec_id"]
             if exch in data and sec_id in data[exch]:
-                last_price = data[exch][sec_id].get("last_price", "")
-                if item["type"] == "opt": opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], opt_col_idx), 'values': [[str(last_price)]]})
-                elif item["type"] == "scan": scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
+                sec_data = data[exch][sec_id]
+                last_price = sec_data.get("last_price", "")
+                
+                # --- LIVE OI & MOMENTUM EXTRACTION MATH ---
+                lp = float(last_price) if last_price else 0.0
+                pc = float(sec_data.get("previous_close") or sec_data.get("ohlc", {}).get("close") or lp)
+                price_chg = round(((lp - pc) / pc * 100), 2) if pc > 0 else 0.0
+                
+                # Defensively grab live vs previous OI footprints
+                oi = float(sec_data.get("open_interest", 0))
+                prev_oi = float(sec_data.get("previous_open_interest") or sec_data.get("previous_oi") or oi)
+                oi_chg = round(((oi - prev_oi) / prev_oi * 100), 2) if prev_oi > 0 else 0.0
+                
+                if item["type"] == "opt": 
+                    opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], opt_col_idx), 'values': [[str(last_price)]]})
+                    if price_chg_col_idx and oi_chg_col_idx:
+                        opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], price_chg_col_idx), 'values': [[str(price_chg)]]})
+                        opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], oi_chg_col_idx), 'values': [[str(oi_chg)]]})
+                        
+                elif item["type"] == "scan": 
+                    scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
         
         try:
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # --- AGGRESSIVE EOD STATE ENFORCEMENT ---
             try:
                 raw_json = settings_sheet.acell('B12').value
                 existing_heatmap = json.loads(raw_json) if raw_json and str(raw_json).strip() not in ["", "-"] else []
-                # Safely parse floats to avoid string mismatches
                 old_sector_map = {item["sector"]: float(item["change"]) for item in existing_heatmap}
             except: 
                 old_sector_map = {}
             
-            # Seed with today's verified actuals
             hardcoded_eod = {
-                "Financial Services": 0.38,
-                "IT": -5.57,
-                "Oil & Gas / Energy": 0.02,
-                "FMCG": -1.01,
-                "Auto": 0.05,
-                "Pharma": 0.33,
-                "Metal": -0.17,
-                "Realty": -1.39,
-                "Media": -0.50 
+                "Financial Services": 0.38, "IT": -5.57, "Oil & Gas / Energy": 0.02,
+                "FMCG": -1.01, "Auto": 0.05, "Pharma": 0.33,
+                "Metal": -0.17, "Realty": -1.39, "Media": -0.50 
             }
             
-            # If the sheet is empty OR trapped in a 0.00% flatline loop, override it.
             if not old_sector_map or all(abs(v) < 0.01 for v in old_sector_map.values()):
                 old_sector_map = hardcoded_eod
                 
-            # Time-based Clock Gate
             now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             is_market_closed = now_ist.hour >= 16 or now_ist.hour < 9 or now_ist.weekday() >= 5
             
@@ -179,15 +191,12 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 cp_f = lp_f
                 ohlc_c = item.get("ohlc", {}).get("close")
                 
-                # Check for significant discrepancy to ensure we don't zero out
                 if ohlc_c and float(ohlc_c) > 0 and abs(float(ohlc_c) - lp_f) > 0.01:
                     cp_f = float(ohlc_c)
                     
                 diff = lp_f - cp_f
                 pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
                 
-                # ─── THE BULLETPROOF FALLBACK ───
-                # If market is closed OR percentage is basically zero, strictly enforce cached state
                 if is_market_closed or abs(pct) < 0.01:
                     if sector_name and sector_name in old_sector_map:
                         pct = old_sector_map[sector_name]
@@ -195,10 +204,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                         
                 return lp_f, diff, pct
             
-            # Update NIFTY 50 (ID 13)
             lp_n50, diff_n50, pct_n50 = get_index_metrics(13)
             if lp_n50 is not None:
-                # Nifty fallback if stuck
                 if abs(pct_n50) < 0.01:
                     try:
                         old_n50 = float(settings_sheet.acell('B10').value.split(',')[2])
@@ -206,7 +213,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     except: pass
                 settings_sheet.update_acell('B10', f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}")
 
-            # Build Dynamic Sector Heatmap JSON
             heatmap_arr = []
             for sec_id, info in sector_lookup.items():
                 lp_sec, diff_sec, pct_sec = get_index_metrics(sec_id, sector_name=info["name"])
@@ -252,7 +258,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
         time.sleep(sleep_timer)
 
 @st.cache_resource
-def start_cron_daemon_v11(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v12(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
