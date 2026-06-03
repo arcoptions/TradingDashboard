@@ -42,20 +42,23 @@ st.markdown("""
         
         /* Dark Theme TradingView-Style Ticker Tape */
         .index-tape {
-            font-size: 15px; 
-            font-weight: 600; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             padding: 14px 20px; 
             border-radius: 8px; 
-            background-color: #1A202C; 
-            color: #F8FAFC;
-            border: 1px solid #334155; 
+            background-color: #18181B; 
+            border: 1px solid #27272A; 
             text-align: center; 
             margin-bottom: 20px;
-            letter-spacing: 0.5px;
             display: flex;
             justify-content: center;
             align-items: center;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            gap: 16px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        }
+        .index-divider {
+            color: #3F3F46;
+            font-size: 18px;
+            font-weight: 300;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -63,6 +66,8 @@ st.markdown("""
 if "viewing_trade" not in st.session_state: st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
 if "qp_key" not in st.session_state: st.session_state.qp_key = 0
+if "target_hits" not in st.session_state: st.session_state.target_hits = 0
+if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
 
 try:
     worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
