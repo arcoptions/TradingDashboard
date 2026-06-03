@@ -56,7 +56,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
         
-    # Strictly requesting NIFTY 50 (ID: 13)
     payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13]}
     row_map = [] 
     
@@ -92,7 +91,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
     
-    # Restored to reliable OHLC endpoint
     url = "https://api.dhan.co/v2/marketfeed/ohlc"
     try: response = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e: return f"HTTP Connection Timeout: {e}"
@@ -113,11 +111,10 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # Focused Nifty Calculation Logic based strictly on OHLC math
             def get_nifty_data():
                 item = data.get("IDX_I", {}).get("13", {})
                 lp = item.get("last_price")
-                cp = item.get("ohlc", {}).get("close") # Guaranteed previous day close metric
+                cp = item.get("ohlc", {}).get("close") 
                 
                 if lp and cp and float(cp) > 0:
                     lp_f = float(lp)
@@ -129,11 +126,11 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     return f"{float(lp):.2f},0.00,0.00"
                 return "-"
 
-            settings_sheet.update_acell('B5', get_nifty_data())
-
+            # WRITING TO THE NEW ISOLATED CELLS (B10 & B11)
+            settings_sheet.update_acell('B11', get_nifty_data())
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            settings_sheet.update_acell('B3', ist_now.strftime("%d-%b %I:%M %p"))
-            settings_sheet.update_acell('B4', "Running smoothly")
+            settings_sheet.update_acell('B10', ist_now.strftime("%d-%b %I:%M %p"))
+            
         except Exception as e: return f"Spreadsheet Write Failure: {e}"
         return "Success"
     return f"API Error: {response.status_code}"
@@ -158,15 +155,13 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     try: sleep_timer = int(bg_settings_sheet.acell('B8').value)
                     except: pass
                     
-                    result = execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_worksheet.row_values(1), bg_scanner_sheet.row_values(1), background_client_id=dhan_client_id)
-                    if result != "Success": bg_settings_sheet.update_acell('B4', f"Error {now.strftime('%H:%M')}: {result}")
+                    execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_worksheet.row_values(1), bg_scanner_sheet.row_values(1), background_client_id=dhan_client_id)
                 except Exception: pass 
                 
         time.sleep(sleep_timer)
 
-# CACHE BUST v7: Forces Streamlit to drop the old failing thread
 @st.cache_resource
-def start_cron_daemon_v7(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
+def start_cron_daemon_v8(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
