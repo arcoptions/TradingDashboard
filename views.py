@@ -31,11 +31,16 @@ def format_index_display(name, raw_val):
     if len(parts) == 3:
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
+        
+        # Shows flat percentages as Grey instead of hiding them
         if diff_f == 0 and pct_f == 0:
-            return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span>"
-        sign = "+" if diff_f > 0 else ""
-        color = "#089981" if diff_f >= 0 else "#F23645" 
-        arrow = "▲" if diff_f >= 0 else "▼"
+            color = "#64748B" 
+            sign, arrow = "", ""
+        else:
+            sign = "+" if diff_f > 0 else ""
+            color = "#089981" if diff_f >= 0 else "#F23645" 
+            arrow = "▲" if diff_f >= 0 else "▼"
+            
         return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
     return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
 
@@ -234,7 +239,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
                 try:
                     raw_json = settings_sheet.acell('B12').value
-                    # Defensive Check: Verify the cell contains real content before decoding
                     if raw_json and str(raw_json).strip() != "" and str(raw_json).strip() != "-":
                         data = json.loads(raw_json)
                         df_heat = pd.DataFrame(data)
@@ -249,7 +253,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 color_continuous_midpoint=0
                             )
                             
-                            # Removed forced 'white' color to allow Plotly auto-contrast
                             fig.update_traces(
                                 textinfo="label+text",
                                 texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>",
