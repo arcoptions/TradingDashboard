@@ -7,7 +7,7 @@ import database as db
 import broker_api as api
 
 def format_index_display(name, raw_val):
-    if not raw_val or raw_val == "-": return f"<span style='color: #94A3B8; font-size: 13px; font-weight: 600;'>{name}</span> &nbsp; <span style='color: #F8FAFC; font-weight: 700; font-size: 15px;'>-</span>"
+    if not raw_val or raw_val == "-": return f"<span style='font-weight: 600; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 700; color: #1A202C;'>-</span>"
     parts = str(raw_val).split(",")
     if len(parts) == 3:
         lp, diff, pct = parts
@@ -15,16 +15,13 @@ def format_index_display(name, raw_val):
         sign = "+" if diff_f > 0 else ""
         color = "#22C55E" if diff_f >= 0 else "#EF4444" 
         arrow = "▲" if diff_f >= 0 else "▼"
-        return f"<span style='color: #94A3B8; font-size: 13px; font-weight: 600;'>{name}</span> &nbsp; <span style='color: #F8FAFC; font-weight: 700; font-size: 15px;'>{lp}</span> &nbsp; <span style='color: {color}; font-weight: 600; font-size: 14px;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
-    return f"<span style='color: #94A3B8; font-size: 13px; font-weight: 600;'>{name}</span> &nbsp; <span style='color: #F8FAFC; font-weight: 700; font-size: 15px;'>{raw_val}</span>"
+        return f"<span style='font-weight: 600; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 700; font-size: 16px; color: #1A202C;'>{lp}</span> &nbsp; <span style='color: {color}; font-weight: 500; font-size: 15px;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
+    return f"<span style='font-weight: 600; color: #1A202C;'>{name}</span> &nbsp; <span style='font-weight: 700; font-size: 16px; color: #1A202C;'>{raw_val}</span>"
 
 def render_top_ticker_tape(settings_sheet):
     try:
         nifty = format_index_display("NIFTY 50", settings_sheet.acell('B5').value)
-        banknifty = format_index_display("NIFTY BANK", settings_sheet.acell('B6').value)
-        sensex = format_index_display("SENSEX", settings_sheet.acell('B7').value)
-        
-        html = f"<div class='index-tape'>{nifty} <span class='index-divider'>|</span> {banknifty} <span class='index-divider'>|</span> {sensex}</div>"
+        html = f"<div class='index-tape'>{nifty}</div>"
         st.markdown(html, unsafe_allow_html=True)
     except: pass
 
@@ -40,7 +37,6 @@ def check_for_audio_alerts(df_act):
                 sl_hits += 1
         except: pass
 
-    # Initialize silently on boot to prevent a chime storm when the page first loads
     if "audio_initialized" not in st.session_state:
         st.session_state.target_hits = current_targets
         st.session_state.sl_hits = sl_hits
@@ -213,7 +209,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab2:
                 df_act = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                 if not df_act.empty:
-                    check_for_audio_alerts(df_act) # Audio is only invoked in the active session
+                    check_for_audio_alerts(df_act)
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Active Positions", len(df_act))
                     m2.metric("🟢 Floating Profit", len(df_act[df_act['Vs Entry'] == '🟢 Above']))
