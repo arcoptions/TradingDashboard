@@ -20,7 +20,7 @@ def format_index_display(name, raw_val):
             return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span>"
 
         sign = "+" if diff_f > 0 else ""
-        color = "#089981" if diff_f >= 0 else "#F23645" # Exact TradingView Hex Codes
+        color = "#089981" if diff_f >= 0 else "#F23645" 
         arrow = "▲" if diff_f >= 0 else "▼"
         
         return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
@@ -29,8 +29,8 @@ def format_index_display(name, raw_val):
 
 def render_top_ticker_tape(settings_sheet):
     try:
-        # Read from NEW isolated cell B11
-        nifty = format_index_display("NIFTY50", settings_sheet.acell('B11').value)
+        # Read from safely bounded cell B10
+        nifty = format_index_display("NIFTY50", settings_sheet.acell('B10').value)
         html = f"<div class='index-tape'>{nifty}</div>"
         st.markdown(html, unsafe_allow_html=True)
     except: pass
@@ -184,8 +184,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with f_col3:
                 if st.button("Sync Live Prices", use_container_width=True): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
             
-            # Read from NEW isolated cell B10
-            try: timestamp_val = settings_sheet.acell('B10').value or "Pending"
+            # Read from safe cell B9
+            try: timestamp_val = settings_sheet.acell('B9').value or "Pending"
             except: timestamp_val = "Pending"
             st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
 
@@ -254,7 +254,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
         if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
             api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
         
-    try: timestamp_val = settings_sheet.acell('B10').value or "Pending"
+    try: timestamp_val = settings_sheet.acell('B9').value or "Pending"
     except: timestamp_val = "Pending"
     st.markdown(f"<div class='sync-timestamp-text'>Last Synced: {timestamp_val}</div>", unsafe_allow_html=True)
     
