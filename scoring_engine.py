@@ -4,13 +4,13 @@ def generate_conviction_score(f_metrics, t_metrics, oi_buildup_lbl):
     to issue a mathematical Go / No-Go Verdict.
     """
     score = 0
-    max_score = 100
     flags = []
 
-    # Utility to safely strip strings for mathematical comparison
     def parse_val(v):
+        if v is None or str(v).strip() in ["", "-", "None"]:
+            return None
         try:
-            return float(str(v).replace('%', '').replace('x', '').replace(',', ''))
+            return float(str(v).replace('%', '').replace('x', '').replace(',', '').strip())
         except: 
             return None
 
@@ -25,19 +25,21 @@ def generate_conviction_score(f_metrics, t_metrics, oi_buildup_lbl):
     vol_spike = parse_val(t_metrics.get("vol_spike"))
 
     # 1. VALUATION METRICS (20 Pts)
-    if pe and spe:
+    if pe is not None and spe is not None:
         if pe < spe: 
             score += 20
             flags.append("✅ Undervalued vs Sector P/E")
         else: 
             score += 5
             flags.append("⚠️ Valuation exceeds Sector P/E")
+    else:
+        score += 10  # Neutral baseline if unavailable
 
     # 2. CAPITAL EFFICIENCY (20 Pts)
-    if roe and roe >= 15: 
+    if roe is not None and roe >= 15: 
         score += 10
         flags.append("✅ Strong ROE (>15%)")
-    if roce and roce >= 15: 
+    if roce is not None and roce >= 15: 
         score += 10
         flags.append("✅ Strong ROCE (>15%)")
 
@@ -48,11 +50,13 @@ def generate_conviction_score(f_metrics, t_metrics, oi_buildup_lbl):
         elif dte > 2.0: 
             score -= 10
             flags.append("🚨 High Corporate Leverage Warning")
+    else:
+        score += 5
 
     # 4. TECHNICAL MOMENTUM (30 Pts)
-    if rsi:
+    if rsi is not None:
         if 45 <= rsi <= 70: 
-            score += 10
+            score += 15
             flags.append("✅ Bullish RSI Momentum")
         elif rsi > 70: 
             score += 5
@@ -60,33 +64,33 @@ def generate_conviction_score(f_metrics, t_metrics, oi_buildup_lbl):
         else: 
             flags.append("🚨 Bearish RSI Momentum")
 
-    if ema20 and ema20 > 0: 
+    if ema20 is not None and ema20 > 0: 
         score += 10
         flags.append("✅ Price sustaining above 20-Day EMA")
         
-    if vol_spike and vol_spike > 100: 
-        score += 10
+    if vol_spike is not None and vol_spike > 100: 
+        score += 5
         flags.append("✅ Heavy Institutional Volume Spike Detected")
 
     # 5. DERIVATIVES & SMART MONEY (20 Pts)
-    if "Long Buildup" in oi_buildup_lbl: 
-        score += 20
-        flags.append("✅ Options: Massive Long Buildup")
-    elif "Short Covering" in oi_buildup_lbl: 
-        score += 15
-        flags.append("✅ Options: Bullish Short Covering Bounce")
-    elif "Short Buildup" in oi_buildup_lbl: 
-        score -= 15
-        flags.append("🚨 Options: Aggressive Short Sellers Active")
+    if oi_buildup_lbl:
+        if "Long Buildup" in oi_buildup_lbl: 
+            score += 20
+            flags.append("✅ Options: Massive Long Buildup")
+        elif "Short Covering" in oi_buildup_lbl: 
+            score += 15
+            flags.append("✅ Options: Bullish Short Covering Bounce")
+        elif "Short Buildup" in oi_buildup_lbl: 
+            score -= 15
+            flags.append("🚨 Options: Aggressive Short Sellers Active")
 
-    # Format the Output Verdict
-    score = max(0, min(score, 100)) # Clamp bounds
+    score = max(0, min(score, 100))
     
-    if score >= 75: 
-        verdict, color = "🟢 STRONG GO", "#089981"
-    elif score >= 50: 
-        verdict, color = "🟡 CAUTION / HOLD", "#D1A553"
+    if score >= 70: 
+        verdict = "STRONG GO"
+    elif score >= 45: 
+        verdict = "CAUTION"
     else: 
-        verdict, color = "🔴 NO-GO", "#F23645"
+        verdict = "NO-GO"
 
-    return score, verdict, color, flags
+    return score, verdict, flags
