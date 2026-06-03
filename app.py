@@ -39,7 +39,6 @@ st.markdown("""
         div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {color: var(--arc-text-dark) !important;}
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {background-color: transparent !important; border: 1px solid #E2E8F0 !important;}
         .sync-timestamp-text {font-size: 12px !important; color: #64748B !important; text-align: right !important; margin-top: -6px !important; padding-bottom: 14px !important; width: 100%;}
-        /* Top Ticker Tape Styling */
         .index-tape {font-size: 14px; font-weight: 600; padding: 10px 15px; border-radius: 6px; background-color: #F8FAFC; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 15px;}
         .index-tape span {color: var(--arc-gold-dark); font-weight: 800;}
     </style>
