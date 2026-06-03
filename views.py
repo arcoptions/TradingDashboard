@@ -89,6 +89,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         initial_df = analytics.compute_signal_indicators(initial_df)
         
         # --- DYNAMIC BASE ASSET & SECTOR EXTRACTION ---
+        # Automatically pull the root stock ticker out of complex option strings 
         initial_df['Base Asset'] = initial_df['Symbol / Asset'].apply(lambda x: str(x).split('-')[0].strip().upper())
         initial_df['Sector/Industry'] = initial_df['Base Asset'].apply(lambda x: SECTOR_MAP.get(x, "General / Mixed"))
         
@@ -103,7 +104,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         defaults = ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"]
         dynamic_source_list = sorted(list(set(defaults + existing_sources)))
 
-        view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Journal", "Base Asset", "Sector/Industry", "Symbol / Asset", "Status (Watch/Active/Closed)", "Vs Entry", "Target Status", "Entry CMP / Range", "Live Price", "Add-On / Dip Levels", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "Time Frame", "Setup Rating", "Raw Tip Text", "Notes", "Security ID", "_Sheet_Row"]
+        # Placed Stock Name and Industry immediately after Source for visibility
+        view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Journal", "Base Asset", "Sector/Industry", "Symbol / Asset", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "Vs Entry", "Target Status", "Entry CMP / Range", "Live Price", "Add-On / Dip Levels", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "Time Frame", "Setup Rating", "Raw Tip Text", "Notes", "Security ID", "_Sheet_Row"]
         
         for col in view_cols:
             if col not in initial_df.columns: initial_df[col] = ""
@@ -117,6 +119,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             "Base Asset": st.column_config.TextColumn("Stock Name"),
             "Sector/Industry": st.column_config.TextColumn("Industry"),
             "Symbol / Asset": st.column_config.TextColumn("Asset Contract"), 
+            "Trade Type (Eq/Option)": st.column_config.SelectboxColumn("Type", options=["Equity", "Option"], required=True),
             "_Sheet_Row": None, 
             "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
             "Time Frame": st.column_config.TextColumn("Time Frame (TF)"),
@@ -124,7 +127,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             "Raw Tip Text": st.column_config.TextColumn("Original Source Tip")
         }
         
-        # Lock visual mapping columns from edits
         disabled_cols = ["Vs Entry", "Target Status", "Base Asset", "Sector/Industry"] 
 
         if st.session_state.get("viewing_trade_row"):
@@ -141,7 +143,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # --- TOP LEVEL ARCHITECTURE ---
+            # --- 1. TOP LEVEL TABS ---
             tab_stocks, tab_options = st.tabs(["📈 Stocks", "🎟️ Options"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -156,9 +158,10 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 all_sources = sorted(list(df_asset["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in df_asset.columns else []
                 
+                # --- 2. FILTERS (Empty Default) ---
                 f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
                 with f_col1: 
-                    # Default is now empty, requiring user to actively filter
+                    # Default is strictly set to an empty array so users must select manually
                     selected_sources = st.multiselect(f"Filter by Source", options=all_sources, default=[], key=f"src_{asset_type}")
                 with f_col2: 
                     selected_date_range = st.date_input(f"Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date, key=f"date_{asset_type}")
@@ -182,8 +185,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         filtered_df = filtered_df[filtered_df['_Tmp_Date'] == selected_date_range[0]]
                     filtered_df = filtered_df.drop(columns=['_Tmp_Date'])
                 
-                # --- NESTED SUB TABS ---
-                sub_wl, sub_act, sub_cls = st.tabs(["Watchlist", "Active Trades", "Closed Executions"])
+                # --- 3. THIRD LEVEL TABS (Watchlist/Active/Closed) ---
+                sub_wl, sub_act, sub_cls = st.tabs(["Watchlist", "Active", "Closed"])
                 
                 with sub_wl:
                     df_wl = filtered_df[filtered_df["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
@@ -220,7 +223,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                     else: st.info("No Closed executions found.")
 
-            # Inject the routing layout
+            # Route execution to strictly follow new visual flow hierarchy
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             with tab_options: render_asset_dashboard(df_options, "Options")
             
