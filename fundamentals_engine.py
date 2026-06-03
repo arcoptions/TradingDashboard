@@ -1,97 +1,83 @@
 import requests
 import pandas as pd
+import yfinance as yf
 
 # --- SECTORAL PE REFERENCE REGISTRY ---
 INDUSTRY_PE_MAP = {
-    "CHEMICALS": 24.8,
-    "OIL & GAS": 15.2,
-    "IT SERVICES": 27.4,
-    "BANKING": 16.1,
-    "FMCG": 44.3,
-    "AUTO": 22.9,
-    "PHARMA": 31.2,
-    "POWER": 19.5,
-    "FINANCE": 18.4,
-    "INFRASTRUCTURE": 21.0,
-    "METALS": 14.3,
-    "GENERAL / MIXED": 20.0
+    "CHEMICALS": 24.8, "OIL & GAS": 15.2, "IT SERVICES": 27.4, "BANKING": 16.1,
+    "FMCG": 44.3, "AUTO": 22.9, "PHARMA": 31.2, "POWER": 19.5,
+    "FINANCE": 18.4, "INFRASTRUCTURE": 21.0, "METALS": 14.3, "GENERAL / MIXED": 20.0
 }
 
 def fetch_company_fundamentals(ticker_symbol, sector_category="GENERAL / MIXED"):
     """
-    ULTIMATE CLOUD BYPASS: Uses TradingView's institutional scanner endpoint.
-    This public API provides exact data and NEVER blocks cloud IPs (like Streamlit or AWS).
+    HYBRID ENGINE: 
+    1. TradingView API for 100% reliable core valuation ratios.
+    2. Secure yfinance session for historical QoQ absolute earnings tables.
     """
     cleaned_ticker = str(ticker_symbol).strip().upper()
     
-    # Strip suffixes if they exist from older Yahoo logic
     if cleaned_ticker.endswith(".NS") or cleaned_ticker.endswith(".BO"):
-        cleaned_ticker = cleaned_ticker[:-3]
+        tv_ticker = cleaned_ticker[:-3]
+    else:
+        tv_ticker = cleaned_ticker
         
-    tv_ticker = f"NSE:{cleaned_ticker}"
-    
-    # TradingView Scanner Payload Map
-    columns = [
-        "price_earnings_ttm",        # 0: Stock P/E
-        "price_earnings_forward",    # 1: Forward P/E
-        "return_on_equity",          # 2: ROE
-        "debt_to_equity",            # 3: Debt to Equity
-        "operating_margin",          # 4: Proxy for EBITDA Margin
-        "net_margin",                # 5: PAT Margin
-        "total_revenue_fq",          # 6: Latest Quarter Revenue
-        "net_income_fq"              # 7: Latest Quarter Net Income
-    ]
-    
-    payload = {
-        "symbols": {"tickers": [tv_ticker]},
-        "columns": columns
-    }
-    
-    try:
-        # Hit the TradingView headless scanner (Ultra-fast, no cookies required)
-        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=8)
-        
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("data"):
-                # Extract the data array
-                d = data["data"][0]["d"]
-                
-                pe = d[0]
-                fpe = d[1]
-                roe = d[2]
-                dte = d[3]
-                ebitda = d[4]
-                pat = d[5]
-                rev = d[6]
-                net = d[7]
-                
-                sector_pe = INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0)
-                
-                q_perf = []
-                if rev is not None and net is not None:
-                    q_perf.append({
-                        "Period": "Latest Qtr",
-                        "Revenue (Cr)": round(rev / 10000000, 2),
-                        "Net Income (Cr)": round(net / 10000000, 2)
-                    })
-                
-                return {
-                    "stock_pe": round(pe, 2) if pe is not None else "-",
-                    "forward_pe": round(fpe, 2) if fpe is not None else "-",
-                    "sector_pe": sector_pe,
-                    "roe": f"{round(roe, 2)}%" if roe is not None else "-",
-                    "debt_to_equity": round(dte, 2) if dte is not None else "-",
-                    "ebitda_margin": f"{round(ebitda, 2)}%" if ebitda is not None else "-",
-                    "pat_margin": f"{round(pat, 2)}%" if pat is not None else "-",
-                    "quarterly_perf": q_perf
-                }
-    except Exception as e:
-        print(f"TradingView Engine Error: {e}")
-        
-    # Absolute Fallback if network drops
-    return {
+    yf_ticker = f"{tv_ticker}.NS"
+
+    # Baseline payload structure
+    metrics = {
         "stock_pe": "-", "forward_pe": "-", "sector_pe": INDUSTRY_PE_MAP.get(str(sector_category).upper(), 20.0),
         "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-",
         "quarterly_perf": []
     }
+
+    # ─── PART 1: TRADINGVIEW (For Unblockable Core Ratios) ───
+    tv_payload = {
+        "symbols": {"tickers": [f"NSE:{tv_ticker}"]},
+        "columns": [
+            "price_earnings_ttm", "price_earnings_forward", "return_on_equity",
+            "debt_to_equity", "operating_margin", "net_margin"
+        ]
+    }
+    
+    try:
+        res = requests.post("https://scanner.tradingview.com/india/scan", json=tv_payload, timeout=5)
+        if res.status_code == 200 and res.json().get("data"):
+            d = res.json()["data"][0]["d"]
+            metrics["stock_pe"] = round(d[0], 2) if d[0] is not None else "-"
+            metrics["forward_pe"] = round(d[1], 2) if d[1] is not None else "-"
+            metrics["roe"] = f"{round(d[2], 2)}%" if d[2] is not None else "-"
+            metrics["debt_to_equity"] = round(d[3], 2) if d[3] is not None else "-"
+            metrics["ebitda_margin"] = f"{round(d[4], 2)}%" if d[4] is not None else "-"
+            metrics["pat_margin"] = f"{round(d[5], 2)}%" if d[5] is not None else "-"
+    except Exception as e:
+        print(f"TV Engine Error: {e}")
+
+    # ─── PART 2: YFINANCE SECURE SESSION (For QoQ Earnings Comparison) ───
+    try:
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'
+        })
+        
+        stock = yf.Ticker(yf_ticker, session=session)
+        q_fin = stock.quarterly_financials
+        
+        if q_fin is not None and not q_fin.empty:
+            # Slice the top 2 columns (Latest Quarter and Previous Quarter)
+            target_cols = q_fin.columns[:2]
+            
+            for col in target_cols:
+                q_name = col.strftime("%b %Y") if hasattr(col, "strftime") else str(col)
+                rev = q_fin.loc["Total Revenue", col] if "Total Revenue" in q_fin.index else None
+                net = q_fin.loc["Net Income", col] if "Net Income" in q_fin.index else None
+                
+                metrics["quarterly_perf"].append({
+                    "Period": q_name,
+                    "Revenue": f"₹{round(rev/10000000, 2)} Cr" if pd.notna(rev) else "-",
+                    "Net Income": f"₹{round(net/10000000, 2)} Cr" if pd.notna(net) else "-"
+                })
+    except Exception as e:
+        print(f"YF Table Error: {e}")
+        
+    return metrics
