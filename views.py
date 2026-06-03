@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import re
+import json
 from datetime import datetime
+import plotly.express as px
 import analytics
 import database as db
 import broker_api as api
 
-# Built-in Sector Dictionary for instant Industry mapping
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
     "INFY": "IT Services", "HCLTECH": "IT Services", "WIPRO": "IT Services", "TECHM": "IT Services", "TATAELXSI": "IT Services",
@@ -88,8 +89,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         initial_df["Journal"] = False
         initial_df = analytics.compute_signal_indicators(initial_df)
         
-        # --- DYNAMIC BASE ASSET & SECTOR EXTRACTION ---
-        # Automatically pull the root stock ticker out of complex option strings 
         initial_df['Base Asset'] = initial_df['Symbol / Asset'].apply(lambda x: str(x).split('-')[0].strip().upper())
         initial_df['Sector/Industry'] = initial_df['Base Asset'].apply(lambda x: SECTOR_MAP.get(x, "General / Mixed"))
         
@@ -104,7 +103,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         defaults = ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"]
         dynamic_source_list = sorted(list(set(defaults + existing_sources)))
 
-        # Placed Stock Name and Industry immediately after Source for visibility
         view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Journal", "Base Asset", "Sector/Industry", "Symbol / Asset", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "Vs Entry", "Target Status", "Entry CMP / Range", "Live Price", "Add-On / Dip Levels", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2", "Time Frame", "Setup Rating", "Raw Tip Text", "Notes", "Security ID", "_Sheet_Row"]
         
         for col in view_cols:
@@ -139,12 +137,11 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 if st.button("Unlink Review Canvas"): close_journal(); st.rerun()
             else: st.error("Row connection failure.")
         else:
-            
             df_stocks = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = initial_df[initial_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # --- 1. TOP LEVEL TABS ---
-            tab_stocks, tab_options = st.tabs(["📈 Stocks", "🎟️ Options"])
+            # --- 1. TOP LEVEL TABS + HEATMAP ---
+            tab_stocks, tab_options, tab_heatmap = st.tabs(["📈 Stocks", "🎟️ Options", "🗺️ Sector Heatmap"])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -158,13 +155,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 all_sources = sorted(list(df_asset["Idea Source (Chartink/Telegram/X/Self)"].dropna().unique())) if "Idea Source (Chartink/Telegram/X/Self)" in df_asset.columns else []
                 
-                # --- 2. FILTERS (Empty Default) ---
                 f_col1, f_col2, f_col3 = st.columns([4, 4, 2], vertical_alignment="bottom")
-                with f_col1: 
-                    # Default is strictly set to an empty array so users must select manually
-                    selected_sources = st.multiselect(f"Filter by Source", options=all_sources, default=[], key=f"src_{asset_type}")
-                with f_col2: 
-                    selected_date_range = st.date_input(f"Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date, key=f"date_{asset_type}")
+                with f_col1: selected_sources = st.multiselect(f"Filter by Source", options=all_sources, default=[], key=f"src_{asset_type}")
+                with f_col2: selected_date_range = st.date_input(f"Filter by Date Range", value=(min_date, max_date), min_value=min_date, max_value=max_date, key=f"date_{asset_type}")
                 with f_col3:
                     if st.button("Sync Live Prices", use_container_width=True, key=f"sync_{asset_type}"): 
                         api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
@@ -185,7 +178,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         filtered_df = filtered_df[filtered_df['_Tmp_Date'] == selected_date_range[0]]
                     filtered_df = filtered_df.drop(columns=['_Tmp_Date'])
                 
-                # --- 3. THIRD LEVEL TABS (Watchlist/Active/Closed) ---
+                # --- 3. THIRD LEVEL TABS ---
                 sub_wl, sub_act, sub_cls = st.tabs(["Watchlist", "Active", "Closed"])
                 
                 with sub_wl:
@@ -223,9 +216,50 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             disabled=disabled_cols + ["Status (Watch/Active/Closed)", "Entry CMP / Range", "Live Price", "Exit Price", "Stop Loss (SL)", "Target 1", "Target 2"])
                     else: st.info("No Closed executions found.")
 
-            # Route execution to strictly follow new visual flow hierarchy
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             with tab_options: render_asset_dashboard(df_options, "Options")
+            
+            # --- PLOTLY SECTOR HEATMAP RENDERING ---
+            with tab_heatmap:
+                try: timestamp_val = settings_sheet.acell('B9').value or "Pending"
+                except: timestamp_val = "Pending"
+                
+                st.markdown("#### Live NIFTY Sector Performance")
+                st.caption(f"Visualizing official NSE sectoral index flows. Last updated: {timestamp_val}")
+                
+                if st.button("Sync Live Market Map", use_container_width=True, key="sync_heatmap"): 
+                    api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+
+                try:
+                    raw_json = settings_sheet.acell('B12').value
+                    if raw_json and raw_json != "-":
+                        data = json.loads(raw_json)
+                        df_heat = pd.DataFrame(data)
+                        
+                        # Generate the Treemap
+                        fig = px.treemap(
+                            df_heat, 
+                            path=['sector'], 
+                            values='weight', 
+                            color='change',
+                            color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], # TradingView Heatmap Colors
+                            color_continuous_midpoint=0
+                        )
+                        
+                        # Apply custom data overlay to show exact percentages
+                        fig.update_traces(
+                            textinfo="label+text",
+                            texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>",
+                            customdata=df_heat[['change']],
+                            textfont=dict(size=16, color="white")
+                        )
+                        fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=500)
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Awaiting initial JSON data payload from the API sync engine.")
+                except Exception as e:
+                    st.warning("Heatmap rendering engine requires fresh data. Click Sync.")
             
     else: st.info("Portfolio clean. Waiting for data mapping initialization.")
 
