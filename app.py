@@ -40,25 +40,18 @@ st.markdown("""
         div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {background-color: transparent !important; border: 1px solid #E2E8F0 !important;}
         .sync-timestamp-text {font-size: 12px !important; color: #64748B !important; text-align: right !important; margin-top: -6px !important; padding-bottom: 14px !important; width: 100%;}
         
-        /* Dark Theme TradingView-Style Ticker Tape */
+        /* Light Theme Nifty-Only Tape styling */
         .index-tape {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            padding: 14px 20px; 
-            border-radius: 8px; 
-            background-color: #18181B; 
-            border: 1px solid #27272A; 
-            text-align: center; 
+            padding: 10px 16px; 
+            border-radius: 6px; 
+            background-color: transparent; 
+            border: 1px solid #E2E8F0; 
+            text-align: left; 
             margin-bottom: 20px;
-            display: flex;
-            justify-content: center;
+            display: inline-flex;
             align-items: center;
-            gap: 16px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-        }
-        .index-divider {
-            color: #3F3F46;
-            font-size: 18px;
-            font-weight: 300;
+            gap: 8px;
         }
     </style>
 """, unsafe_allow_html=True)
