@@ -56,8 +56,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
         
-    # Standardized Index Security IDs: Nifty 50 (13), Bank Nifty (25), Sensex (51)
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13, 25, 51], "BSE_IDX": [51]}
+    # Appended multiple ID possibilities to ensure we catch Bank Nifty and Sensex across all Dhan Exchange Segments
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13, 25, 26000, 26009, 51, 1], "BSE_IDX": [51, 1]}
     row_map = [] 
     
     try:
@@ -92,7 +92,9 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
     
-    try: response = requests.post("https://api.dhan.co/v2/marketfeed/ohlc", headers=headers, json=payload, timeout=15)
+    # Switched endpoint to 'quote' to retrieve the absolute point diff required for percentage calculations
+    url = "https://api.dhan.co/v2/marketfeed/quote"
+    try: response = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e: return f"HTTP Connection Timeout: {e}"
     
     if response.status_code == 200:
@@ -111,23 +113,37 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            # Extract Index Data safely preventing KeyError crashes
-            def get_idx_data(s_id, segment="IDX_I"):
-                item = data.get(segment, {}).get(str(s_id), {})
-                lp = item.get("last_price")
-                cp = item.get("previous_close")
-                if not cp: cp = item.get("ohlc", {}).get("close")
-                
-                if lp and cp and float(cp) > 0:
-                    diff = float(lp) - float(cp)
-                    pct = (diff / float(cp)) * 100
-                    return f"{float(lp):.2f},{diff:.2f},{pct:.2f}"
-                return str(lp) if lp else "-"
+            # --- INTELLIGENT INDEX EXTRACTION ENGINE ---
+            def get_idx_data(ids_list, segments):
+                for seg in segments:
+                    for s_id in ids_list:
+                        item = data.get(seg, {}).get(str(s_id), {})
+                        lp = item.get("last_price")
+                        net_chg = item.get("net_change") # Sourced from Quote endpoint
+                        
+                        if lp and net_chg is not None:
+                            lp_f = float(lp)
+                            # Hard filter to ensure we caught a massive Index, not a Rs. 20 stock matching the ID
+                            if lp_f > 10000:
+                                diff = float(net_chg)
+                                cp = lp_f - diff
+                                pct = (diff / cp) * 100 if cp > 0 else 0
+                                return f"{lp_f:.2f},{diff:.2f},{pct:.2f}"
+                                
+                        # Secondary Fallback: Use OHLC close if net_change is blank
+                        cp = item.get("ohlc", {}).get("close")
+                        if lp and cp and float(cp) > 0:
+                            lp_f, cp_f = float(lp), float(cp)
+                            if lp_f > 10000:
+                                diff = lp_f - cp_f
+                                pct = (diff / cp_f) * 100
+                                return f"{lp_f:.2f},{diff:.2f},{pct:.2f}"
+                                
+                return "-"
 
-            n_price = get_idx_data(13, "IDX_I")
-            bn_price = get_idx_data(25, "IDX_I")
-            sx_price = get_idx_data(51, "BSE_IDX")
-            if sx_price == "-": sx_price = get_idx_data(51, "IDX_I") 
+            n_price = get_idx_data([13], ["IDX_I", "NSE_IDX"])
+            bn_price = get_idx_data([25, 26009, 26000], ["IDX_I", "NSE_IDX"])
+            sx_price = get_idx_data([51, 1], ["BSE_IDX", "IDX_I"])
                 
             settings_sheet.update([["Nifty 50", n_price], ["Bank Nifty", bn_price], ["Sensex", sx_price]], "A5:B7")
 
