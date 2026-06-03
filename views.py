@@ -139,27 +139,17 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 asset_symbol = trade_data['Symbol / Asset']
                 st.subheader(f"Trade Review: {asset_symbol}")
                 
-                # ==========================================================
-                # DERIVATIVES & GREEKS ENGINE INJECTION
-                # ==========================================================
                 contract_meta = de.parse_option_contract(asset_symbol)
                 
-                # FIX: Removed the strict dependency on the Google Sheet column. 
-                # If the string parses as an option contract, display the Greeks!
                 if contract_meta:
                     st.markdown("### 🎟️ Derivatives Profile & Greeks")
                     
-                    # 1. Fetching Variables 
                     try: live_option_price = float(trade_data.get('Live Price', 0))
                     except: live_option_price = 0.0
                     
-                    # Placeholder Spot Price: Until we build the fundamental stock tracker, 
-                    # we approximate Spot Price = Strike Price so the math doesn't break.
                     underlying_spot_price = contract_meta['strike'] 
+                    risk_free_rate = 0.07 
                     
-                    risk_free_rate = 0.07 # 7% Risk-Free Rate benchmark in India
-                    
-                    # 2. Implied Volatility Calculation
                     derived_iv = de.implied_volatility(
                         target_price=live_option_price,
                         S=underlying_spot_price,
@@ -169,7 +159,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         option_type=contract_meta['type']
                     )
                     
-                    # 3. Delta and Theta Calculations
                     greeks = de.calculate_greeks(
                         S=underlying_spot_price,
                         K=contract_meta['strike'],
@@ -179,10 +168,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         option_type=contract_meta['type']
                     )
                     
-                    # 4. Open Interest Buildup (Placeholder logic to be wired to Dhan API)
-                    oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=-1.5, oi_change_pct=4.2)
+                    # --- DYNAMIC OPEN INTEREST WIRING ---
+                    try: price_chg_pct = float(trade_data.get("Price Chg %", 0))
+                    except: price_chg_pct = 0.0
                     
-                    # 5. UI Layout
+                    try: oi_chg_pct = float(trade_data.get("OI Chg %", 0))
+                    except: oi_chg_pct = 0.0
+                    
+                    oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=price_chg_pct, oi_change_pct=oi_chg_pct)
+                    
                     g_col1, g_col2, g_col3, g_col4 = st.columns(4)
                     with g_col1:
                         st.metric("Delta (Δ)", f"{greeks['delta']}")
@@ -195,13 +189,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         st.caption("Pricing Congestion Band")
                     with g_col4:
                         st.markdown(f"**OI Buildup Matrix**<br><span style='font-size:20px; font-weight:bold; color:{oi_color};'>{oi_buildup_lbl}</span>", unsafe_allow_html=True)
-                        st.caption("Market Maker Momentum")
+                        sign_px = "+" if price_chg_pct > 0 else ""
+                        sign_oi = "+" if oi_chg_pct > 0 else ""
+                        st.caption(f"Px: {sign_px}{price_chg_pct}% | OI: {sign_oi}{oi_chg_pct}%")
                         
                     st.divider()
                 
-                # ==========================================================
-                # STANDARD METRICS & ADVANCED REPAIR TOOL
-                # ==========================================================
                 with st.container(border=True):
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
