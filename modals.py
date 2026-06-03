@@ -7,32 +7,26 @@ import broker_api as api
 
 @st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal(worksheet, sheet_headers):
-    # 1. Dynamically pull existing unique sources from database rows
     try:
         records = worksheet.get_all_records()
         if records:
             df_existing = pd.DataFrame(records)
             col_name = "Idea Source (Chartink/Telegram/X/Self)"
             if col_name in df_existing.columns:
-                # Clean out blank lines, null strings, or NaN cells
                 raw_sources = df_existing[col_name].astype(str).str.strip()
                 existing_sources = sorted(list(raw_sources[(raw_sources != "") & (raw_sources != "nan") & (raw_sources != "None")].unique()))
-            else:
-                existing_sources = []
-        else:
-            existing_sources = []
-    except:
-        existing_sources = []
+            else: existing_sources = []
+        else: existing_sources = []
+    except: existing_sources = []
 
-    # 2. Merge your permanent baseline favorites with whatever unique values are in the sheet
     defaults = ["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"]
     source_options = sorted(list(set(defaults + existing_sources)))
 
     tab1, tab2 = st.tabs(["Quick Parse (Manual Entry)", "Bulk Import List"])
     
     with tab1:
-        st.caption("Paste a tip directly below to extract strike, range, stop loss, and targets automatically.")
-        raw_tip = st.text_area("Tip Input:", key=f"qp_{st.session_state.qp_key}", height=100)
+        st.caption("Paste any raw stock tips or option alerts here. The layout engine will process them into fields automatically.")
+        raw_tip = st.text_area("Tip Input:", key=f"qp_{st.session_state.qp_key}", height=95)
         parsed_data = analytics.parse_telegram_tip(raw_tip)
         
         search_query = st.text_input("Refine Instrument Search", value=parsed_data["symbol"])
@@ -40,7 +34,7 @@ def trade_entry_modal(worksheet, sheet_headers):
         results = api.search_instruments(search_query)
         
         if not results.empty:
-            selected_display = st.selectbox("Select Exact Option Expiry:", results['SEM_TRADING_SYMBOL'].tolist())
+            selected_display = st.selectbox("Select Exact Asset/Contract Expiry:", results['SEM_TRADING_SYMBOL'].tolist())
             row = results[results['SEM_TRADING_SYMBOL'] == selected_display].iloc[0]
             auto_symbol = str(row['SEM_TRADING_SYMBOL'])
             auto_sec_id = str(row['SEM_SMST_SECURITY_ID'])
@@ -48,65 +42,73 @@ def trade_entry_modal(worksheet, sheet_headers):
             if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
             elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
         else:
-            if search_query: st.warning(f"⚠️ No matches found for '{search_query}'. Try typing just the root ticker symbol.")
+            if search_query: st.warning(f"⚠️ No active matching contracts found. Editing field manually.")
             auto_symbol = search_query
 
         with st.form("entry_form", clear_on_submit=True):
             col1, col2, col3, col4 = st.columns(4)
             with col1: date = st.date_input("Date", datetime.today()).strftime("%Y-%m-%d")
-            with col2: source_sel = st.selectbox("Source", source_options) # Dynamic Dropdown List
-            with col3: custom_source = st.text_input("Custom Source", placeholder="New source override")
+            with col2: source_sel = st.selectbox("Source", source_options)
+            with col3: custom_source = st.text_input("Custom Override", placeholder="New group name")
             with col4: trade_type = st.selectbox("Type", ["Option", "Equity"], index=0 if parsed_data["trade_type"] == "Option" else 1)
 
-            symbol = st.text_input("Validated Asset Name (Do not edit if auto-filled)", value=auto_symbol)
+            symbol = st.text_input("Validated Asset Symbol", value=auto_symbol)
             exchange = st.selectbox("Exchange", ["NSE_EQ", "NSE_FNO"], index=0 if auto_exch == "NSE_EQ" else 1, label_visibility="collapsed", disabled=True)
             sec_id = st.text_input("Security ID", value=auto_sec_id, label_visibility="collapsed", disabled=True)
             
             c1, c2, c3, c4 = st.columns(4)
             with c1: status = st.selectbox("Status", ["Watchlist", "Active", "Closed"])
-            with c2: entry_range = st.text_input("Entry Range", value=parsed_data["entry"])
-            with c3: sl = st.text_input("Stop Loss", value=parsed_data["sl"])
+            with c2: entry_range = st.text_input("Entry Range/CMP", value=parsed_data["entry"])
+            with c3: sl = st.text_input("Stop Loss (SL)", value=parsed_data["sl"])
             with c4: t1 = st.text_input("Target 1", value=parsed_data["t1"])
             
-            t2 = st.text_input("Target 2", value=parsed_data["t2"], label_visibility="collapsed", placeholder="Target 2 (Optional)")
-            add_levels = st.text_input("Add-On Levels", value=parsed_data["add_levels"], label_visibility="collapsed", placeholder="Add-On Levels (Optional)")
-            emotions = st.text_input("Psychology", placeholder="Emotions at Entry (FOMO, Calm, etc.)")
-            rationale = st.text_area("Rationale", placeholder="Why are you taking this trade?", height=68)
+            tc1, tc2, tc3 = st.columns([2, 2, 4])
+            with tc1: t2 = st.text_input("Target 2", value=parsed_data["t2"], placeholder="Target 2")
+            with tc2: add_levels = st.text_input("Add-On Levels", value=parsed_data["add_levels"], placeholder="Add-On Levels")
+            with tc3: emotions = st.text_input("Psychology", placeholder="Emotions at Entry")
             
-            if st.form_submit_button("Submit to Database", type="primary", use_container_width=True):
+            # --- EXTENDED METADATA INPUTS FOR SPOT EQUITY CHECKS ---
+            xc1, xc2 = st.columns(2)
+            with xc1: timeframe_val = st.text_input("Horizon Time Frame (TF)", value=parsed_data["tf"], placeholder="e.g. 2 Months, 1 Year")
+            with xc2: rating_val = st.text_input("Setup Strategic Rating", value=parsed_data["rating"], placeholder="e.g. 8.75/10")
+            
+            with st.expander("🔎 Verify Original Raw Tip Text"):
+                raw_tip_captured = st.text_area("Original Text File Log", value=parsed_data["raw_text"], height=70)
+                rationale = st.text_area("Execution Logic/Rationale", placeholder="Notes...", height=60)
+            
+            if st.form_submit_button("Submit Entry to Google Sheet Database", type="primary", use_container_width=True):
                 final_source = custom_source.strip() if custom_source.strip() else source_sel
-                
                 new_row = [""] * len(sheet_headers)
+                
                 def set_val(col_name, val):
                     if col_name in sheet_headers: new_row[sheet_headers.index(col_name)] = val
                 
-                set_val("Trade Date", date)
-                set_val("Idea Source (Chartink/Telegram/X/Self)", final_source)
-                set_val("Symbol / Asset", symbol)
-                set_val("Trade Type (Eq/Option)", trade_type)
-                set_val("Exchange", exchange)
-                set_val("Security ID", sec_id)
-                set_val("Status (Watch/Active/Closed)", status)
-                set_val("Entry CMP / Range", entry_range)
-                set_val("Add-On / Dip Levels", add_levels)
-                set_val("Stop Loss (SL)", sl)
-                set_val("Target 1", t1)
-                set_val("Target 2", t2)
+                set_val("Trade Date", date); set_val("Idea Source (Chartink/Telegram/X/Self)", final_source)
+                set_val("Symbol / Asset", symbol); set_val("Trade Type (Eq/Option)", trade_type)
+                set_val("Exchange", exchange); set_val("Security ID", sec_id)
+                set_val("Status (Watch/Active/Closed)", status); set_val("Entry CMP / Range", entry_range)
+                set_val("Add-On / Dip Levels", add_levels); set_val("Stop Loss (SL)", sl)
+                set_val("Target 1", t1); set_val("Target 2", t2)
                 set_val("Strategic Rationale (Why I took it)", rationale)
                 set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
+                
+                # Push extended metrics to database structure
+                set_val("Time Frame", timeframe_val)
+                set_val("Setup Rating", rating_val)
+                set_val("Raw Tip Text", raw_tip_captured)
                 
                 worksheet.append_row(new_row)
                 st.session_state.qp_key += 1
                 st.rerun()
 
     with tab2:
-        st.caption("Paste a massive block of raw tips here to bulk-process them into your Watchlist.")
+        st.caption("Paste a sequence of text tips block to batch process standard items directly to Watchlist layout.")
         c1, c2 = st.columns(2)
-        with c1: bulk_source_sel = st.selectbox("Source:", source_options, key="bulk_src") # Dynamic Dropdown List
-        with c2: bulk_custom_source = st.text_input("Custom Source (Overrides Dropdown):", key="bulk_cust_src")
-        bulk_text = st.text_area("Raw Text Block:", height=200)
+        with c1: bulk_source_sel = st.selectbox("Source Reference:", source_options, key="bulk_src")
+        with c2: bulk_custom_source = st.text_input("Custom Override:", key="bulk_cust_src")
+        bulk_text = st.text_area("Bulk Text Block Parsing Window:", height=200)
         
-        if st.button("Process Bulk Upload", type="primary", use_container_width=True):
+        if st.button("Execute Bulk Portfolio Upload", type="primary", use_container_width=True):
             final_bulk_source = bulk_custom_source.strip() if bulk_custom_source.strip() else bulk_source_sel
             raw_lines = [line.strip() for line in bulk_text.split('\n') if line.strip()]
             unique_lines = list(dict.fromkeys(raw_lines))
@@ -133,6 +135,9 @@ def trade_entry_modal(worksheet, sheet_headers):
                 set_v("Stop Loss (SL)", p_data['sl'])
                 set_v("Target 1", p_data['t1'])
                 set_v("Target 2", p_data['t2'])
+                set_v("Time Frame", p_data['tf'])
+                set_v("Setup Rating", p_data['rating'])
+                set_v("Raw Tip Text", line)
                 
                 rows_to_insert.append(row)
                 
