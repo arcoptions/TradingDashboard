@@ -7,6 +7,7 @@ import plotly.express as px
 import analytics
 import database as db
 import broker_api as api
+import derivatives_engine as de # <-- IMPORTING YOUR NEW MATHEMATICAL ENGINE
 
 SECTOR_MAP = {
     "RELIANCE": "Oil & Gas", "TCS": "IT Services", "HDFCBANK": "Banking", "ICICIBANK": "Banking", 
@@ -32,10 +33,12 @@ def format_index_display(name, raw_val):
         lp, diff, pct = parts
         diff_f, pct_f = float(diff), float(pct)
         if diff_f == 0 and pct_f == 0:
-            return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span>"
-        sign = "+" if diff_f > 0 else ""
-        color = "#089981" if diff_f >= 0 else "#F23645" 
-        arrow = "▲" if diff_f >= 0 else "▼"
+            color = "#64748B" 
+            sign, arrow = "", ""
+        else:
+            sign = "+" if diff_f > 0 else ""
+            color = "#089981" if diff_f >= 0 else "#F23645" 
+            arrow = "▲" if diff_f >= 0 else "▼"
         return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
     return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
 
@@ -133,9 +136,71 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             if not trade_rows.empty:
                 trade_data = trade_rows.iloc[0]
                 sheet_row_id = int(trade_data['_Sheet_Row'])
-                st.subheader(f"Trade Review: {trade_data['Symbol / Asset']}")
+                asset_symbol = trade_data['Symbol / Asset']
+                st.subheader(f"Trade Review: {asset_symbol}")
                 
-                # --- RESTORED CANVAS COMPONENTS ---
+                # ==========================================================
+                # DERIVATIVES & GREEKS ENGINE INJECTION
+                # ==========================================================
+                contract_meta = de.parse_option_contract(asset_symbol)
+                
+                # Check if this is an Option contract (not spot equity)
+                if contract_meta and str(trade_data.get('Trade Type (Eq/Option)', '')).lower() in ['option', 'fno']:
+                    st.markdown("### 🎟️ Derivatives Profile & Greeks")
+                    
+                    # 1. Fetching Variables 
+                    try: live_option_price = float(trade_data.get('Live Price', 0))
+                    except: live_option_price = 0.0
+                    
+                    # Placeholder Spot Price: Until we build the fundamental stock tracker, 
+                    # we approximate Spot Price = Strike Price so the math doesn't break.
+                    underlying_spot_price = contract_meta['strike'] 
+                    
+                    risk_free_rate = 0.07 # 7% Risk-Free Rate benchmark in India
+                    
+                    # 2. Implied Volatility Calculation
+                    derived_iv = de.implied_volatility(
+                        target_price=live_option_price,
+                        S=underlying_spot_price,
+                        K=contract_meta['strike'],
+                        T=contract_meta['time_years'],
+                        r=risk_free_rate,
+                        option_type=contract_meta['type']
+                    )
+                    
+                    # 3. Delta and Theta Calculations
+                    greeks = de.calculate_greeks(
+                        S=underlying_spot_price,
+                        K=contract_meta['strike'],
+                        T=contract_meta['time_years'],
+                        r=risk_free_rate,
+                        sigma=derived_iv / 100.0,
+                        option_type=contract_meta['type']
+                    )
+                    
+                    # 4. Open Interest Buildup (Placeholder logic to be wired to Dhan API)
+                    oi_buildup_lbl, oi_color = de.compute_oi_buildup(price_change_pct=-1.5, oi_change_pct=4.2)
+                    
+                    # 5. UI Layout
+                    g_col1, g_col2, g_col3, g_col4 = st.columns(4)
+                    with g_col1:
+                        st.metric("Delta (Δ)", f"{greeks['delta']}")
+                        st.caption("Price Sensitivity")
+                    with g_col2:
+                        st.metric("Theta (Θ)", f"{greeks['theta']} ₹")
+                        st.caption(f"1-Day Premium Decay. Expiry: {contract_meta['expiry_date']}")
+                    with g_col3:
+                        st.metric("Implied Volatility (IV)", f"{derived_iv}%")
+                        st.caption("Pricing Congestion Band")
+                    with g_col4:
+                        st.markdown(f"**OI Buildup Matrix**<br><span style='font-size:20px; font-weight:bold; color:{oi_color};'>{oi_buildup_lbl}</span>", unsafe_allow_html=True)
+                        st.caption("Market Maker Momentum")
+                        
+                    st.divider()
+                
+                # ==========================================================
+                # STANDARD METRICS & ADVANCED REPAIR TOOL
+                # ==========================================================
                 with st.container(border=True):
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
@@ -195,7 +260,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             st.success("Database synchronized.")
                             st.rerun()
                 
-                # Render Unlink button at the very bottom
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("Unlink Review Canvas", use_container_width=True): close_journal(); st.rerun()
             else: st.error("Row connection failure.")
