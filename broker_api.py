@@ -56,7 +56,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         if not daily_token: return "Missing Dynamic Authorization Token"
     except Exception as e: return f"Database Read Failure: {e}"
         
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13, 26000, 1]}
+    # Standardized Index Security IDs: Nifty 50 (13), Bank Nifty (25), Sensex (51)
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": [13, 25, 51], "BSE_IDX": [51]}
     row_map = [] 
     
     try:
@@ -110,17 +111,25 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            if "IDX_I" in data:
-                def get_idx_data(s_id):
-                    item = data["IDX_I"].get(str(s_id), {})
-                    lp, cp = item.get("last_price"), item.get("ohlc", {}).get("close")
-                    if lp and cp and float(cp) > 0:
-                        diff = float(lp) - float(cp)
-                        pct = (diff / float(cp)) * 100
-                        return f"{float(lp):.2f},{diff:.2f},{pct:.2f}"
-                    return str(lp) if lp else "-"
+            # Extract Index Data safely preventing KeyError crashes
+            def get_idx_data(s_id, segment="IDX_I"):
+                item = data.get(segment, {}).get(str(s_id), {})
+                lp = item.get("last_price")
+                cp = item.get("previous_close")
+                if not cp: cp = item.get("ohlc", {}).get("close")
+                
+                if lp and cp and float(cp) > 0:
+                    diff = float(lp) - float(cp)
+                    pct = (diff / float(cp)) * 100
+                    return f"{float(lp):.2f},{diff:.2f},{pct:.2f}"
+                return str(lp) if lp else "-"
 
-                settings_sheet.update([["Nifty 50", get_idx_data(13)], ["Bank Nifty", get_idx_data(26000)], ["Sensex", get_idx_data(1)]], "A5:B7")
+            n_price = get_idx_data(13, "IDX_I")
+            bn_price = get_idx_data(25, "IDX_I")
+            sx_price = get_idx_data(51, "BSE_IDX")
+            if sx_price == "-": sx_price = get_idx_data(51, "IDX_I") 
+                
+            settings_sheet.update([["Nifty 50", n_price], ["Bank Nifty", bn_price], ["Sensex", sx_price]], "A5:B7")
 
             ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             settings_sheet.update_acell('B3', ist_now.strftime("%d-%b %I:%M %p"))
@@ -144,7 +153,6 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     credentials = Credentials.from_service_account_info(gcp_creds_dict, scopes=scopes)
                     gc = gspread.authorize(credentials)
                     sh = gc.open("Comprehensive Trading Tracker 2026")
-                    
                     bg_worksheet, bg_scanner_sheet, bg_settings_sheet = sh.sheet1, sh.worksheet("Scanners"), sh.worksheet("Settings")
                     
                     try: sleep_timer = int(bg_settings_sheet.acell('B8').value)
