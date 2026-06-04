@@ -50,17 +50,17 @@ def render_tv_chart(symbol):
 
 @st.cache_data(ttl=60)
 def fetch_live_heatmap():
-    """Unblockable TradingView fetcher for Sectoral Heatmap Indices"""
+    """Unblockable TradingView fetcher using highly liquid Sector ETFs & Equities to bypass Index restrictions"""
     sectors = {
-        "Financial Services": {"ticker": "NSE:NIFTY_FIN_SERVICE", "weight": 35.0},
-        "IT": {"ticker": "NSE:NIFTY_IT", "weight": 14.5},
-        "Oil & Gas / Energy": {"ticker": "NSE:NIFTY_ENERGY", "weight": 12.0},
-        "FMCG": {"ticker": "NSE:NIFTY_FMCG", "weight": 9.0},
-        "Auto": {"ticker": "NSE:NIFTY_AUTO", "weight": 7.0},
-        "Pharma": {"ticker": "NSE:NIFTY_PHARMA", "weight": 5.0},
-        "Metal": {"ticker": "NSE:NIFTY_METAL", "weight": 4.0},
-        "Realty": {"ticker": "NSE:NIFTY_REALTY", "weight": 1.0},
-        "Media": {"ticker": "NSE:NIFTY_MEDIA", "weight": 0.5}
+        "Financials (BANKBEES)": {"ticker": "NSE:BANKBEES", "weight": 35.0},
+        "IT (ITBEES)": {"ticker": "NSE:ITBEES", "weight": 14.5},
+        "Energy (RELIANCE)": {"ticker": "NSE:RELIANCE", "weight": 12.0},
+        "FMCG (FMCGIETF)": {"ticker": "NSE:FMCGIETF", "weight": 9.0},
+        "Auto (AUTOIETF)": {"ticker": "NSE:AUTOIETF", "weight": 7.0},
+        "Pharma (PHARMABEES)": {"ticker": "NSE:PHARMABEES", "weight": 5.0},
+        "Metal (TATASTEEL)": {"ticker": "NSE:TATASTEEL", "weight": 4.0},
+        "Realty (DLF)": {"ticker": "NSE:DLF", "weight": 1.0},
+        "Media (ZEEL)": {"ticker": "NSE:ZEEL", "weight": 0.5}
     }
     payload = {"symbols": {"tickers": [v["ticker"] for v in sectors.values()]}, "columns": ["change"]}
     try:
