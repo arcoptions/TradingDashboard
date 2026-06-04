@@ -66,7 +66,7 @@ def resolve_instrument(parsed_sym):
 
 def get_option_chain_metrics(asset_symbol, daily_token=None):
     """
-    Queries Dhan v2 Option Chain. Includes dynamic expiry resolver to prevent calendar mismatches.
+    Queries Dhan v2 Option Chain. Includes dynamic expiry resolver and Strike PCR logic.
     """
     import derivatives_engine as de
     contract_meta = de.parse_option_contract(asset_symbol)
@@ -100,7 +100,7 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
         'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
 
-    # 1. Dynamic Expiry Resolver: Gets the official expiry from Dhan's backend
+    # Dynamic Expiry Resolver
     valid_expiry = fallback_expiry
     try:
         exp_res = requests.post(
@@ -116,7 +116,6 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
             
             matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == t_year and datetime.datetime.strptime(e, "%Y-%m-%d").month == t_month]
             if matching_expiries:
-                # Uses the latest expiry date available for that month (Monthly Expiry)
                 valid_expiry = max(matching_expiries) 
     except Exception as e:
         print(f"Expiry Fetch Error: {e}")
@@ -161,7 +160,6 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
                     if target_node:
                         greeks = target_node.get("greeks", {})
                         metrics_map.update({
-                            # CORRECTED KEY: Extracts authentic IV from the API
                             "implied_volatility": float(target_node.get("implied_volatility", 0.0)),
                             "delta": float(greeks.get("delta", 0)),
                             "theta": float(greeks.get("theta", 0)),
