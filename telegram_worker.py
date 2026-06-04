@@ -43,11 +43,20 @@ TRACKED_CHANNELS = [
 ]
 
 def get_secrets():
-    try:
+    """Safely extracts secrets whether hosted on Streamlit or Render."""
+    # 1. Try the Render-friendly root path first
+    if os.path.exists("secrets.toml"):
+        with open("secrets.toml", "r") as f:
+            return toml.load(f)
+            
+    # 2. Fallback to Streamlit's hidden directory (for local testing)
+    elif os.path.exists(".streamlit/secrets.toml"):
         with open(".streamlit/secrets.toml", "r") as f:
             return toml.load(f)
-    except FileNotFoundError:
-        print("❌ Secrets file not found.")
+            
+    # 3. Crash gracefully if neither exist
+    else:
+        print("❌ Secrets file not found. Ensure 'secrets.toml' is uploaded to Render.")
         return None
 
 def init_sheet_connection(secrets):
