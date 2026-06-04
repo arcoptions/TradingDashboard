@@ -65,7 +65,7 @@ def resolve_instrument(parsed_sym):
 
 def get_option_chain_metrics(asset_symbol, daily_token=None):
     """
-    Directly queries Dhan's v2 Option Chain API to fetch live institutional Greeks and IV.
+    Queries Dhan v2 Option Chain to parse Strike PCR, Overall PCR, and extract recommended strikes.
     """
     import derivatives_engine as de
     contract_meta = de.parse_option_contract(asset_symbol)
@@ -112,18 +112,47 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
             data_obj = res.json()["data"]
             oc_dict = data_obj.get("oc", {})
             
+            total_call_oi, total_put_oi = 0.0, 0.0
+            metrics_map = {
+                "implied_volatility": 0.0, "delta": 0.0, "theta": 0.0,
+                "strike_pcr": 0.0, "overall_pcr": 1.0, "best_ce": "-", "best_pe": "-"
+            }
+            
+            ce_pool, pe_pool = [], []
+            
             for strike_str, strike_data in oc_dict.items():
                 node_strike = float(strike_str)
+                ce_node = strike_data.get("ce", {})
+                pe_node = strike_data.get("pe", {})
+                
+                c_oi = float(ce_node.get("oi", 0) if ce_node else 0)
+                p_oi = float(pe_node.get("oi", 0) if pe_node else 0)
+                
+                total_call_oi += c_oi
+                total_put_oi += p_oi
+                
+                if c_oi > 0: ce_pool.append({"strike": node_strike, "oi": c_oi})
+                if p_oi > 0: pe_pool.append({"strike": node_strike, "oi": p_oi})
+                
                 if abs(node_strike - strike) < 0.1:
                     target_node = strike_data.get(opt_type)
                     if target_node:
                         greeks = target_node.get("greeks", {})
-                        return {
-                            # Fix: Safely parses 'iv' key exactly as output by Dhan API
+                        metrics_map.update({
                             "implied_volatility": float(target_node.get("iv", 0.0)),
                             "delta": float(greeks.get("delta", 0)),
-                            "theta": float(greeks.get("theta", 0))
-                        }
+                            "theta": float(greeks.get("theta", 0)),
+                            "strike_pcr": round(p_oi / c_oi, 2) if c_oi > 0 else 0.0
+                        })
+            
+            metrics_map["overall_pcr"] = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
+            
+            if ce_pool:
+                metrics_map["best_ce"] = sorted(ce_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
+            if pe_pool:
+                metrics_map["best_pe"] = sorted(pe_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
+                
+            return metrics_map
     except Exception as e:
         print(f"Dhan Option Chain Fetch Error: {e}")
     return {}
