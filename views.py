@@ -50,37 +50,50 @@ def render_tv_chart(symbol):
 
 @st.cache_data(ttl=60)
 def fetch_live_heatmap():
-    """Fetches official NSE Sectoral Indices directly from NSE to avoid ETF proxies."""
-    sectors = {
-        "Financial Services": {"symbol": "NIFTY BANK", "weight": 35.0},
-        "IT": {"symbol": "NIFTY IT", "weight": 14.5},
-        "Oil & Gas / Energy": {"symbol": "NIFTY ENERGY", "weight": 12.0},
-        "FMCG": {"symbol": "NIFTY FMCG", "weight": 9.0},
-        "Auto": {"symbol": "NIFTY AUTO", "weight": 7.0},
-        "Pharma": {"symbol": "NIFTY PHARMA", "weight": 5.0},
-        "Metal": {"symbol": "NIFTY METAL", "weight": 4.0},
-        "Realty": {"symbol": "NIFTY REALTY", "weight": 1.0},
-        "Media": {"symbol": "NIFTY MEDIA", "weight": 0.5}
+    """Hierarchical Institutional Pipeline: Fetches top constituents for requested indices and maps market cap dynamically."""
+    indices = {
+        "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE"],
+        "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND"],
+        "Finnifty": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "CHOLAFIN", "PFC", "RECLTD"],
+        "Nifty Bank": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK"],
+        "Nifty IT": ["INFY", "TCS", "HCLTECH", "WIPRO", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS"],
+        "Nifty FMCG": ["ITC", "HINDUNILVR", "NESTLEIND", "BRITANNIA", "TATACONSUM", "GODREJCP", "DABUR", "VBL", "MARICO"],
+        "Nifty Auto": ["TATAMOTORS", "M_M", "MARUTI", "BAJAJ_AUTO", "EICHERMOT", "TVSMOTOR", "HEROMOTOCO", "BOSCHLTD"],
+        "Nifty Energy": ["RELIANCE", "NTPC", "ONGC", "POWERGRID", "COALINDIA", "TATAPOWER", "IOC", "BPCL"],
+        "Nifty Metal": ["TATASTEEL", "JSWSTEEL", "HINDALCO", "COALINDIA", "VEDL", "JINDALSTEL", "SAIL", "NMDC"],
+        "Nifty Pharma": ["SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "AUROPHARMA", "MANKIND", "TORNTPHARM"],
+        "Nifty Healthcare": ["SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "MAXHEALTH", "APOLLOHOSP", "SYNGENE"],
+        "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE"]
     }
+    
+    all_tickers = set()
+    for stocks in indices.values():
+        for s in stocks:
+            all_tickers.add(f"NSE:{s}")
+            
+    payload = {
+        "symbols": {"tickers": list(all_tickers)},
+        "columns": ["change", "market_cap_basic"]
+    }
+    
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=5)
-        res = session.get("https://www.nseindia.com/api/allIndices", headers=headers, timeout=5)
-        
-        if res.status_code == 200:
-            data = res.json().get("data", [])
-            data_map = {item["indexSymbol"]: item["percentChange"] for item in data}
-            return pd.DataFrame([
-                {"sector": name, "change": float(data_map.get(info["symbol"], 0.0)), "weight": info["weight"]}
-                for name, info in sectors.items()
-            ])
+        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=5)
+        if res.status_code == 200 and res.json().get("data"):
+            data_map = {item["s"].split(":")[1]: {"change": item["d"][0], "mcap": item["d"][1] or 1000} for item in res.json()["data"]}
+            
+            rows = []
+            for index_name, stocks in indices.items():
+                for s in stocks:
+                    if s in data_map:
+                        rows.append({
+                            "Index": index_name,
+                            "Stock": s.replace('_', '-').replace('HINDUNILVR', 'HUL').replace('LT', 'L&T'),
+                            "Change": round(data_map[s]["change"], 2) if data_map[s]["change"] else 0.0,
+                            "MarketCap": float(data_map[s]["mcap"])
+                        })
+            return pd.DataFrame(rows)
     except Exception as e:
-        print(f"Index Engine Error: {e}")
+        print(f"Heatmap Engine Error: {e}")
     return pd.DataFrame()
 
 @st.cache_data(ttl=15)
@@ -347,18 +360,30 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_options: render_asset_dashboard(df_options, "Options")
             with tab_heatmap: 
                 st.markdown("#### Live NIFTY Sector Performance")
-                st.caption("Powered by Official NSE Live Feed")
+                st.caption("Hierarchical Market Map: **Click on any sector to drill down to its constituent stocks.**")
                 if st.button("Refresh Market Map", use_container_width=True, key="sync_heatmap"): 
                     fetch_live_heatmap.clear()
                 
                 df_heat = fetch_live_heatmap()
                 if not df_heat.empty:
-                    fig = px.treemap(df_heat, path=['sector'], values='weight', color='change', color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
-                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", customdata=df_heat[['change']], textfont=dict(size=16))
-                    fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=500)
+                    fig = px.treemap(
+                        df_heat, 
+                        path=['Index', 'Stock'], 
+                        values='MarketCap', 
+                        color='Change', 
+                        color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], 
+                        color_continuous_midpoint=0
+                    )
+                    fig.update_traces(
+                        textinfo="label+text", 
+                        texttemplate="%{label}<br><b>%{color:.2f}%</b>", 
+                        textfont=dict(size=15),
+                        hovertemplate="<b>%{label}</b><br>Change: %{color:.2f}%<extra></extra>"
+                    )
+                    fig.update_layout(margin=dict(t=30, l=10, r=10, b=10), height=700)
                     st.plotly_chart(fig, use_container_width=True)
                 else: 
-                    st.info("Market map data is synchronizing from NSE...")
+                    st.info("Market map data is synchronizing from backend...")
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
