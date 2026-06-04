@@ -4,6 +4,7 @@ import pandas as pd
 import re
 import json
 import requests
+import inspect
 from datetime import datetime
 import plotly.express as px
 import analytics
@@ -30,6 +31,7 @@ SECTOR_MAP = {
     "NIFTY": "Market Index", "BANKNIFTY": "Sector Index"
 }
 
+# The 12 requested Indices and their heaviest components
 INDEX_CONSTITUENTS = {
     "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA"],
     "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
@@ -63,36 +65,27 @@ def render_tv_chart(symbol):
     """
     components.html(html, height=400)
 
-def fetch_live_index_constituents(index_name):
-    """Fetches real-time constituent details sorted by market capitalization from TradingView Scanner API"""
-    tickers = INDEX_CONSTITUENTS.get(index_name, [])
-    if not tickers: return pd.DataFrame()
-    
-    tv_tickers = [f"NSE:{t}" for t in tickers]
-    payload = {"symbols": {"tickers": tv_tickers}, "columns": ["change", "close", "market_cap_basic"]}
-    
+@st.cache_data(ttl=60)
+def fetch_all_sectors_data():
+    """Batches all 110+ stocks across 12 indices into a single unblockable request"""
+    all_tickers = set()
+    for stocks in INDEX_CONSTITUENTS.values():
+        for s in stocks: all_tickers.add(f"NSE:{s}")
+        
+    payload = {"symbols": {"tickers": list(all_tickers)}, "columns": ["change", "close", "market_cap_basic"]}
     try:
         res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=5)
         if res.status_code == 200 and res.json().get("data"):
-            rows = []
-            for item in res.json()["data"]:
-                name = item["s"].split(":")[1].replace('_', '-').replace('HINDUNILVR', 'HUL')
-                d = item["d"]
-                raw_mcap = d[2] if d[2] is not None else 0
-                mcap_crores = round(raw_mcap / 10000000, 2)
-                
-                rows.append({
-                    "Stock": name,
-                    "Market Cap (Cr)": mcap_crores,
-                    "LTP (₹)": round(d[1], 2) if d[1] is not None else 0.0,
-                    "Change %": round(d[0], 2) if d[0] is not None else 0.0
-                })
-            df = pd.DataFrame(rows)
-            if not df.empty:
-                return df.sort_values(by="Market Cap (Cr)", ascending=False).reset_index(drop=True)
+            return {
+                item["s"].split(":")[1]: {
+                    "change": item["d"][0], 
+                    "ltp": item["d"][1], 
+                    "mcap": item["d"][2]
+                } for item in res.json()["data"]
+            }
     except Exception as e:
-        print(f"Constituent Processing Failure: {e}")
-    return pd.DataFrame()
+        print(f"Master Heatmap Engine Error: {e}")
+    return {}
 
 @st.cache_data(ttl=15)
 def batch_fetch_intelligence(symbols_list):
@@ -335,72 +328,127 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             with tab_options: render_asset_dashboard(df_options, "Options")
+            
+            # --- THE NEW CLICKABLE MASTER-DETAIL HEATMAP ---
             with tab_heatmap: 
-                st.markdown("#### Live NIFTY Sector Performance")
+                if "active_heatmap_sector" not in st.session_state:
+                    st.session_state.active_heatmap_sector = None
+
+                all_data = fetch_all_sectors_data()
                 
-                # Dynamic Index Navigation Bar
-                target_indices = list(INDEX_CONSTITUENTS.keys())
-                selected_index = st.selectbox("Select Index Tracker Matrix:", options=target_indices, key="heatmap_index_active")
+                if not all_data:
+                    st.info("Market map data is synchronizing from backend...")
                 
-                with st.spinner(f"Querying live underlying data fields for {selected_index}..."):
-                    df_constituents = fetch_live_index_constituents(selected_index)
-                
-                if not df_constituents.empty:
-                    # 1. Calculate Advance / Decline parameters
-                    advances_df = df_constituents[df_constituents["Change %"] > 0]
-                    declines_df = df_constituents[df_constituents["Change %"] < 0]
+                elif st.session_state.active_heatmap_sector is None:
+                    # LEVEL 1: High-Level Sector Treemap
+                    st.markdown("#### Live NIFTY Sector Performance")
+                    st.caption("Click on any sector below to drill down to its constituent stocks.")
+                    if st.button("Refresh Market Map", use_container_width=True): 
+                        fetch_all_sectors_data.clear()
+                        st.rerun()
+
+                    # Calculate Averages for the Treemap
+                    sector_weights = {"Nifty 50": 100, "Nifty Bank": 80, "Nifty IT": 60, "Nifty Next 50": 50, "Nifty Auto": 40, "Nifty FMCG": 40, "Nifty Energy": 40, "Nifty Metal": 30, "Nifty Pharma": 30, "Finnifty": 30, "Nifty Healthcare": 20, "Nifty Realty": 10}
+                    sector_data = []
+                    for sec, stocks in INDEX_CONSTITUENTS.items():
+                        chgs = [all_data[s]["change"] for s in stocks if s in all_data and all_data[s]["change"] is not None]
+                        avg_chg = sum(chgs)/len(chgs) if chgs else 0.0
+                        sector_data.append({"Sector": sec, "Change": avg_chg, "Weight": sector_weights.get(sec, 30)})
+                        
+                    df_sectors = pd.DataFrame(sector_data)
                     
-                    total_count = len(df_constituents)
-                    adv_count = len(advances_df)
-                    dec_count = len(declines_df)
-                    flat_count = total_count - (adv_count + dec_count)
-                    
-                    adv_pct = (adv_count / total_count) * 100 if total_count > 0 else 0
-                    dec_pct = (dec_count / total_count) * 100 if total_count > 0 else 0
-                    flat_pct = (flat_count / total_count) * 100 if total_count > 0 else 0
-                    
-                    avg_change = round(df_constituents["Change %"].mean(), 2)
-                    idx_color = "#089981" if avg_change >= 0 else "#F23645"
-                    sign = "+" if avg_change > 0 else ""
-                    
-                    # 2. Header metrics layout block
-                    st.markdown(f"""
-                    <div style='margin-bottom:15px;'>
-                        <span style='font-size:20px; font-weight:700; color:#0F172A;'>{selected_index} Constituents</span>
-                        &nbsp;&nbsp;<span style='font-size:18px; font-weight:800; color:{idx_color};'>{sign}{avg_change}%</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # 3. Custom HTML Dhan-style Advance/Decline Market Breath Bar
-                    st.markdown(f"""
-                    <div style='margin-bottom: 20px; padding: 12px; border: 1px solid #E2E8F0; border-radius: 8px; background-color: #F8FAFC;'>
-                        <div style='display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;'>
-                            <span style='color: #089981;'>🔵 Advance: {adv_count}</span>
-                            <span style='color: #64748B;'>⚪ Flat: {flat_count}</span>
-                            <span style='color: #F23645;'>🔴 Decline: {dec_count}</span>
-                        </div>
-                        <div style='width: 100%; background-color: #E2E8F0; height: 10px; border-radius: 5px; display: flex; overflow: hidden;'>
-                            <div style='width: {adv_pct}%; background-color: #089981; height: 100%;'></div>
-                            <div style='width: {flat_pct}%; background-color: #94A3B8; height: 100%;'></div>
-                            <div style='width: {dec_pct}%; background-color: #F23645; height: 100%;'></div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # 4. Render High Density Constituents Data Grid
-                    st.dataframe(
-                        df_constituents,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Stock": st.column_config.TextColumn("Stock Asset"),
-                            "Market Cap (Cr)": st.column_config.NumberColumn("Market Cap (Cr)", format="%d"),
-                            "LTP (₹)": st.column_config.NumberColumn("LTP (₹)", format="%.2f"),
-                            "Change %": st.column_config.NumberColumn("Change %", format="%+.2f")
-                        }
+                    fig = px.treemap(
+                        df_sectors, path=['Sector'], values='Weight', color='Change', 
+                        color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
                     )
+                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{color:.2f}%</b>", textfont=dict(size=16), hoverinfo="none")
+                    fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=450)
+                    
+                    # Modern Click Listener (Fallback handled safely)
+                    if "on_select" in inspect.signature(st.plotly_chart).parameters:
+                        event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="treemap")
+                        if event and isinstance(event, dict) and "selection" in event and event["selection"].get("points"):
+                            clicked_label = event["selection"]["points"][0].get("label")
+                            if clicked_label in INDEX_CONSTITUENTS:
+                                st.session_state.active_heatmap_sector = clicked_label
+                                st.rerun()
+                    else:
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # Guaranteed Click Fallback Grid for Mobile & Older Browsers
+                    st.markdown("##### Quick Select")
+                    btn_cols = st.columns(4)
+                    for i, row in df_sectors.sort_values(by="Change", ascending=False).iterrows():
+                        with btn_cols[i % 4]:
+                            clr = "🟢" if row['Change'] >= 0 else "🔴"
+                            sgn = "+" if row['Change'] > 0 else ""
+                            if st.button(f"{clr} {row['Sector']} \n {sgn}{row['Change']:.2f}%", use_container_width=True):
+                                st.session_state.active_heatmap_sector = row['Sector']
+                                st.rerun()
+                
                 else:
-                    st.info("Market data array parsing is initializing...")
+                    # LEVEL 2: Detailed Constituent Drill-Down
+                    selected_index = st.session_state.active_heatmap_sector
+                    st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
+                    
+                    # Compile local data safely
+                    rows = []
+                    for s in INDEX_CONSTITUENTS[selected_index]:
+                        if s in all_data:
+                            d = all_data[s]
+                            rows.append({"Stock": s.replace('_', '-').replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(d["mcap"]/10000000, 2) if d["mcap"] else 0.0, "LTP (₹)": d["ltp"], "Change %": d["change"]})
+                    
+                    df_constituents = pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False).reset_index(drop=True)
+                    
+                    if not df_constituents.empty:
+                        advances_df = df_constituents[df_constituents["Change %"] > 0]
+                        declines_df = df_constituents[df_constituents["Change %"] < 0]
+                        
+                        total_count = len(df_constituents)
+                        adv_count = len(advances_df)
+                        dec_count = len(declines_df)
+                        flat_count = total_count - (adv_count + dec_count)
+                        
+                        adv_pct = (adv_count / total_count) * 100 if total_count > 0 else 0
+                        dec_pct = (dec_count / total_count) * 100 if total_count > 0 else 0
+                        flat_pct = (flat_count / total_count) * 100 if total_count > 0 else 0
+                        
+                        avg_change = round(df_constituents["Change %"].mean(), 2)
+                        idx_color = "#089981" if avg_change >= 0 else "#F23645"
+                        sign = "+" if avg_change > 0 else ""
+                        
+                        st.markdown(f"""
+                        <div style='margin-top:15px; margin-bottom:15px;'>
+                            <span style='font-size:24px; font-weight:700; color:#0F172A;'>{selected_index} Constituents</span>
+                            &nbsp;&nbsp;<span style='font-size:20px; font-weight:800; color:{idx_color};'>{sign}{avg_change}%</span>
+                        </div>
+                        <div style='margin-bottom: 20px; padding: 12px; border: 1px solid #E2E8F0; border-radius: 8px; background-color: #F8FAFC;'>
+                            <div style='display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;'>
+                                <span style='color: #089981;'>🔵 Advance: {adv_count}</span>
+                                <span style='color: #64748B;'>⚪ Flat: {flat_count}</span>
+                                <span style='color: #F23645;'>🔴 Decline: {dec_count}</span>
+                            </div>
+                            <div style='width: 100%; background-color: #E2E8F0; height: 10px; border-radius: 5px; display: flex; overflow: hidden;'>
+                                <div style='width: {adv_pct}%; background-color: #089981; height: 100%;'></div>
+                                <div style='width: {flat_pct}%; background-color: #94A3B8; height: 100%;'></div>
+                                <div style='width: {dec_pct}%; background-color: #F23645; height: 100%;'></div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.dataframe(
+                            df_constituents,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Stock": st.column_config.TextColumn("Stock Asset"),
+                                "Market Cap (Cr)": st.column_config.NumberColumn("Market Cap (Cr)", format="%d"),
+                                "LTP (₹)": st.column_config.NumberColumn("LTP (₹)", format="%.2f"),
+                                "Change %": st.column_config.NumberColumn("Change %", format="%+.2f")
+                            }
+                        )
+                    else:
+                        st.error("Constituent array parsing failed.")
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
