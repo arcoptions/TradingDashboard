@@ -285,27 +285,49 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     contract_meta = de.parse_option_contract(asset_symbol)
                     if contract_meta:
                         with st.container(border=True):
-                            st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
+                            st.markdown("**Derivatives Profile & Live Greeks (Dhan Feed)**")
                             
-                            # Safely extract Real Underlying Stock Price for correct OTM/ITM Greek Math
+                            # 1. Pull the real underlying stock price
                             underlying_ltp_raw = t_metrics.get("ltp", "-")
                             underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
                             
-                            greeks = de.calculate_greeks(
-                                S=underlying_px, # Now uses real stock price instead of forcing Strike Price!
-                                K=contract_meta['strike'], 
-                                T=contract_meta['time_years'], 
-                                r=0.07, 
-                                sigma=0.25, # Base realistic volatility approximation
-                                option_type=contract_meta['type']
-                            )
-                            g1, g2, g3, g4, g5 = st.columns(5)
-                            g1.metric("Delta", f"{greeks['delta']}")
-                            g2.metric("Theta", f"{greeks['theta']} INR")
-                            g3.metric("Underlying (Spot)", f"₹{underlying_px}") # Removed fake IV, replaced with useful underlying tracking
-                            g4.metric("PCR", "0.95")
-                            g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
-                    
+                            # 2. Fetch live authentic metrics directly from the paid Dhan API feed
+                            try:
+                                # Queries your broker API layer using the unique symbol identifier
+                                dhan_chain_data = api.get_option_chain_metrics(asset_symbol)
+                                live_iv = float(dhan_chain_data.get('implied_volatility', 0))
+                                live_delta = float(dhan_chain_data.get('delta', 0))
+                                live_theta = float(dhan_chain_data.get('theta', 0))
+                                api_success = True
+                            except Exception as e:
+                                # Fail-safe fallback to calculation engine if API experiences brief latency
+                                live_iv = 0.30  # Closer market approximation for high beta F&O names
+                                api_success = False
+
+                            if api_success:
+                                # Render genuine data streaming from Dhan's institutional feed
+                                g1, g2, g3, g4, g5 = st.columns(5)
+                                g1.metric("Delta", f"{live_delta:.3f}")
+                                g2.metric("Theta", f"{live_theta:.2f} INR")
+                                g3.metric("Underlying (Spot)", f"₹{underlying_px}")
+                                g4.metric("Live IV (Dhan)", f"{live_iv * 100:.2f}%")
+                                g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
+                            else:
+                                # Dynamic Black-Scholes calculation utilizing standard parameters if fallback occurs
+                                greeks = de.calculate_greeks(
+                                    S=underlying_px, 
+                                    K=contract_meta['strike'], 
+                                    T=contract_meta['time_years'], 
+                                    r=0.07, 
+                                    sigma=live_iv, 
+                                    option_type=contract_meta['type']
+                                )
+                                g1, g2, g3, g4, g5 = st.columns(5)
+                                g1.metric("Delta (Calc)", f"{greeks['delta']}")
+                                g2.metric("Theta (Calc)", f"{greeks['theta']} INR")
+                                g3.metric("Underlying (Spot)", f"₹{underlying_px}")
+                                g4.metric("Est. IV", f"{live_iv * 100:.0f}%")
+                                g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
                     with st.container(border=True):
                         st.markdown("**Market Intelligence**")
                         f1, f2, f3, f4, f5, f6 = st.columns(6)
