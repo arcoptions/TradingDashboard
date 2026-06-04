@@ -79,7 +79,6 @@ def fetch_all_sectors_data():
 
 @st.cache_data(ttl=15)
 def batch_fetch_intelligence(symbols_list):
-    """Parallelized Split-Batch Engine to prevent TV Scanner conflicts between Funda/Tech parameters"""
     results_map = {}
     if not symbols_list: return results_map
     clean_tickers = list(set([str(s).split('-')[0].strip().upper().replace("&", "_") for s in symbols_list]))
@@ -211,7 +210,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         except: existing_sources = []
         all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
         
-        # Safe Date Bounds Extraction
         min_d = datetime.today().date()
         max_d = datetime.today().date()
         if "Trade Date" in initial_df.columns:
@@ -236,7 +234,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         if isinstance(selected_date_range, tuple) and len(selected_date_range) == 2:
             filtered_df = filtered_df[(filtered_df["_Clean_Date"] >= selected_date_range[0]) & (filtered_df["_Clean_Date"] <= selected_date_range[1])]
         
-        # ─── EXACT REQUESTED COLUMN ORDER ───
         view_cols = [
             "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
             "Live Price", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
@@ -291,7 +288,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 st.write("")
                 
-                # ─── SPLIT WORKFLOW TABS ───
                 tab_init_research, tab_psych_exec = st.tabs(["Initial Research", "Psychology & Execution"])
                 
                 with tab_init_research:
@@ -332,13 +328,29 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         render_tv_chart(sym_key)
                 
                 with tab_psych_exec:
+                    st.markdown("#### Psychology & Trade Rationale")
                     with st.container(border=True):
-                        st.markdown("**Psychology & Trade Rationale Notes**")
-                        existing_notes = trade_data.get('Notes / Analysis', '') if 'Notes / Analysis' in trade_data else ''
-                        st.info(existing_notes if existing_notes.strip() else "No mental model notes captured for this setup yet.")
+                        curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                        curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
                         
+                        if curr_rationale.strip() and curr_rationale != 'nan':
+                            st.info(f"**Rationale:** {curr_rationale}")
+                        if curr_emotions.strip() and curr_emotions != 'nan':
+                            st.warning(f"**Emotions:** {curr_emotions}")
+                        if (not curr_rationale.strip() or curr_rationale == 'nan') and (not curr_emotions.strip() or curr_emotions == 'nan'):
+                            st.info("No mental model notes captured for this setup yet.")
+
+                        with st.expander("📝 Update Psychology Notes"):
+                            with st.form("psychology_update_form"):
+                                new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                                new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                                if st.form_submit_button("Save Notes", type="primary"):
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
+                                    st.rerun()
+                                    
+                    st.markdown("#### Execution & Asset Repair")
                     with st.container(border=True):
-                        st.markdown("**Execution Parameters & Repair Matrix**")
                         col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
                         col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
                         col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
@@ -353,6 +365,24 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
                             except: st.info("Awaiting execution conclusion exit parameters.")
                             
+                        with st.expander("🛠 Advanced Asset Repair Tool"):
+                            default_search = str(trade_data['Symbol / Asset']).split()[0]
+                            fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                            fix_results = api.search_instruments(fix_query)
+                            if not fix_results.empty:
+                                selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                                if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
+                                    fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                                    updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
+                                    updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
+                                    exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
+                                    updated_exch = "NSE_EQ" if exch == "NSE" and seg == "E" else "NSE_FNO"
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, updated_symbol)
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, updated_sec_id)
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, updated_exch)
+                                    st.session_state.viewing_trade = updated_symbol
+                                    st.rerun()
+
                 if st.button("Unlink Review Canvas", use_container_width=True):
                     st.session_state.viewing_trade = None
                     st.session_state.viewing_trade_row = None
@@ -417,11 +447,11 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", 
                         textfont=dict(size=16), 
                         hoverinfo="none",
-                        marker=dict(line=dict(width=3, color='#F1F5F9')),
+                        marker=dict(line=dict(width=3, color='#FFFFFF')),
                         root_color="rgba(0,0,0,0)"
                     )
                     fig.update_layout(
-                        margin=dict(t=10, l=10, r=10, b=10), 
+                        margin=dict(t=0, l=0, r=0, b=0), 
                         height=450,
                         paper_bgcolor='rgba(0,0,0,0)', 
                         plot_bgcolor='rgba(0,0,0,0)'
