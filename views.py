@@ -295,13 +295,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             underlying_ltp_raw = t_metrics.get("ltp", "-")
                             underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
                             
-                            try:
-                                dhan_chain_data = api.get_option_chain_metrics(asset_symbol, daily_token=daily_token)
+                            # Bulletproof Safe Dictionary Extraction
+                            dhan_chain_data = api.get_option_chain_metrics(asset_symbol, daily_token=daily_token)
+                            if isinstance(dhan_chain_data, dict) and dhan_chain_data:
                                 live_iv = float(dhan_chain_data.get('implied_volatility', 0))
                                 live_delta = float(dhan_chain_data.get('delta', 0))
                                 live_theta = float(dhan_chain_data.get('theta', 0))
                                 api_success = (live_iv > 0 or live_delta != 0)
-                            except Exception as e:
+                            else:
+                                live_iv, live_delta, live_theta = 0.0, 0.0, 0.0
                                 api_success = False
 
                             g1, g2, g3, g4, g5 = st.columns(5)
