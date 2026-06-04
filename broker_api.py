@@ -63,6 +63,67 @@ def resolve_instrument(parsed_sym):
         return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), ret_exch
     return parsed_sym, "", "NSE_EQ"
 
+def get_option_chain_metrics(asset_symbol, daily_token=None):
+    """
+    Directly queries Dhan's v2 Option Chain API to fetch live institutional Greeks and IV.
+    """
+    import derivatives_engine as de
+    contract_meta = de.parse_option_contract(asset_symbol)
+    if not contract_meta: return {}
+    
+    underlying = contract_meta["underlying"]
+    strike = contract_meta["strike"]
+    opt_type = contract_meta["type"]
+    expiry_date = contract_meta["expiry_date"]
+    
+    scrip_df = get_dhan_scrip_master()
+    if scrip_df.empty: return {}
+    
+    underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_SEGMENT'] == 'E')]
+    if underlying_df.empty:
+        underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_EXM_EXCH_ID'] == 'IDX')]
+        
+    if underlying_df.empty: return {}
+    
+    underlying_id = int(underlying_df.iloc[0]['SEM_SMST_SECURITY_ID'])
+    exch = underlying_df.iloc[0]['SEM_EXM_EXCH_ID']
+    underlying_seg = "IDX_I" if exch == 'IDX' else "NSE_EQ"
+    
+    if not daily_token:
+        daily_token = st.secrets["dhan"].get("access_token", "")
+        
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'access-token': daily_token,
+        'client-id': st.secrets["dhan"]["dhan_client_id"]
+    }
+    
+    payload = {
+        "underlyingScrip": underlying_id,
+        "underlyingSeg": underlying_seg,
+        "expiry": expiry_date
+    }
+    
+    try:
+        url = "https://api.dhan.co/v2/optionchain"
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200 and res.json().get("data"):
+            chain_list = res.json()["data"]
+            for node in chain_list:
+                node_strike = float(node.get("strikePrice", 0))
+                node_type = str(node.get("optionType", "")).upper()
+                if abs(node_strike - strike) < 0.1 and node_type == opt_type:
+                    greeks = node.get("greeks", {})
+                    return {
+                        "implied_volatility": float(node.get("impliedVolatility", 0)),
+                        "delta": float(greeks.get("delta", 0)),
+                        "theta": float(greeks.get("theta", 0))
+                    }
+    except Exception as e:
+        print(f"Dhan Option Chain Fetch Error: {e}")
+    return {}
+
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None):
     try:
         daily_token = settings_sheet.acell('B2').value
@@ -128,7 +189,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         opt_col_idx = sheet_headers.index("Live Price") + 1
         scan_col_idx = scanner_headers.index("Live Price") + 1
         
-        # Mapping the new OI & Price change indices dynamically
         price_chg_col_idx = sheet_headers.index("Price Chg %") + 1 if "Price Chg %" in sheet_headers else None
         oi_chg_col_idx = sheet_headers.index("OI Chg %") + 1 if "OI Chg %" in sheet_headers else None
         
@@ -138,12 +198,10 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 sec_data = data[exch][sec_id]
                 last_price = sec_data.get("last_price", "")
                 
-                # --- LIVE OI & MOMENTUM EXTRACTION MATH ---
                 lp = float(last_price) if last_price else 0.0
                 pc = float(sec_data.get("previous_close") or sec_data.get("ohlc", {}).get("close") or lp)
                 price_chg = round(((lp - pc) / pc * 100), 2) if pc > 0 else 0.0
                 
-                # Defensively grab live vs previous OI footprints
                 oi = float(sec_data.get("open_interest", 0))
                 prev_oi = float(sec_data.get("previous_open_interest") or sec_data.get("previous_oi") or oi)
                 oi_chg = round(((oi - prev_oi) / prev_oi * 100), 2) if prev_oi > 0 else 0.0
@@ -260,7 +318,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
 @st.cache_resource
 def start_cron_daemon_v12(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
-    dhan_id = st.secrets["dhan"]["dhan_client_id"]
+    dhan_id = St.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
     add_script_run_ctx(cron_worker)
     cron_worker.start()
