@@ -6,7 +6,8 @@ import streamlit as st
 import threading
 import time
 import json
-from datetime import datetime, timezone, timedelta
+import datetime
+from datetime import timezone, timedelta
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 SECTOR_SYMBOLS = {
@@ -65,7 +66,7 @@ def resolve_instrument(parsed_sym):
 
 def get_option_chain_metrics(asset_symbol, daily_token=None):
     """
-    Queries Dhan v2 Option Chain to parse Strike PCR, Overall PCR, and extract recommended strikes.
+    Queries Dhan v2 Option Chain. Includes dynamic expiry resolver to prevent calendar mismatches.
     """
     import derivatives_engine as de
     contract_meta = de.parse_option_contract(asset_symbol)
@@ -74,7 +75,7 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
     underlying = contract_meta["underlying"]
     strike = float(contract_meta["strike"])
     opt_type = contract_meta["type"].lower()
-    expiry_date = contract_meta["expiry_date"]
+    fallback_expiry = contract_meta["expiry_date"]
     
     scrip_df = get_dhan_scrip_master()
     if scrip_df.empty: return {}
@@ -98,11 +99,32 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
         'access-token': daily_token,
         'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
+
+    # 1. Dynamic Expiry Resolver: Gets the official expiry from Dhan's backend
+    valid_expiry = fallback_expiry
+    try:
+        exp_res = requests.post(
+            "https://api.dhan.co/v2/optionchain/expirylist", 
+            headers=headers, 
+            json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg},
+            timeout=5
+        )
+        if exp_res.status_code == 200 and exp_res.json().get("data"):
+            exp_list = exp_res.json()["data"]
+            parsed_dt = datetime.datetime.strptime(fallback_expiry, "%Y-%m-%d")
+            t_month, t_year = parsed_dt.month, parsed_dt.year
+            
+            matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == t_year and datetime.datetime.strptime(e, "%Y-%m-%d").month == t_month]
+            if matching_expiries:
+                # Uses the latest expiry date available for that month (Monthly Expiry)
+                valid_expiry = max(matching_expiries) 
+    except Exception as e:
+        print(f"Expiry Fetch Error: {e}")
     
     payload = {
         "UnderlyingScrip": underlying_id,
         "UnderlyingSeg": underlying_seg,
-        "Expiry": expiry_date
+        "Expiry": valid_expiry
     }
     
     try:
@@ -139,7 +161,8 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
                     if target_node:
                         greeks = target_node.get("greeks", {})
                         metrics_map.update({
-                            "implied_volatility": float(target_node.get("iv", 0.0)),
+                            # CORRECTED KEY: Extracts authentic IV from the API
+                            "implied_volatility": float(target_node.get("implied_volatility", 0.0)),
                             "delta": float(greeks.get("delta", 0)),
                             "theta": float(greeks.get("theta", 0)),
                             "strike_pcr": round(p_oi / c_oi, 2) if c_oi > 0 else 0.0
@@ -268,7 +291,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if not old_sector_map or all(abs(v) < 0.01 for v in old_sector_map.values()):
                 old_sector_map = hardcoded_eod
                 
-            now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            now_ist = datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
             is_market_closed = now_ist.hour >= 16 or now_ist.hour < 9 or now_ist.weekday() >= 5
             
             def get_index_metrics(s_id, sector_name=None):
@@ -327,7 +350,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     while True:
         sleep_timer = 60 
-        now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        now = datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         
         if now.weekday() < 5:
             start_market = now.replace(hour=9, minute=15, second=0, microsecond=0)
