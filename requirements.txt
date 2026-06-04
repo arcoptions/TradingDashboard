@@ -6,3 +6,4 @@ google-auth
 streamlit-option-menu
 plotly
 telethon
+toml
