@@ -48,63 +48,46 @@ def render_tv_chart(symbol):
     """
     components.html(html, height=400)
 
+@st.cache_data(ttl=60)
+def fetch_live_heatmap():
+    """Unblockable TradingView fetcher for Sectoral Heatmap Indices"""
+    sectors = {
+        "Financial Services": {"ticker": "NSE:CNXFIN", "weight": 35.0},
+        "IT": {"ticker": "NSE:CNXIT", "weight": 14.5},
+        "Oil & Gas / Energy": {"ticker": "NSE:CNXENERGY", "weight": 12.0},
+        "FMCG": {"ticker": "NSE:CNXFMCG", "weight": 9.0},
+        "Auto": {"ticker": "NSE:CNXAUTO", "weight": 7.0},
+        "Pharma": {"ticker": "NSE:CNXPHARMA", "weight": 5.0},
+        "Metal": {"ticker": "NSE:CNXMETAL", "weight": 4.0},
+        "Realty": {"ticker": "NSE:CNXREALTY", "weight": 1.0},
+        "Media": {"ticker": "NSE:CNXMEDIA", "weight": 0.5}
+    }
+    payload = {"symbols": {"tickers": [v["ticker"] for v in sectors.values()]}, "columns": ["change"]}
+    try:
+        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=5)
+        if res.status_code == 200 and res.json().get("data"):
+            data_map = {item["s"]: item["d"][0] for item in res.json()["data"]}
+            return pd.DataFrame([{"sector": name, "change": round(data_map.get(info["ticker"], 0.0), 2), "weight": info["weight"]} for name, info in sectors.items()])
+    except Exception as e: print(f"Heatmap Engine Error: {e}")
+    return pd.DataFrame()
+
 @st.cache_data(ttl=15)
 def batch_fetch_intelligence(symbols_list):
-    """
-    Institutional Pipeline: Bundles all portfolio assets into ONE single 
-    batch post request to eliminate UI loading overhead.
-    """
     results_map = {}
     if not symbols_list: return results_map
-
     clean_tickers = list(set([str(s).split('-')[0].strip().upper().replace("&", "_") for s in symbols_list]))
     tv_tickers = [f"NSE:{t}" for t in clean_tickers]
-
-    payload = {
-        "symbols": {"tickers": tv_tickers},
-        "columns": [
-            "price_earnings_ttm", "price_earnings_forward", "return_on_equity",
-            "debt_to_equity", "operating_margin", "net_margin", 
-            "return_on_invested_capital", "institutions_ownership",
-            "close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"
-        ]
-    }
-
+    payload = {"symbols": {"tickers": tv_tickers}, "columns": ["price_earnings_ttm", "price_earnings_forward", "return_on_equity", "debt_to_equity", "operating_margin", "net_margin", "return_on_invested_capital", "institutions_ownership", "close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"]}
     try:
         res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=6)
         if res.status_code == 200 and res.json().get("data"):
             for item in res.json()["data"]:
                 ticker_raw = item["s"].split(":")[1]
                 d = item["d"]
-                
-                # Dynamic Mapping Line Arrays
-                f_m = {
-                    "stock_pe": round(d[0], 2) if d[0] is not None else "-",
-                    "forward_pe": round(d[1], 2) if d[1] is not None else "-",
-                    "sector_pe": 20.0, # Default registry placeholder
-                    "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-",
-                    "debt_to_equity": round(d[3], 2) if d[3] is not None else "-",
-                    "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-",
-                    "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-",
-                    "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-",
-                    "inst_own": f"{round(d[7], 2)}%" if d[7] is not None else "-"
-                }
-
-                close_px = d[8]
-                vol_spike = "-"
-                if d[13] and d[14] and d[14] > 0:
-                    vol_spike = round((d[13] / d[14]) * 100, 2)
-                    
-                t_m = {
-                    "rsi": round(d[12], 2) if d[12] is not None else "-", 
-                    "vol_spike": vol_spike, 
-                    "ema20_prox": round(((close_px - d[9]) / d[9]) * 100, 2) if d[9] and close_px else "-", 
-                    "ema50_prox": round(((close_px - d[10]) / d[10]) * 100, 2) if d[10] and close_px else "-", 
-                    "ema200_prox": round(((close_px - d[11]) / d[11]) * 100, 2) if d[11] and close_px else "-"
-                }
+                f_m = {"stock_pe": round(d[0], 2) if d[0] is not None else "-", "forward_pe": round(d[1], 2) if d[1] is not None else "-", "sector_pe": 20.0, "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-", "debt_to_equity": round(d[3], 2) if d[3] is not None else "-", "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-", "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-", "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-", "inst_own": f"{round(d[7], 2)}%" if d[7] is not None else "-"}
+                t_m = {"rsi": round(d[12], 2) if d[12] is not None else "-", "vol_spike": round((d[13] / d[14]) * 100, 2) if d[13] and d[14] and d[14] > 0 else "-", "ema20_prox": round(((d[8] - d[9]) / d[9]) * 100, 2) if d[9] and d[8] else "-", "ema50_prox": round(((d[8] - d[10]) / d[10]) * 100, 2) if d[10] and d[8] else "-", "ema200_prox": round(((d[8] - d[11]) / d[11]) * 100, 2) if d[11] and d[8] else "-"}
                 results_map[ticker_raw] = {"f": f_m, "t": t_m}
-    except Exception as e: 
-        print(f"Batch System Connection Failure: {e}")
+    except Exception as e: print(e)
     return results_map
 
 def format_index_display(name, raw_val):
@@ -125,27 +108,6 @@ def render_top_ticker_tape(settings_sheet):
         st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
     except: pass
 
-def check_for_audio_alerts(df_act):
-    current_targets = len(df_act[df_act['Target Status'] == '🎯 Reached'])
-    sl_hits = 0
-    for idx, row in df_act.iterrows():
-        try:
-            live = float(str(row.get('Live Price', '')).strip())
-            sl_digits = re.findall(r'[\d\.]+', str(row.get('Stop Loss (SL)', '')).strip())
-            if sl_digits and live <= float(sl_digits[0]): sl_hits += 1
-        except: pass
-    if "audio_initialized" not in st.session_state:
-        st.session_state.target_hits = current_targets
-        st.session_state.sl_hits = sl_hits
-        st.session_state.audio_initialized = True
-        return
-    if current_targets > st.session_state.target_hits:
-        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.target_hits = current_targets
-    if sl_hits > st.session_state.sl_hits:
-        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.sl_hits = sl_hits
-
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
     col_t1, col_t2 = st.columns([9, 1])
@@ -162,7 +124,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         initial_df['_Sheet_Row'] = range(2, len(initial_df) + 2)
         initial_df["Journal"] = False
         initial_df = analytics.compute_signal_indicators(initial_df)
-        
         initial_df['Base Asset'] = initial_df['Symbol / Asset'].apply(lambda x: str(x).split('-')[0].strip().upper())
         initial_df['Sector/Industry'] = initial_df['Base Asset'].apply(lambda x: SECTOR_MAP.get(x, "General / Mixed"))
 
@@ -225,7 +186,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
         
         if st.session_state.get("viewing_trade_row"):
-            # INLINED STATE CLEARING TO PREVENT NAMERROR
             if st.button("Back to Terminal"): 
                 st.session_state.viewing_trade = None
                 st.session_state.viewing_trade_row = None
@@ -317,7 +277,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 worksheet.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
                                 st.rerun()
                 
-                # INLINED STATE CLEARING FOR BOTTOM BUTTON TOO
                 if st.button("Unlink Review Canvas", use_container_width=True):
                     st.session_state.viewing_trade = None
                     st.session_state.viewing_trade_row = None
@@ -355,17 +314,18 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_options: render_asset_dashboard(df_options, "Options")
             with tab_heatmap: 
                 st.markdown("#### Live NIFTY Sector Performance")
-                if st.button("Sync Live Market Map", use_container_width=True, key="sync_heatmap"): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-                try:
-                    raw_json = settings_sheet.acell('B12').value
-                    if raw_json and str(raw_json).strip() != "" and str(raw_json).strip() != "-":
-                        data = json.loads(raw_json); df_heat = pd.DataFrame(data)
-                        if not df_heat.empty:
-                            fig = px.treemap(df_heat, path=['sector'], values='weight', color='change', color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
-                            fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", customdata=df_heat[['change']], textfont=dict(size=16))
-                            fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=500)
-                            st.plotly_chart(fig, use_container_width=True)
-                except Exception as e: st.error(f"Visualization Component Alert: {e}")
+                st.caption("Powered by Institutional TradingView Engine")
+                if st.button("Refresh Market Map", use_container_width=True, key="sync_heatmap"): 
+                    fetch_live_heatmap.clear()
+                
+                df_heat = fetch_live_heatmap()
+                if not df_heat.empty:
+                    fig = px.treemap(df_heat, path=['sector'], values='weight', color='change', color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
+                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", customdata=df_heat[['change']], textfont=dict(size=16))
+                    fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                else: 
+                    st.info("Market map data is synchronizing...")
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
