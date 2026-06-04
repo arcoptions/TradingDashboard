@@ -73,7 +73,7 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
     
     underlying = contract_meta["underlying"]
     strike = float(contract_meta["strike"])
-    opt_type = contract_meta["type"].lower() # Dhan API uses lowercase 'ce' or 'pe'
+    opt_type = contract_meta["type"].lower()
     expiry_date = contract_meta["expiry_date"]
     
     scrip_df = get_dhan_scrip_master()
@@ -99,7 +99,6 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
         'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
     
-    # Strictly matching Dhan documentation casing
     payload = {
         "UnderlyingScrip": underlying_id,
         "UnderlyingSeg": underlying_seg,
@@ -120,7 +119,8 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
                     if target_node:
                         greeks = target_node.get("greeks", {})
                         return {
-                            "implied_volatility": float(target_node.get("impliedVolatility", 0)),
+                            # Fix: Safely parses 'iv' key exactly as output by Dhan API
+                            "implied_volatility": float(target_node.get("iv", 0.0)),
                             "delta": float(greeks.get("delta", 0)),
                             "theta": float(greeks.get("theta", 0))
                         }
