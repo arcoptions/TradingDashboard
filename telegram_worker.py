@@ -1,6 +1,8 @@
 import asyncio
 import os
 import toml
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 import gspread
@@ -12,30 +14,43 @@ import analytics
 import broker_api as api
 import database as db
 
+# ─── LIGHTWEIGHT WEB SERVER FOR RENDER FREE TIER ───
+class HealthCheckServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """Responds to Render and Keep-Alive pings to prevent sleep mode."""
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ARC Ingestion Engine Operational")
+        
+    def log_message(self, format, *args):
+        return # Suppress standard log clutter in your terminal window
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000)) # Render assigns this dynamically
+    server = HTTPServer(("0.0.0.0", port), HealthCheckServer)
+    print(f"🌐 Internal Health Server bound to port {port}")
+    server.serve_forever()
+
 # ─── TELEGRAM CONFIGURATION ───
 API_ID = 1234567          # Replace with your integer API ID
 API_HASH = 'your_api_hash' # Replace with your API Hash
 SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING")
 
-# Mapped channel identifiers
 TRACKED_CHANNELS = [
     'elephant_pro_signals', 
-    'mr_chartist_alerts', 
-    -1001234567890  # Numeric ID format example
+    'mr_chartist_alerts'
 ]
 
 def get_secrets():
-    """Safely extracts secrets whether hosted on Streamlit or Render."""
     try:
-        # Tries to read from the standard Streamlit secrets path (which we will upload to Render)
         with open(".streamlit/secrets.toml", "r") as f:
             return toml.load(f)
     except FileNotFoundError:
-        print("❌ Secrets file not found. Ensure .streamlit/secrets.toml is uploaded to Render.")
+        print("❌ Secrets file not found.")
         return None
 
 def init_sheet_connection(secrets):
-    """Initializes connection to the central tracker database."""
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(secrets["gcp_service_account"], scopes=scopes)
     gc = gspread.authorize(credentials)
@@ -51,7 +66,6 @@ async def main():
     secrets = get_secrets()
     worksheet, sheet_headers = init_sheet_connection(secrets)
     
-    # Uses the StringSession generated from Google Colab
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
     await client.start()
     print("✅ MTProto Channel Socket Stream Established.")
@@ -102,4 +116,9 @@ async def main():
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
+    # Start the dummy web server in a separate background thread
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
+    
+    # Run the main asynchronous Telegram engine
     asyncio.run(main())
