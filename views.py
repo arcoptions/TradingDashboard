@@ -79,22 +79,56 @@ def fetch_all_sectors_data():
 
 @st.cache_data(ttl=15)
 def batch_fetch_intelligence(symbols_list):
+    """Parallelized Split-Batch Engine to prevent TV Scanner conflicts between Funda/Tech parameters"""
     results_map = {}
     if not symbols_list: return results_map
     clean_tickers = list(set([str(s).split('-')[0].strip().upper().replace("&", "_") for s in symbols_list]))
     tv_tickers = [f"NSE:{t}" for t in clean_tickers]
-    payload = {"symbols": {"tickers": tv_tickers}, "columns": ["price_earnings_ttm", "price_earnings_forward", "return_on_equity", "debt_to_equity", "operating_margin", "net_margin", "return_on_invested_capital", "institutions_ownership", "close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"]}
+    
+    tech_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"]}
+    fund_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["price_earnings_ttm", "price_earnings_forward", "return_on_equity", "debt_to_equity", "operating_margin", "net_margin", "return_on_capital_employed"]}
+    
+    for t in clean_tickers:
+        results_map[t] = {
+            "f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"},
+            "t": {"rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}
+        }
+
     try:
-        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=6)
-        if res.status_code == 200 and res.json().get("data"):
-            for item in res.json()["data"]:
-                ticker_raw = item["s"].split(":")[1]
+        res_t = requests.post("https://scanner.tradingview.com/india/scan", json=tech_payload, timeout=6)
+        if res_t.status_code == 200 and res_t.json().get("data"):
+            for item in res_t.json()["data"]:
+                t_raw = item["s"].split(":")[1]
                 d = item["d"]
-                f_m = {"stock_pe": round(d[0], 2) if d[0] is not None else "-", "forward_pe": round(d[1], 2) if d[1] is not None else "-", "sector_pe": 20.0, "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-", "debt_to_equity": round(d[3], 2) if d[3] is not None else "-", "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-", "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-", "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-", "inst_own": f"{round(d[7], 2)}%" if d[7] is not None else "-"}
-                t_m = {"rsi": round(d[12], 2) if d[12] is not None else "-", "vol_spike": round((d[13] / d[14]) * 100, 2) if d[13] and d[14] and d[14] > 0 else "-", "ema20_prox": round(((d[8] - d[9]) / d[9]) * 100, 2) if d[9] and d[8] else "-", "ema50_prox": round(((d[8] - d[10]) / d[10]) * 100, 2) if d[10] and d[8] else "-", "ema200_prox": round(((d[8] - d[11]) / d[11]) * 100, 2) if d[11] and d[8] else "-"}
-                results_map[ticker_raw] = {"f": f_m, "t": t_m}
+                if t_raw in results_map:
+                    results_map[t_raw]["t"] = {
+                        "rsi": round(d[4], 2) if d[4] is not None else "-",
+                        "vol_spike": round((d[5] / d[6]) * 100, 2) if d[5] and d[6] and d[6] > 0 else "-",
+                        "ema20_prox": round(((d[0] - d[1]) / d[1]) * 100, 2) if d[1] and d[0] else "-",
+                        "ema50_prox": round(((d[0] - d[2]) / d[2]) * 100, 2) if d[2] and d[0] else "-",
+                        "ema200_prox": round(((d[0] - d[3]) / d[3]) * 100, 2) if d[3] and d[0] else "-"
+                    }
     except Exception as e: print(e)
-    return {}
+
+    try:
+        res_f = requests.post("https://scanner.tradingview.com/india/scan", json=fund_payload, timeout=6)
+        if res_f.status_code == 200 and res_f.json().get("data"):
+            for item in res_f.json()["data"]:
+                t_raw = item["s"].split(":")[1]
+                d = item["d"]
+                if t_raw in results_map:
+                    results_map[t_raw]["f"].update({
+                        "stock_pe": round(d[0], 2) if d[0] is not None else "-",
+                        "forward_pe": round(d[1], 2) if d[1] is not None else "-",
+                        "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-",
+                        "debt_to_equity": round(d[3], 2) if d[3] is not None else "-",
+                        "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-",
+                        "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-",
+                        "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-"
+                    })
+    except Exception as e: print(e)
+
+    return results_map
 
 def format_index_display(name, raw_val):
     if not raw_val or raw_val == "-": return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
@@ -113,6 +147,27 @@ def render_top_ticker_tape(settings_sheet):
         nifty = format_index_display("NIFTY50", settings_sheet.acell('B10').value)
         st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
     except: pass
+
+def check_for_audio_alerts(df_act):
+    current_targets = len(df_act[df_act['Target Status'] == '🎯 Reached'])
+    sl_hits = 0
+    for idx, row in df_act.iterrows():
+        try:
+            live = float(str(row.get('Live Price', '')).strip())
+            sl_digits = re.findall(r'[\d\.]+', str(row.get('Stop Loss (SL)', '')).strip())
+            if sl_digits and live <= float(sl_digits[0]): sl_hits += 1
+        except: pass
+    if "audio_initialized" not in st.session_state:
+        st.session_state.target_hits = current_targets
+        st.session_state.sl_hits = sl_hits
+        st.session_state.audio_initialized = True
+        return
+    if current_targets > st.session_state.target_hits:
+        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
+        st.session_state.target_hits = current_targets
+    if sl_hits > st.session_state.sl_hits:
+        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
+        st.session_state.sl_hits = sl_hits
 
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
@@ -156,14 +211,16 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         except: existing_sources = []
         all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
         
+        # Safe Date Bounds Extraction
+        min_d = datetime.today().date()
+        max_d = datetime.today().date()
         if "Trade Date" in initial_df.columns:
             initial_df["_Clean_Date"] = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
             valid_dates = initial_df["_Clean_Date"].dropna().tolist()
-            min_d = min(valid_dates) if valid_dates else datetime.today().date()
-            max_d = max(valid_dates) if valid_dates else datetime.today().date()
+            if valid_dates:
+                min_d, max_d = min(valid_dates), max(valid_dates)
         else:
             initial_df["_Clean_Date"] = datetime.today().date()
-            min_d, max_d = datetime.today().date(), datetime.today().date()
 
         f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
         with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
@@ -179,7 +236,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         if isinstance(selected_date_range, tuple) and len(selected_date_range) == 2:
             filtered_df = filtered_df[(filtered_df["_Clean_Date"] >= selected_date_range[0]) & (filtered_df["_Clean_Date"] <= selected_date_range[1])]
         
-        # ─── ORDERED TERMINAL GRID ARCHITECTURE ───
+        # ─── EXACT REQUESTED COLUMN ORDER ───
         view_cols = [
             "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
             "Live Price", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
@@ -194,23 +251,23 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
         table_column_config = {
             "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
-            "Base Asset": st.column_config.TextColumn("Stock name"),
-            "Symbol / Asset": st.column_config.TextColumn("Option contract"), 
-            "Vs Entry": st.column_config.TextColumn("vs Entry"),
-            "Entry CMP / Range": st.column_config.TextColumn("Entry range"),
-            "Live Price": st.column_config.TextColumn("live price"),
-            "Score": st.column_config.NumberColumn("score", format="%d", help="Calculated Engine Points"),
-            "Decision": st.column_config.TextColumn("decision"),
-            "Add-On / Dip Levels": st.column_config.TextColumn("add on dip levels"),
-            "Stop Loss (SL)": st.column_config.TextColumn("Stop loss"),
-            "Target Status": st.column_config.TextColumn("Target status"),
+            "Base Asset": st.column_config.TextColumn("Stock Name"),
+            "Symbol / Asset": st.column_config.TextColumn("Option Contract"), 
+            "Vs Entry": st.column_config.TextColumn("Vs Entry"),
+            "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
+            "Live Price": st.column_config.TextColumn("Live Price"),
+            "Score": st.column_config.NumberColumn("Score", format="%d"),
+            "Decision": st.column_config.TextColumn("Decision"),
+            "Add-On / Dip Levels": st.column_config.TextColumn("Add-On / Dip Levels"),
+            "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss (SL)"),
+            "Target Status": st.column_config.TextColumn("Target Status"),
             "Target 1": st.column_config.TextColumn("Target 1"),
             "Target 2": st.column_config.TextColumn("Target 2"),
-            "Exit Price": st.column_config.TextColumn("exit price"),
-            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("source", options=all_sources, required=True),
-            "Sector/Industry": st.column_config.TextColumn("industry"),
-            "Trade Type (Eq/Option)": None,
-            "Status (Watch/Active/Closed)": None,
+            "Exit Price": st.column_config.TextColumn("Exit Price"),
+            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("Source", options=all_sources, required=True),
+            "Sector/Industry": st.column_config.TextColumn("Industry"),
+            "Trade Type (Eq/Option)": st.column_config.SelectboxColumn("Type", options=["Equity", "Option"], required=True),
+            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
             "_Sheet_Row": None
         }
         disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
@@ -223,7 +280,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
                 f_metrics = pool_data["f"]; t_metrics = pool_data["t"]
                 
-                # ─── IN-LINE RE-ANCHORED HEADER MATRIX ───
                 head_c1, head_c2 = st.columns([2.5, 7.5], vertical_alignment="center")
                 with head_c1:
                     if st.button("⬅️ Back to Terminal", use_container_width=True): 
@@ -235,7 +291,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 st.write("")
                 
-                # ─── DOUBLE TAB INTERACTION FRAMEWORK ───
+                # ─── SPLIT WORKFLOW TABS ───
                 tab_init_research, tab_psych_exec = st.tabs(["Initial Research", "Psychology & Execution"])
                 
                 with tab_init_research:
@@ -254,6 +310,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     if contract_meta:
                         with st.container(border=True):
                             st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
+                            try: live_option_price = float(trade_data.get('Live Price', 0))
+                            except: live_option_price = 0.0
                             greeks = de.calculate_greeks(S=contract_meta['strike'], K=contract_meta['strike'], T=contract_meta['time_years'], r=0.07, sigma=18.0 / 100.0, option_type=contract_meta['type'])
                             g1, g2, g3, g4, g5 = st.columns(5)
                             g1.metric("Delta", f"{greeks['delta']}")
@@ -303,7 +361,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # Options front-loaded layout
             tab_options, tab_stocks, tab_heatmap = st.tabs(["Options", "Stocks", "Sector Heatmap"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -360,7 +417,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", 
                         textfont=dict(size=16), 
                         hoverinfo="none",
-                        marker=dict(line=dict(width=3, color='#FFFFFF'))
+                        marker=dict(line=dict(width=3, color='#F1F5F9')),
+                        root_color="rgba(0,0,0,0)"
                     )
                     fig.update_layout(
                         margin=dict(t=10, l=10, r=10, b=10), 
