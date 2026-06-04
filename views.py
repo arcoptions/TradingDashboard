@@ -31,7 +31,6 @@ SECTOR_MAP = {
     "NIFTY": "Market Index", "BANKNIFTY": "Sector Index"
 }
 
-# The 12 requested Indices and their heaviest components
 INDEX_CONSTITUENTS = {
     "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA"],
     "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
@@ -67,24 +66,15 @@ def render_tv_chart(symbol):
 
 @st.cache_data(ttl=60)
 def fetch_all_sectors_data():
-    """Batches all 110+ stocks across 12 indices into a single unblockable request"""
     all_tickers = set()
     for stocks in INDEX_CONSTITUENTS.values():
         for s in stocks: all_tickers.add(f"NSE:{s}")
-        
     payload = {"symbols": {"tickers": list(all_tickers)}, "columns": ["change", "close", "market_cap_basic"]}
     try:
         res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=5)
         if res.status_code == 200 and res.json().get("data"):
-            return {
-                item["s"].split(":")[1]: {
-                    "change": item["d"][0], 
-                    "ltp": item["d"][1], 
-                    "mcap": item["d"][2]
-                } for item in res.json()["data"]
-            }
-    except Exception as e:
-        print(f"Master Heatmap Engine Error: {e}")
+            return {item["s"].split(":")[1]: {"change": item["d"][0], "ltp": item["d"][1], "mcap": item["d"][2]} for item in res.json()["data"]}
+    except Exception as e: print(e)
     return {}
 
 @st.cache_data(ttl=15)
@@ -124,33 +114,12 @@ def render_top_ticker_tape(settings_sheet):
         st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
     except: pass
 
-def check_for_audio_alerts(df_act):
-    current_targets = len(df_act[df_act['Target Status'] == '🎯 Reached'])
-    sl_hits = 0
-    for idx, row in df_act.iterrows():
-        try:
-            live = float(str(row.get('Live Price', '')).strip())
-            sl_digits = re.findall(r'[\d\.]+', str(row.get('Stop Loss (SL)', '')).strip())
-            if sl_digits and live <= float(sl_digits[0]): sl_hits += 1
-        except: pass
-    if "audio_initialized" not in st.session_state:
-        st.session_state.target_hits = current_targets
-        st.session_state.sl_hits = sl_hits
-        st.session_state.audio_initialized = True
-        return
-    if current_targets > st.session_state.target_hits:
-        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.target_hits = current_targets
-    if sl_hits > st.session_state.sl_hits:
-        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.sl_hits = sl_hits
-
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
     col_t1, col_t2 = st.columns([9, 1])
     with col_t1: st.markdown("### ARC Trading Terminal")
     with col_t2: 
-        if st.button("UI Reset", help="Reset tracking dashboard", use_container_width=True):
+        if st.button("UI Reset", use_container_width=True):
             import streamlit.components.v1 as components
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
@@ -174,7 +143,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             p_chg = float(row.get("Price Chg %", 0) or 0)
             o_chg = float(row.get("OI Chg %", 0) or 0)
             lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
-            scr, dec, _ = se.generate_conviction_score(pool_data["f"], pool_data["t"], lbl)
+            t_type = row.get("Trade Type (Eq/Option)", "Equity")
+            scr, dec, _ = se.generate_conviction_score(pool_data["f"], pool_data["t"], lbl, trade_type=t_type)
             scores_col.append(scr); decisions_col.append(dec)
             
         initial_df["Score"] = scores_col
@@ -182,28 +152,45 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         
         try:
             col_target = "Idea Source (Chartink/Telegram/X/Self)"
-            if col_target in initial_df.columns:
-                raw_srcs = initial_df[col_target].astype(str).str.strip()
-                existing_sources = sorted(list(raw_srcs[(raw_srcs != "") & (raw_srcs != "nan") & (raw_srcs != "None")].unique()))
-            else: existing_sources = []
+            raw_srcs = initial_df[col_target].astype(str).str.strip() if col_target in initial_df.columns else pd.Series()
+            existing_sources = sorted(list(raw_srcs[(raw_srcs != "") & (raw_srcs != "nan") & (raw_srcs != "None")].unique()))
         except: existing_sources = []
-        
         all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
         
-        # UI Filters
-        f_col1, f_col2, f_col3 = st.columns([3, 3, 4], gap="medium")
+        # --- RE-IMPLEMENTING DYNAMIC DATE RANGE FILTER LIMITS ---
+        if "Trade Date" in initial_df.columns:
+            initial_df["_Clean_Date"] = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
+            valid_dates = initial_df["_Clean_Date"].dropna().tolist()
+            min_d = min(valid_dates) if valid_dates else datetime.today().date()
+            max_d = max(valid_dates) if valid_dates else datetime.today().date()
+        else:
+            initial_df["_Clean_Date"] = datetime.today().date()
+            min_d, max_d = datetime.today().date(), datetime.today().date()
+
+        # ─── HORIZONTAL FILTER BAR CONTAINER WITH INTEGRATED DATE FILTER ───
+        f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
         with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
         with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
-        with f_col3:
+        with f_col3: selected_date_range = st.date_input("Filter by Date Range", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+        with f_col4:
             st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-            if st.button("Sync Live Prices", use_container_width=True): 
-                api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+            if st.button("Sync Live Prices", use_container_width=True): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
 
         filtered_df = initial_df.copy()
         if selected_sources: filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
         if selected_decisions: filtered_df = filtered_df[filtered_df["Decision"].isin(selected_decisions)]
+        if isinstance(selected_date_range, tuple) and len(selected_date_range) == 2:
+            filtered_df = filtered_df[(filtered_df["_Clean_Date"] >= selected_date_range[0]) & (filtered_df["_Clean_Date"] <= selected_date_range[1])]
         
-        view_cols = ["Idea Source (Chartink/Telegram/X/Self)", "Journal", "Decision", "Base Asset", "Sector/Industry", "Symbol / Asset", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "Vs Entry", "Target Status", "Entry CMP / Range", "Live Price", "Add-On / Dip Levels", "Exit Price", "Stop Loss (SL)", "_Sheet_Row"]
+        # ─── COLUMN MANIPULATION ARCHITECTURE (FRONT-LOAD EXECUTION | METADATA TO BACK) ───
+        view_cols = [
+            "Journal", "Score", "Decision", "Base Asset", "Symbol / Asset", 
+            "Vs Entry", "Target Status", "Entry CMP / Range", "Live Price", 
+            "Add-On / Dip Levels", "Exit Price", "Stop Loss (SL)",
+            "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", 
+            "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
+        ]
+        
         for col in view_cols:
             if col not in filtered_df.columns: filtered_df[col] = ""
             elif col not in ["Journal", "_Sheet_Row", "Score"]:
@@ -212,7 +199,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         table_column_config = {
             "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("Source", options=all_sources, required=True),
             "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
-            "Decision": st.column_config.TextColumn("Decision", help="Algorithmic Conviction Filter"),
+            "Score": st.column_config.NumberColumn("Score", format="%d", help="Calculated Engine Points"),
+            "Decision": st.column_config.TextColumn("Decision"),
             "Base Asset": st.column_config.TextColumn("Stock Name"),
             "Sector/Industry": st.column_config.TextColumn("Industry"),
             "Symbol / Asset": st.column_config.TextColumn("Asset Contract"), 
@@ -239,7 +227,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     p_chg = float(trade_data.get("Price Chg %", 0) or 0)
                     o_chg = float(trade_data.get("OI Chg %", 0) or 0)
                     lbl, oi_color = de.compute_oi_buildup(p_chg, o_chg)
-                    scr, dec, flags = se.generate_conviction_score(f_metrics, t_metrics, lbl)
+                    t_type = trade_data.get("Trade Type (Eq/Option)", "Equity")
+                    scr, dec, flags = se.generate_conviction_score(f_metrics, t_metrics, lbl, trade_type=t_type)
                     v_color = "#089981" if dec == "STRONG GO" else "#D1A553" if dec == "CAUTION" else "#F23645"
                     sc1, sc2 = st.columns([1.5, 4.5])
                     sc1.markdown(f"<div style='text-align:center;'><span style='font-size:38px; font-weight:800; color:{v_color};'>{scr}/100</span><br><span style='font-size:16px; font-weight:700; color:{v_color};'>{dec}</span></div>", unsafe_allow_html=True)
@@ -285,35 +274,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                             else: st.error(f"Net Points Lost: {round(pnl, 2)}")
                         except: st.info("Awaiting exit price.")
-                    
-                    with st.expander("🛠 Advanced Repair Tool & Psychology Journal"):
-                        default_search = str(trade_data['Symbol / Asset']).split()[0]
-                        fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
-                        fix_results = api.search_instruments(fix_query)
-                        if not fix_results.empty:
-                            selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
-                            if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
-                                fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
-                                updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
-                                updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
-                                exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
-                                updated_exch = "NSE_EQ" if exch == "NSE" and seg == "E" else "NSE_FNO"
-                                worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, updated_symbol)
-                                worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, updated_sec_id)
-                                worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, updated_exch)
-                                st.session_state.viewing_trade = updated_symbol
-                                st.rerun()
-                                
-                        with st.form("psychology_update_form"):
-                            curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
-                            curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
-                            new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
-                            new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
-                            if st.form_submit_button("Update Records", type="primary"):
-                                worksheet.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
-                                worksheet.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
-                                st.rerun()
-                
                 if st.button("Unlink Review Canvas", use_container_width=True):
                     st.session_state.viewing_trade = None
                     st.session_state.viewing_trade_row = None
@@ -322,7 +282,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            tab_stocks, tab_options, tab_heatmap = st.tabs(["Stocks", "Options", "Sector Heatmap"])
+            # ─── FRONT-LOADED OPTIONS TAB EXECUTION ORDER ───
+            tab_options, tab_stocks, tab_heatmap = st.tabs(["Options", "Stocks", "Sector Heatmap"])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -332,43 +293,33 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 with sub_wl:
                     df_wl = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
-                    if not df_wl.empty:
-                        st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"wl_{asset_type}", on_change=db.run_background_sync, kwargs={"df_filtered": df_wl, "state_key": f"wl_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
-                    else: st.info("No records match active decision layers inside Watchlist.")
+                    if not df_wl.empty: st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"wl_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_wl, "state_key": f"wl_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                    else: st.info("No records match active filters inside Watchlist.")
                 
                 with sub_act:
                     df_act = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
-                    if not df_act.empty:
-                        st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"act_{asset_type}", on_change=db.run_background_sync, kwargs={"df_filtered": df_act, "state_key": f"act_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                    if not df_act.empty: st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"act_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_act, "state_key": f"act_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                     else: st.info("No Active positions matching these rules.")
                 
                 with sub_cls:
                     df_cls = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
-                    if not df_cls.empty:
-                        st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key=f"cls_{asset_type}", on_change=db.run_background_sync, kwargs={"df_filtered": df_cls, "state_key": f"cls_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                    if not df_cls.empty: st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key=f"cls_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_cls, "state_key": f"cls_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
 
-            with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             with tab_options: render_asset_dashboard(df_options, "Options")
+            with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             
-            # --- THE CLICKABLE MASTER-DETAIL HEATMAP ---
             with tab_heatmap: 
-                if "active_heatmap_sector" not in st.session_state:
-                    st.session_state.active_heatmap_sector = None
-
+                if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
                 all_data = fetch_all_sectors_data()
                 
-                if not all_data:
-                    st.info("Market map data is synchronizing from backend...")
-                
+                if not all_data: st.info("Market map data is synchronizing from backend...")
                 elif st.session_state.active_heatmap_sector is None:
-                    # LEVEL 1: High-Level Sector Treemap
                     st.markdown("#### Live NIFTY Sector Performance")
                     st.caption("Click on any sector below to drill down to its constituent stocks.")
                     if st.button("Refresh Market Map", use_container_width=True): 
                         fetch_all_sectors_data.clear()
                         st.rerun()
 
-                    # Calculate Averages for the Treemap
                     sector_weights = {"Nifty 50": 100, "Nifty Bank": 80, "Nifty IT": 60, "Nifty Next 50": 50, "Nifty Auto": 40, "Nifty FMCG": 40, "Nifty Energy": 40, "Nifty Metal": 30, "Nifty Pharma": 30, "Finnifty": 30, "Nifty Healthcare": 20, "Nifty Realty": 10}
                     sector_data = []
                     for sec, stocks in INDEX_CONSTITUENTS.items():
@@ -380,19 +331,24 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                     fig = px.treemap(
                         df_sectors, path=['Sector'], values='Weight', color='Change', 
-                        custom_data=['Change'],
-                        color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
+                        custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
                     )
                     
+                    # ─── SYNCED TRANSPARENT CONTAINER & THICK CELL BORDER STYLING ───
                     fig.update_traces(
                         textinfo="label+text", 
                         texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", 
                         textfont=dict(size=16), 
-                        hoverinfo="none"
+                        hoverinfo="none",
+                        marker=dict(line=dict(width=3, color='#FFFFFF')) # Thicker border lines to cleanly segregate blocks
                     )
-                    fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=450)
+                    fig.update_layout(
+                        margin=dict(t=10, l=10, r=10, b=10), 
+                        height=450,
+                        paper_bgcolor='rgba(0,0,0,0)', # Completely eliminates the legacy black container wrap block
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
                     
-                    # Modern Click Listener
                     if "on_select" in inspect.signature(st.plotly_chart).parameters:
                         event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="treemap")
                         if event and isinstance(event, dict) and "selection" in event and event["selection"].get("points"):
@@ -400,10 +356,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             if clicked_label in INDEX_CONSTITUENTS:
                                 st.session_state.active_heatmap_sector = clicked_label
                                 st.rerun()
-                    else:
-                        st.plotly_chart(fig, use_container_width=True)
+                    else: st.plotly_chart(fig, use_container_width=True)
 
-                    # Quick Select Grid
                     st.markdown("##### Quick Select")
                     btn_cols = st.columns(4)
                     for i, row in df_sectors.sort_values(by="Change", ascending=False).iterrows():
@@ -413,13 +367,10 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             if st.button(f"{clr} {row['Sector']} \n {sgn}{row['Change']:.2f}%", use_container_width=True):
                                 st.session_state.active_heatmap_sector = row['Sector']
                                 st.rerun()
-                
                 else:
-                    # LEVEL 2: Detailed Constituent Drill-Down
                     selected_index = st.session_state.active_heatmap_sector
                     st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
                     
-                    # Compile local data safely
                     rows = []
                     for s in INDEX_CONSTITUENTS[selected_index]:
                         if s in all_data:
@@ -429,26 +380,20 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     df_constituents = pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False).reset_index(drop=True)
                     
                     if not df_constituents.empty:
-                        advances_df = df_constituents[df_constituents["Change %"] > 0]
-                        declines_df = df_constituents[df_constituents["Change %"] < 0]
-                        
                         total_count = len(df_constituents)
-                        adv_count = len(advances_df)
-                        dec_count = len(declines_df)
+                        adv_count = len(df_constituents[df_constituents["Change %"] > 0])
+                        dec_count = len(df_constituents[df_constituents["Change %"] < 0])
                         flat_count = total_count - (adv_count + dec_count)
                         
                         adv_pct = (adv_count / total_count) * 100 if total_count > 0 else 0
                         dec_pct = (dec_count / total_count) * 100 if total_count > 0 else 0
                         flat_pct = (flat_count / total_count) * 100 if total_count > 0 else 0
-                        
                         avg_change = round(df_constituents["Change %"].mean(), 2)
-                        idx_color = "#089981" if avg_change >= 0 else "#F23645"
-                        sign = "+" if avg_change > 0 else ""
                         
                         st.markdown(f"""
                         <div style='margin-top:15px; margin-bottom:15px;'>
                             <span style='font-size:24px; font-weight:700; color:#0F172A;'>{selected_index} Constituents</span>
-                            &nbsp;&nbsp;<span style='font-size:20px; font-weight:800; color:{idx_color};'>{sign}{avg_change}%</span>
+                            &nbsp;&nbsp;<span style='font-size:20px; font-weight:800; color:{"#089981" if avg_change >= 0 else "#F23645"};'>{"++" if avg_change > 0 else ""}{avg_change}%</span>
                         </div>
                         <div style='margin-bottom: 20px; padding: 12px; border: 1px solid #E2E8F0; border-radius: 8px; background-color: #F8FAFC;'>
                             <div style='display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;'>
@@ -463,35 +408,20 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        
-                        st.dataframe(
-                            df_constituents,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "Stock": st.column_config.TextColumn("Stock Asset"),
-                                "Market Cap (Cr)": st.column_config.NumberColumn("Market Cap (Cr)", format="%d"),
-                                "LTP (₹)": st.column_config.NumberColumn("LTP (₹)", format="%.2f"),
-                                "Change %": st.column_config.NumberColumn("Change %", format="%+.2f")
-                            }
-                        )
-                    else:
-                        st.error("Constituent array parsing failed.")
+                        st.dataframe(df_constituents, use_container_width=True, hide_index=True, column_config={"Stock": st.column_config.TextColumn("Stock Asset"), "Market Cap (Cr)": st.column_config.NumberColumn("Market Cap (Cr)", format="%d"), "LTP (₹)": st.column_config.NumberColumn("LTP (₹)", format="%.2f"), "Change %": st.column_config.NumberColumn("Change %", format="%+.2f")})
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
     col_t1, col_t2 = st.columns([9, 1], vertical_alignment="bottom")
     with col_t1: st.markdown("### Automated Scan Feeds")
     with col_t2: 
-        if st.button("UI Reset", help="Reset systems context layer", use_container_width=True):
+        if st.button("UI Reset", use_container_width=True, key="rst_scan"):
             import streamlit.components.v1 as components
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
-            
     col1, col2 = st.columns([8, 2], vertical_alignment="bottom")
     with col1: st.write("")
     with col2:
-        if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"):
-            api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+        if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
             
     scanner_data = scanner_sheet.get_all_records()
     df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
@@ -499,7 +429,6 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
     if not df_scan.empty:
         df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
         df_scan = analytics.compute_scanner_signals(df_scan)
-        
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
         scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {"_Sheet_Row": None, "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)}
@@ -514,11 +443,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
                     m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
                     m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
                     st.write("")
-                    st.data_editor(
-                        df_filtered[scan_view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}",
-                        on_change=db.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers},
-                        column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
-                    )
+                    st.data_editor(df_filtered[scan_view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}", on_change=db.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers}, column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"])
                 else: st.info(f"No active triggers for {filter_name}.")
         
         render_scanner_tab(tab_ce1, "CE1")
