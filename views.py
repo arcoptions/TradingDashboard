@@ -90,7 +90,7 @@ def batch_fetch_intelligence(symbols_list):
     for t in clean_tickers:
         results_map[t] = {
             "f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"},
-            "t": {"rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}
+            "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}
         }
 
     try:
@@ -101,6 +101,7 @@ def batch_fetch_intelligence(symbols_list):
                 d = item["d"]
                 if t_raw in results_map:
                     results_map[t_raw]["t"] = {
+                        "ltp": round(d[0], 2) if d[0] is not None else "-",  # Added underlying LTP capture for accurate Greeks
                         "rsi": round(d[4], 2) if d[4] is not None else "-",
                         "vol_spike": round((d[5] / d[6]) * 100, 2) if d[5] and d[6] and d[6] > 0 else "-",
                         "ema20_prox": round(((d[0] - d[1]) / d[1]) * 100, 2) if d[1] and d[0] else "-",
@@ -147,27 +148,6 @@ def render_top_ticker_tape(settings_sheet):
         st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
     except: pass
 
-def check_for_audio_alerts(df_act):
-    current_targets = len(df_act[df_act['Target Status'] == '🎯 Reached'])
-    sl_hits = 0
-    for idx, row in df_act.iterrows():
-        try:
-            live = float(str(row.get('Live Price', '')).strip())
-            sl_digits = re.findall(r'[\d\.]+', str(row.get('Stop Loss (SL)', '')).strip())
-            if sl_digits and live <= float(sl_digits[0]): sl_hits += 1
-        except: pass
-    if "audio_initialized" not in st.session_state:
-        st.session_state.target_hits = current_targets
-        st.session_state.sl_hits = sl_hits
-        st.session_state.audio_initialized = True
-        return
-    if current_targets > st.session_state.target_hits:
-        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.target_hits = current_targets
-    if sl_hits > st.session_state.sl_hits:
-        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
-        st.session_state.sl_hits = sl_hits
-
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
     col_t1, col_t2 = st.columns([9, 1])
@@ -192,7 +172,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         scores_col, decisions_col = [], []
         for idx, row in initial_df.iterrows():
             sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
-            pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
+            pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
             p_chg = float(row.get("Price Chg %", 0) or 0)
             o_chg = float(row.get("OI Chg %", 0) or 0)
             lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
@@ -274,7 +254,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             if not trade_rows.empty:
                 trade_data = trade_rows.iloc[0]; sheet_row_id = int(trade_data['_Sheet_Row']); asset_symbol = trade_data['Symbol / Asset']
                 sym_key = str(asset_symbol).split('-')[0].strip().upper().replace("&", "_")
-                pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
+                pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
                 f_metrics = pool_data["f"]; t_metrics = pool_data["t"]
                 
                 head_c1, head_c2 = st.columns([2.5, 7.5], vertical_alignment="center")
@@ -306,13 +286,23 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     if contract_meta:
                         with st.container(border=True):
                             st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
-                            try: live_option_price = float(trade_data.get('Live Price', 0))
-                            except: live_option_price = 0.0
-                            greeks = de.calculate_greeks(S=contract_meta['strike'], K=contract_meta['strike'], T=contract_meta['time_years'], r=0.07, sigma=18.0 / 100.0, option_type=contract_meta['type'])
+                            
+                            # Safely extract Real Underlying Stock Price for correct OTM/ITM Greek Math
+                            underlying_ltp_raw = t_metrics.get("ltp", "-")
+                            underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
+                            
+                            greeks = de.calculate_greeks(
+                                S=underlying_px, # Now uses real stock price instead of forcing Strike Price!
+                                K=contract_meta['strike'], 
+                                T=contract_meta['time_years'], 
+                                r=0.07, 
+                                sigma=0.25, # Base realistic volatility approximation
+                                option_type=contract_meta['type']
+                            )
                             g1, g2, g3, g4, g5 = st.columns(5)
                             g1.metric("Delta", f"{greeks['delta']}")
                             g2.metric("Theta", f"{greeks['theta']} INR")
-                            g3.metric("Implied Volatility", f"{trade_data.get('Live Price', '-')}%")
+                            g3.metric("Underlying (Spot)", f"₹{underlying_px}") # Removed fake IV, replaced with useful underlying tracking
                             g4.metric("PCR", "0.95")
                             g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
                     
