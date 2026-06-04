@@ -44,27 +44,40 @@ TRACKED_CHANNELS = [
 
 def get_secrets():
     """Safely extracts secrets whether hosted on Streamlit or Render."""
-    # 1. Try the Render-friendly root path first
     if os.path.exists("secrets.toml"):
         with open("secrets.toml", "r") as f:
             return toml.load(f)
-            
-    # 2. Fallback to Streamlit's hidden directory (for local testing)
     elif os.path.exists(".streamlit/secrets.toml"):
         with open(".streamlit/secrets.toml", "r") as f:
             return toml.load(f)
-            
-    # 3. Crash gracefully if neither exist
     else:
         print("❌ Secrets file not found. Ensure 'secrets.toml' is uploaded to Render.")
         return None
 
 def init_sheet_connection(secrets):
+    """Initializes Google Sheets connection and routes data to a sandbox environment."""
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(secrets["gcp_service_account"], scopes=scopes)
     gc = gspread.authorize(credentials)
+    
     sh = gc.open("Comprehensive Trading Tracker 2026")
-    return sh.sheet1, sh.sheet1.row_values(1)
+    sandbox_tab_name = "Telegram_Sandbox"
+    
+    try:
+        worksheet = sh.worksheet(sandbox_tab_name)
+    except gspread.exceptions.WorksheetNotFound:
+        print(f"📁 Creating isolated staging tab: '{sandbox_tab_name}'...")
+        worksheet = sh.add_worksheet(title=sandbox_tab_name, rows="1000", cols="20")
+        default_headers = [
+            "Trade Date", "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", 
+            "Trade Type (Eq/Option)", "Exchange", "Security ID", "Status (Watch/Active/Closed)", 
+            "Entry CMP / Range", "Add-On / Dip Levels", "Stop Loss (SL)", "Target 1", 
+            "Target 2", "Time Frame", "Setup Rating", "Raw Tip Text"
+        ]
+        worksheet.append_row(default_headers)
+        
+    sheet_headers = worksheet.row_values(1)
+    return worksheet, sheet_headers
 
 async def main():
     if not SESSION_STRING:
@@ -73,6 +86,8 @@ async def main():
 
     print("🚀 Initializing ARC Telegram Cloud Ingestion Client...")
     secrets = get_secrets()
+    if not secrets: return
+    
     worksheet, sheet_headers = init_sheet_connection(secrets)
     
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
@@ -87,13 +102,15 @@ async def main():
         chat_from = await event.get_chat()
         source_name = getattr(chat_from, 'title', getattr(chat_from, 'username', 'Telegram Channel'))
         
-        print(f"📥 New Alert Ingested from [{source_name}].")
-        
         try:
+            print(f"📥 Processing incoming stream text from [{source_name}]...")
+            
             parsed_data = analytics.parse_telegram_tip(raw_text)
-            if not parsed_data.get("symbol"): return
+            if not parsed_data or not parsed_data.get("symbol"): 
+                print("⚠️ Message dropped: Parsing engine returned empty symbol mapping.")
+                return
                 
-            t_sym, t_sec, t_exch = api.resolve_instrument(parsed_data['symbol'])
+            t_sym, t_sec, t_exch = api.resolve_instrument(parsed_data.get("symbol"))
             new_row = [""] * len(sheet_headers)
             
             def set_cell(col_name, val):
@@ -103,31 +120,42 @@ async def main():
             set_cell("Trade Date", datetime.date.today().strftime("%Y-%m-%d"))
             set_cell("Idea Source (Chartink/Telegram/X/Self)", source_name)
             set_cell("Symbol / Asset", t_sym)
-            set_cell("Trade Type (Eq/Option)", parsed_data['trade_type'])
+            set_cell("Trade Type (Eq/Option)", parsed_data.get('trade_type', 'Option'))
             set_cell("Exchange", t_exch)
             set_cell("Security ID", t_sec)
             set_cell("Status (Watch/Active/Closed)", "Watchlist") 
-            set_cell("Entry CMP / Range", parsed_data['entry'])
-            set_cell("Add-On / Dip Levels", parsed_data['add_levels'])
-            set_cell("Stop Loss (SL)", parsed_data['sl'])
-            set_cell("Target 1", parsed_data['t1'])
-            set_cell("Target 2", parsed_data['t2'])
-            set_cell("Time Frame", parsed_data['tf'])
-            set_cell("Setup Rating", parsed_data['rating'])
+            set_cell("Entry CMP / Range", parsed_data.get('entry', ''))
+            set_cell("Add-On / Dip Levels", parsed_data.get('add_levels', ''))
+            set_cell("Stop Loss (SL)", parsed_data.get('sl', ''))
+            set_cell("Target 1", parsed_data.get('t1', ''))
+            set_cell("Target 2", parsed_data.get('t2', ''))
+            set_cell("Time Frame", parsed_data.get('tf', ''))
+            set_cell("Setup Rating", parsed_data.get('rating', ''))
             set_cell("Raw Tip Text", raw_text)
             
             worksheet.append_row(new_row)
-            print(f"🔥 Structured Tip Streamed to Tracker -> {t_sym} Watchlist Entry.")
+            print(f"🔥 Staging Success: Captured {t_sym} in isolation buffer.")
             
         except Exception as err:
-            print(f"❌ Ingestion Pipeline Failure: {err}")
+            print(f"❌ Ingestion Pipeline Failure: {str(err)}")
+            print("💡 Main thread insulated. Service remaining fully operational.")
 
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    # Start the dummy web server in a separate background thread
-    web_thread = threading.Thread(target=run_health_server, daemon=True)
-    web_thread.start()
-    
-    # Run the main asynchronous Telegram engine
-    asyncio.run(main())
+    import sys
+    print("🎬 Starting background threads...")
+    try:
+        web_thread = threading.Thread(target=run_health_server, daemon=True)
+        web_thread.start()
+        print("🌐 Web health thread started successfully.")
+    except Exception as e:
+        print(f"❌ Failed to start web health server: {e}")
+        sys.exit(1)
+        
+    try:
+        print("🔌 Connecting to Telegram MTProto network...")
+        asyncio.run(main())
+    except Exception as e:
+        print(f"💥 CRITICAL CRASH IN MAIN LOOP: {e}")
+        sys.exit(1)
