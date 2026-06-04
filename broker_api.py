@@ -72,8 +72,8 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
     if not contract_meta: return {}
     
     underlying = contract_meta["underlying"]
-    strike = contract_meta["strike"]
-    opt_type = contract_meta["type"]
+    strike = float(contract_meta["strike"])
+    opt_type = contract_meta["type"].lower() # Dhan API uses lowercase 'ce' or 'pe'
     expiry_date = contract_meta["expiry_date"]
     
     scrip_df = get_dhan_scrip_master()
@@ -99,27 +99,31 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
         'client-id': st.secrets["dhan"]["dhan_client_id"]
     }
     
+    # Strictly matching Dhan documentation casing
     payload = {
-        "underlyingScrip": underlying_id,
-        "underlyingSeg": underlying_seg,
-        "expiry": expiry_date
+        "UnderlyingScrip": underlying_id,
+        "UnderlyingSeg": underlying_seg,
+        "Expiry": expiry_date
     }
     
     try:
         url = "https://api.dhan.co/v2/optionchain"
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code == 200 and res.json().get("data"):
-            chain_list = res.json()["data"]
-            for node in chain_list:
-                node_strike = float(node.get("strikePrice", 0))
-                node_type = str(node.get("optionType", "")).upper()
-                if abs(node_strike - strike) < 0.1 and node_type == opt_type:
-                    greeks = node.get("greeks", {})
-                    return {
-                        "implied_volatility": float(node.get("impliedVolatility", 0)),
-                        "delta": float(greeks.get("delta", 0)),
-                        "theta": float(greeks.get("theta", 0))
-                    }
+            data_obj = res.json()["data"]
+            oc_dict = data_obj.get("oc", {})
+            
+            for strike_str, strike_data in oc_dict.items():
+                node_strike = float(strike_str)
+                if abs(node_strike - strike) < 0.1:
+                    target_node = strike_data.get(opt_type)
+                    if target_node:
+                        greeks = target_node.get("greeks", {})
+                        return {
+                            "implied_volatility": float(target_node.get("impliedVolatility", 0)),
+                            "delta": float(greeks.get("delta", 0)),
+                            "theta": float(greeks.get("theta", 0))
+                        }
     except Exception as e:
         print(f"Dhan Option Chain Fetch Error: {e}")
     return {}
@@ -318,7 +322,7 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
 @st.cache_resource
 def start_cron_daemon_v12(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):
     gcp_creds = dict(st.secrets["gcp_service_account"])
-    dhan_id = St.secrets["dhan"]["dhan_client_id"]
+    dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
     add_script_run_ctx(cron_worker)
     cron_worker.start()
