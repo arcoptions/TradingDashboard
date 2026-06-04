@@ -295,15 +295,19 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             underlying_ltp_raw = t_metrics.get("ltp", "-")
                             underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
                             
-                            # Bulletproof Safe Dictionary Extraction
                             dhan_chain_data = api.get_option_chain_metrics(asset_symbol, daily_token=daily_token)
                             if isinstance(dhan_chain_data, dict) and dhan_chain_data:
                                 live_iv = float(dhan_chain_data.get('implied_volatility', 0))
                                 live_delta = float(dhan_chain_data.get('delta', 0))
                                 live_theta = float(dhan_chain_data.get('theta', 0))
+                                strike_pcr = float(dhan_chain_data.get('strike_pcr', 0))
+                                overall_pcr = float(dhan_chain_data.get('overall_pcr', 0))
+                                best_ce = dhan_chain_data.get('best_ce', '-')
+                                best_pe = dhan_chain_data.get('best_pe', '-')
                                 api_success = (live_iv > 0 or live_delta != 0)
                             else:
-                                live_iv, live_delta, live_theta = 0.0, 0.0, 0.0
+                                live_iv, live_delta, live_theta, strike_pcr, overall_pcr = 0.0, 0.0, 0.0, 0.0, 0.0
+                                best_ce, best_pe = "-", "-"
                                 api_success = False
 
                             g1, g2, g3, g4, g5 = st.columns(5)
@@ -313,6 +317,23 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 g3.metric("Underlying (Spot)", f"₹{underlying_px}")
                                 g4.metric("Live IV", f"{live_iv:.2f}%")
                                 g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
+                                
+                                # --- NEW PUT-CALL RATIO & SUGGESTION ENGINE CANVAS MAP ---
+                                st.markdown("---")
+                                st.markdown("**ARC Options Proximity Intelligence & Strike Optimizers**")
+                                pc1, pc2, pc3 = st.columns([2, 2, 6])
+                                with pc1:
+                                    st.metric("Strike-Level PCR", f"{strike_pcr:.2f}", help="Put OI / Call OI for this specific strike contract")
+                                with pc2:
+                                    st.metric("Overall Asset PCR", f"{overall_pcr:.2f}", help="Cumulative asset open interest Put/Call ratio")
+                                with pc3:
+                                    st.markdown(f"""
+                                    <div style='padding: 12px; border: 1px dashed #D1A553; border-radius: 6px; background-color: #FFFDF9; font-size:14px;'>
+                                        <b>💡 Dhan Option Chain Algorithmic Recommendations:</b><br>
+                                        🔹 <b>Optimal Call (CE) Strike:</b> {best_ce} &nbsp;<span style='color:#64748B;'>(Highest Liquidity Cluster)</span><br>
+                                        🔹 <b>Optimal Put (PE) Strike:</b> {best_pe} &nbsp;<span style='color:#64748B;'>(Highest Liquidity Cluster)</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
                             else:
                                 g1.metric("Delta", "Syncing...")
                                 g2.metric("Theta", "Syncing...")
