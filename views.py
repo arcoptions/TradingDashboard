@@ -54,15 +54,15 @@ def render_tv_chart(symbol):
     tv_sym = str(symbol).split('-')[0].upper().replace("&", "_")
     tv_ticker = f"NSE:{tv_sym}" if tv_sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"] else f"BSE:{tv_sym}"
     html = f"""
-    <div class="tradingview-widget-container" style="height: 400px; width: 100%;">
-      <div id="tv_chart" style="height: 400px; width: 100%;"></div>
+    <div class="tradingview-widget-container" style="height: 420px; width: 100%;">
+      <div id="tv_chart" style="height: 420px; width: 100%;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
       new TradingView.widget({{"autosize": true, "symbol": "{tv_ticker}", "interval": "D", "timezone": "Asia/Kolkata", "theme": "light", "style": "1", "locale": "in", "enable_publishing": false, "backgroundColor": "#ffffff", "gridColor": "#F1F5F9", "hide_top_toolbar": false, "container_id": "tv_chart"}});
       </script>
     </div>
     """
-    components.html(html, height=400)
+    components.html(html, height=420)
 
 @st.cache_data(ttl=60)
 def fetch_all_sectors_data():
@@ -94,7 +94,7 @@ def batch_fetch_intelligence(symbols_list):
                 t_m = {"rsi": round(d[12], 2) if d[12] is not None else "-", "vol_spike": round((d[13] / d[14]) * 100, 2) if d[13] and d[14] and d[14] > 0 else "-", "ema20_prox": round(((d[8] - d[9]) / d[9]) * 100, 2) if d[9] and d[8] else "-", "ema50_prox": round(((d[8] - d[10]) / d[10]) * 100, 2) if d[10] and d[8] else "-", "ema200_prox": round(((d[8] - d[11]) / d[11]) * 100, 2) if d[11] and d[8] else "-"}
                 results_map[ticker_raw] = {"f": f_m, "t": t_m}
     except Exception as e: print(e)
-    return results_map
+    return {}
 
 def format_index_display(name, raw_val):
     if not raw_val or raw_val == "-": return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
@@ -120,7 +120,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
     with col_t1: st.markdown("### ARC Trading Terminal")
     with col_t2: 
         if st.button("UI Reset", use_container_width=True):
-            import streamlit.components.v1 as components
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
     initial_data = worksheet.get_all_records()
@@ -157,7 +156,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         except: existing_sources = []
         all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
         
-        # --- RE-IMPLEMENTING DYNAMIC DATE RANGE FILTER LIMITS ---
         if "Trade Date" in initial_df.columns:
             initial_df["_Clean_Date"] = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
             valid_dates = initial_df["_Clean_Date"].dropna().tolist()
@@ -167,7 +165,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             initial_df["_Clean_Date"] = datetime.today().date()
             min_d, max_d = datetime.today().date(), datetime.today().date()
 
-        # ─── HORIZONTAL FILTER BAR CONTAINER WITH INTEGRATED DATE FILTER ───
         f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
         with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
         with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
@@ -182,13 +179,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         if isinstance(selected_date_range, tuple) and len(selected_date_range) == 2:
             filtered_df = filtered_df[(filtered_df["_Clean_Date"] >= selected_date_range[0]) & (filtered_df["_Clean_Date"] <= selected_date_range[1])]
         
-        # ─── COLUMN MANIPULATION ARCHITECTURE (FRONT-LOAD EXECUTION | METADATA TO BACK) ───
+        # ─── ORDERED TERMINAL GRID ARCHITECTURE ───
         view_cols = [
-            "Journal", "Score", "Decision", "Base Asset", "Symbol / Asset", 
-            "Vs Entry", "Target Status", "Entry CMP / Range", "Live Price", 
-            "Add-On / Dip Levels", "Exit Price", "Stop Loss (SL)",
-            "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", 
-            "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
+            "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
+            "Live Price", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
+            "Target Status", "Target 1", "Target 2", "Exit Price", 
+            "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
         ]
         
         for col in view_cols:
@@ -197,25 +193,29 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 filtered_df[col] = filtered_df[col].astype(str).replace({'nan': '', 'None': '', '<NA>': ''})
                 
         table_column_config = {
-            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("Source", options=all_sources, required=True),
             "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
-            "Score": st.column_config.NumberColumn("Score", format="%d", help="Calculated Engine Points"),
-            "Decision": st.column_config.TextColumn("Decision"),
-            "Base Asset": st.column_config.TextColumn("Stock Name"),
-            "Sector/Industry": st.column_config.TextColumn("Industry"),
-            "Symbol / Asset": st.column_config.TextColumn("Asset Contract"), 
-            "Trade Type (Eq/Option)": st.column_config.SelectboxColumn("Type", options=["Equity", "Option"], required=True),
-            "_Sheet_Row": None, 
-            "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True)
+            "Base Asset": st.column_config.TextColumn("Stock name"),
+            "Symbol / Asset": st.column_config.TextColumn("Option contract"), 
+            "Vs Entry": st.column_config.TextColumn("vs Entry"),
+            "Entry CMP / Range": st.column_config.TextColumn("Entry range"),
+            "Live Price": st.column_config.TextColumn("live price"),
+            "Score": st.column_config.NumberColumn("score", format="%d", help="Calculated Engine Points"),
+            "Decision": st.column_config.TextColumn("decision"),
+            "Add-On / Dip Levels": st.column_config.TextColumn("add on dip levels"),
+            "Stop Loss (SL)": st.column_config.TextColumn("Stop loss"),
+            "Target Status": st.column_config.TextColumn("Target status"),
+            "Target 1": st.column_config.TextColumn("Target 1"),
+            "Target 2": st.column_config.TextColumn("Target 2"),
+            "Exit Price": st.column_config.TextColumn("exit price"),
+            "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("source", options=all_sources, required=True),
+            "Sector/Industry": st.column_config.TextColumn("industry"),
+            "Trade Type (Eq/Option)": None,
+            "Status (Watch/Active/Closed)": None,
+            "_Sheet_Row": None
         }
         disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
         
         if st.session_state.get("viewing_trade_row"):
-            if st.button("Back to Terminal"): 
-                st.session_state.viewing_trade = None
-                st.session_state.viewing_trade_row = None
-                st.rerun()
-                
             trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
             if not trade_rows.empty:
                 trade_data = trade_rows.iloc[0]; sheet_row_id = int(trade_data['_Sheet_Row']); asset_symbol = trade_data['Symbol / Asset']
@@ -223,57 +223,78 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
                 f_metrics = pool_data["f"]; t_metrics = pool_data["t"]
                 
-                with st.container(border=True):
-                    p_chg = float(trade_data.get("Price Chg %", 0) or 0)
-                    o_chg = float(trade_data.get("OI Chg %", 0) or 0)
-                    lbl, oi_color = de.compute_oi_buildup(p_chg, o_chg)
-                    t_type = trade_data.get("Trade Type (Eq/Option)", "Equity")
-                    scr, dec, flags = se.generate_conviction_score(f_metrics, t_metrics, lbl, trade_type=t_type)
-                    v_color = "#089981" if dec == "STRONG GO" else "#D1A553" if dec == "CAUTION" else "#F23645"
-                    sc1, sc2 = st.columns([1.5, 4.5])
-                    sc1.markdown(f"<div style='text-align:center;'><span style='font-size:38px; font-weight:800; color:{v_color};'>{scr}/100</span><br><span style='font-size:16px; font-weight:700; color:{v_color};'>{dec}</span></div>", unsafe_allow_html=True)
-                    sc2.markdown(f"<div style='font-size:13px; font-weight:500; color:#334155;'>{' | '.join(flags)}</div>", unsafe_allow_html=True)
+                # ─── IN-LINE RE-ANCHORED HEADER MATRIX ───
+                head_c1, head_c2 = st.columns([2.5, 7.5], vertical_alignment="center")
+                with head_c1:
+                    if st.button("⬅️ Back to Terminal", use_container_width=True): 
+                        st.session_state.viewing_trade = None
+                        st.session_state.viewing_trade_row = None
+                        st.rerun()
+                with head_c2:
+                    st.markdown(f"<h3 style='margin:0; padding-left:10px;'>Research Analysis: {trade_data.get('Symbol / Asset', 'Unknown Asset')}</h3>", unsafe_allow_html=True)
                 
-                contract_meta = de.parse_option_contract(asset_symbol)
-                if contract_meta:
+                st.write("")
+                
+                # ─── DOUBLE TAB INTERACTION FRAMEWORK ───
+                tab_init_research, tab_psych_exec = st.tabs(["Initial Research", "Psychology & Execution"])
+                
+                with tab_init_research:
                     with st.container(border=True):
-                        st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
-                        try: live_option_price = float(trade_data.get('Live Price', 0))
-                        except: live_option_price = 0.0
-                        greeks = de.calculate_greeks(S=contract_meta['strike'], K=contract_meta['strike'], T=contract_meta['time_years'], r=0.07, sigma=18.0 / 100.0, option_type=contract_meta['type'])
-                        g1, g2, g3, g4, g5 = st.columns(5)
-                        g1.metric("Delta", f"{greeks['delta']}")
-                        g2.metric("Theta", f"{greeks['theta']} INR")
-                        g3.metric("Implied Volatility", f"{trade_data.get('Live Price', '-')}%")
-                        g4.metric("PCR", "0.95")
-                        g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
-                
-                with st.container(border=True):
-                    st.markdown("**Market Intelligence**")
-                    f1, f2, f3, f4, f5, f6 = st.columns(6)
-                    f1.metric("P/E", f_metrics['stock_pe']); f2.metric("ROE", f_metrics['roe']); f3.metric("ROCE", f_metrics['roce']); f4.metric("D/E", f"{f_metrics['debt_to_equity']}x"); f5.metric("EBITDA", f_metrics['ebitda_margin']); f6.metric("Inst.", f_metrics['inst_own'])
-                    t1, t2, t3, t4, t5 = st.columns(5)
-                    t1.metric("RSI", t_metrics['rsi']); t2.markdown(f"**20 EMA**<br><span style='{prox_color(t_metrics['ema20_prox'])}'>{t_metrics['ema20_prox']}%</span>", unsafe_allow_html=True); t3.markdown(f"**50 EMA**<br><span style='{prox_color(t_metrics['ema50_prox'])}'>{t_metrics['ema50_prox']}%</span>", unsafe_allow_html=True); t4.markdown(f"**200 EMA**<br><span style='{prox_color(t_metrics['ema200_prox'])}'>{t_metrics['ema200_prox']}%</span>", unsafe_allow_html=True); t5.metric("Vol Spike", f"{t_metrics['vol_spike']}%" if t_metrics['vol_spike'] != "-" else "-")
-                
-                with st.container(border=True):
-                    st.markdown("**Interactive Chart**")
-                    render_tv_chart(sym_key)
+                        p_chg = float(trade_data.get("Price Chg %", 0) or 0)
+                        o_chg = float(trade_data.get("OI Chg %", 0) or 0)
+                        lbl, oi_color = de.compute_oi_buildup(p_chg, o_chg)
+                        t_type = trade_data.get("Trade Type (Eq/Option)", "Equity")
+                        scr, dec, flags = se.generate_conviction_score(f_metrics, t_metrics, lbl, trade_type=t_type)
+                        v_color = "#089981" if dec == "STRONG GO" else "#D1A553" if dec == "CAUTION" else "#F23645"
+                        sc1, sc2 = st.columns([1.5, 4.5])
+                        sc1.markdown(f"<div style='text-align:center;'><span style='font-size:38px; font-weight:800; color:{v_color};'>{scr}/100</span><br><span style='font-size:16px; font-weight:700; color:{v_color};'>{dec}</span></div>", unsafe_allow_html=True)
+                        sc2.markdown(f"<div style='font-size:13px; font-weight:500; color:#334155;'>{' | '.join(flags)}</div>", unsafe_allow_html=True)
                     
-                with st.container(border=True):
-                    st.markdown("**Execution Parameters & Repair Matrix**")
-                    col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
-                    col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
-                    col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
-                    col3.metric("Live Price", trade_data.get('Live Price', '-'))
-                    col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
-                    with col5:
-                        try:
-                            entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
-                            exit_val = float(str(trade_data['Exit Price']))
-                            pnl = exit_val - entry_val
-                            if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
-                            else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                        except: st.info("Awaiting exit price.")
+                    contract_meta = de.parse_option_contract(asset_symbol)
+                    if contract_meta:
+                        with st.container(border=True):
+                            st.markdown("**Derivatives Profile & Greeks (Tier 3)**")
+                            greeks = de.calculate_greeks(S=contract_meta['strike'], K=contract_meta['strike'], T=contract_meta['time_years'], r=0.07, sigma=18.0 / 100.0, option_type=contract_meta['type'])
+                            g1, g2, g3, g4, g5 = st.columns(5)
+                            g1.metric("Delta", f"{greeks['delta']}")
+                            g2.metric("Theta", f"{greeks['theta']} INR")
+                            g3.metric("Implied Volatility", f"{trade_data.get('Live Price', '-')}%")
+                            g4.metric("PCR", "0.95")
+                            g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
+                    
+                    with st.container(border=True):
+                        st.markdown("**Market Intelligence**")
+                        f1, f2, f3, f4, f5, f6 = st.columns(6)
+                        f1.metric("P/E", f_metrics['stock_pe']); f2.metric("ROE", f_metrics['roe']); f3.metric("ROCE", f_metrics['roce']); f4.metric("D/E", f"{f_metrics['debt_to_equity']}x"); f5.metric("EBITDA", f_metrics['ebitda_margin']); f6.metric("Inst.", f_metrics['inst_own'])
+                        t1, t2, t3, t4, t5 = st.columns(5)
+                        t1.metric("RSI", t_metrics['rsi']); t2.markdown(f"**20 EMA**<br><span style='{prox_color(t_metrics['ema20_prox'])}'>{t_metrics['ema20_prox']}%</span>", unsafe_allow_html=True); t3.markdown(f"**50 EMA**<br><span style='{prox_color(t_metrics['ema50_prox'])}'>{t_metrics['ema50_prox']}%</span>", unsafe_allow_html=True); t4.markdown(f"**200 EMA**<br><span style='{prox_color(t_metrics['ema200_prox'])}'>{t_metrics['ema200_prox']}%</span>", unsafe_allow_html=True); t5.metric("Vol Spike", f"{t_metrics['vol_spike']}%" if t_metrics['vol_spike'] != "-" else "-")
+                    
+                    with st.container(border=True):
+                        st.markdown("**Interactive Chart**")
+                        render_tv_chart(sym_key)
+                
+                with tab_psych_exec:
+                    with st.container(border=True):
+                        st.markdown("**Psychology & Trade Rationale Notes**")
+                        existing_notes = trade_data.get('Notes / Analysis', '') if 'Notes / Analysis' in trade_data else ''
+                        st.info(existing_notes if existing_notes.strip() else "No mental model notes captured for this setup yet.")
+                        
+                    with st.container(border=True):
+                        st.markdown("**Execution Parameters & Repair Matrix**")
+                        col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
+                        col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                        col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                        col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                        col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
+                        with col5:
+                            try:
+                                entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                                exit_val = float(str(trade_data['Exit Price']))
+                                pnl = exit_val - entry_val
+                                if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                                else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                            except: st.info("Awaiting execution conclusion exit parameters.")
+                            
                 if st.button("Unlink Review Canvas", use_container_width=True):
                     st.session_state.viewing_trade = None
                     st.session_state.viewing_trade_row = None
@@ -282,7 +303,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # ─── FRONT-LOADED OPTIONS TAB EXECUTION ORDER ───
+            # Options front-loaded layout
             tab_options, tab_stocks, tab_heatmap = st.tabs(["Options", "Stocks", "Sector Heatmap"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -334,18 +355,17 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
                     )
                     
-                    # ─── SYNCED TRANSPARENT CONTAINER & THICK CELL BORDER STYLING ───
                     fig.update_traces(
                         textinfo="label+text", 
                         texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", 
                         textfont=dict(size=16), 
                         hoverinfo="none",
-                        marker=dict(line=dict(width=3, color='#FFFFFF')) # Thicker border lines to cleanly segregate blocks
+                        marker=dict(line=dict(width=3, color='#FFFFFF'))
                     )
                     fig.update_layout(
                         margin=dict(t=10, l=10, r=10, b=10), 
                         height=450,
-                        paper_bgcolor='rgba(0,0,0,0)', # Completely eliminates the legacy black container wrap block
+                        paper_bgcolor='rgba(0,0,0,0)', 
                         plot_bgcolor='rgba(0,0,0,0)'
                     )
                     
@@ -416,7 +436,6 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
     with col_t1: st.markdown("### Automated Scan Feeds")
     with col_t2: 
         if st.button("UI Reset", use_container_width=True, key="rst_scan"):
-            import streamlit.components.v1 as components
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
     col1, col2 = st.columns([8, 2], vertical_alignment="bottom")
     with col1: st.write("")
