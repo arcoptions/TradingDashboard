@@ -124,6 +124,27 @@ def render_top_ticker_tape(settings_sheet):
         st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
     except: pass
 
+def check_for_audio_alerts(df_act):
+    current_targets = len(df_act[df_act['Target Status'] == '🎯 Reached'])
+    sl_hits = 0
+    for idx, row in df_act.iterrows():
+        try:
+            live = float(str(row.get('Live Price', '')).strip())
+            sl_digits = re.findall(r'[\d\.]+', str(row.get('Stop Loss (SL)', '')).strip())
+            if sl_digits and live <= float(sl_digits[0]): sl_hits += 1
+        except: pass
+    if "audio_initialized" not in st.session_state:
+        st.session_state.target_hits = current_targets
+        st.session_state.sl_hits = sl_hits
+        st.session_state.audio_initialized = True
+        return
+    if current_targets > st.session_state.target_hits:
+        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
+        st.session_state.target_hits = current_targets
+    if sl_hits > st.session_state.sl_hits:
+        st.markdown(f'<audio autoplay style="display:none;"><source src="https://assets.mixkit.co/active_storage/sfx/2870/2870-preview.mp3" type="audio/mpeg"></audio>', unsafe_allow_html=True)
+        st.session_state.sl_hits = sl_hits
+
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
     col_t1, col_t2 = st.columns([9, 1])
@@ -329,7 +350,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             with tab_options: render_asset_dashboard(df_options, "Options")
             
-            # --- THE NEW CLICKABLE MASTER-DETAIL HEATMAP ---
+            # --- THE CLICKABLE MASTER-DETAIL HEATMAP ---
             with tab_heatmap: 
                 if "active_heatmap_sector" not in st.session_state:
                     st.session_state.active_heatmap_sector = None
@@ -359,12 +380,19 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                     fig = px.treemap(
                         df_sectors, path=['Sector'], values='Weight', color='Change', 
+                        custom_data=['Change'],
                         color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
                     )
-                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{color:.2f}%</b>", textfont=dict(size=16), hoverinfo="none")
+                    
+                    fig.update_traces(
+                        textinfo="label+text", 
+                        texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", 
+                        textfont=dict(size=16), 
+                        hoverinfo="none"
+                    )
                     fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=450)
                     
-                    # Modern Click Listener (Fallback handled safely)
+                    # Modern Click Listener
                     if "on_select" in inspect.signature(st.plotly_chart).parameters:
                         event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="treemap")
                         if event and isinstance(event, dict) and "selection" in event and event["selection"].get("points"):
@@ -375,7 +403,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     else:
                         st.plotly_chart(fig, use_container_width=True)
 
-                    # Guaranteed Click Fallback Grid for Mobile & Older Browsers
+                    # Quick Select Grid
                     st.markdown("##### Quick Select")
                     btn_cols = st.columns(4)
                     for i, row in df_sectors.sort_values(by="Change", ascending=False).iterrows():
