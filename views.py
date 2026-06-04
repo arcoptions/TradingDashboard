@@ -318,7 +318,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 g4.metric("Live IV", f"{live_iv:.2f}%")
                                 g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
                                 
-                                # --- NEW PUT-CALL RATIO & SUGGESTION ENGINE CANVAS MAP ---
                                 st.markdown("---")
                                 st.markdown("**ARC Options Proximity Intelligence & Strike Optimizers**")
                                 pc1, pc2, pc3 = st.columns([2, 2, 6])
