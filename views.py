@@ -101,7 +101,7 @@ def batch_fetch_intelligence(symbols_list):
                 d = item["d"]
                 if t_raw in results_map:
                     results_map[t_raw]["t"] = {
-                        "ltp": round(d[0], 2) if d[0] is not None else "-",  # Added underlying LTP capture for accurate Greeks
+                        "ltp": round(d[0], 2) if d[0] is not None else "-",  
                         "rsi": round(d[4], 2) if d[4] is not None else "-",
                         "vol_spike": round((d[5] / d[6]) * 100, 2) if d[5] and d[6] and d[6] > 0 else "-",
                         "ema20_prox": round(((d[0] - d[1]) / d[1]) * 100, 2) if d[1] and d[0] else "-",
@@ -169,6 +169,11 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         batch_tickers = initial_df['Symbol / Asset'].tolist()
         intel_pool = batch_fetch_intelligence(batch_tickers)
         
+        try:
+            daily_token = settings_sheet.acell('B2').value
+        except:
+            daily_token = ""
+            
         scores_col, decisions_col = [], []
         for idx, row in initial_df.iterrows():
             sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
@@ -287,47 +292,32 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         with st.container(border=True):
                             st.markdown("**Derivatives Profile & Live Greeks (Dhan Feed)**")
                             
-                            # 1. Pull the real underlying stock price
                             underlying_ltp_raw = t_metrics.get("ltp", "-")
                             underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
                             
-                            # 2. Fetch live authentic metrics directly from the paid Dhan API feed
                             try:
-                                # Queries your broker API layer using the unique symbol identifier
-                                dhan_chain_data = api.get_option_chain_metrics(asset_symbol)
+                                dhan_chain_data = api.get_option_chain_metrics(asset_symbol, daily_token=daily_token)
                                 live_iv = float(dhan_chain_data.get('implied_volatility', 0))
                                 live_delta = float(dhan_chain_data.get('delta', 0))
                                 live_theta = float(dhan_chain_data.get('theta', 0))
-                                api_success = True
+                                api_success = (live_iv > 0 or live_delta != 0)
                             except Exception as e:
-                                # Fail-safe fallback to calculation engine if API experiences brief latency
-                                live_iv = 0.30  # Closer market approximation for high beta F&O names
                                 api_success = False
 
+                            g1, g2, g3, g4, g5 = st.columns(5)
                             if api_success:
-                                # Render genuine data streaming from Dhan's institutional feed
-                                g1, g2, g3, g4, g5 = st.columns(5)
-                                g1.metric("Delta", f"{live_delta:.3f}")
+                                g1.metric("Delta", f"{live_delta:.4f}")
                                 g2.metric("Theta", f"{live_theta:.2f} INR")
                                 g3.metric("Underlying (Spot)", f"₹{underlying_px}")
-                                g4.metric("Live IV (Dhan)", f"{live_iv * 100:.2f}%")
+                                g4.metric("Live IV", f"{live_iv:.2f}%")
                                 g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
                             else:
-                                # Dynamic Black-Scholes calculation utilizing standard parameters if fallback occurs
-                                greeks = de.calculate_greeks(
-                                    S=underlying_px, 
-                                    K=contract_meta['strike'], 
-                                    T=contract_meta['time_years'], 
-                                    r=0.07, 
-                                    sigma=live_iv, 
-                                    option_type=contract_meta['type']
-                                )
-                                g1, g2, g3, g4, g5 = st.columns(5)
-                                g1.metric("Delta (Calc)", f"{greeks['delta']}")
-                                g2.metric("Theta (Calc)", f"{greeks['theta']} INR")
+                                g1.metric("Delta", "Syncing...")
+                                g2.metric("Theta", "Syncing...")
                                 g3.metric("Underlying (Spot)", f"₹{underlying_px}")
-                                g4.metric("Est. IV", f"{live_iv * 100:.0f}%")
+                                g4.metric("Live IV", "Syncing...")
                                 g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
+                    
                     with st.container(border=True):
                         st.markdown("**Market Intelligence**")
                         f1, f2, f3, f4, f5, f6 = st.columns(6)
