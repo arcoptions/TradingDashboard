@@ -82,9 +82,9 @@ def batch_fetch_intelligence(symbols_list):
         res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=6)
         if res.status_code == 200 and res.json().get("data"):
             for item in res.json()["data"]:
-                ticker_raw = item["s"].split(":")[cite: 1]
+                ticker_raw = item["s"].split(":")[1]
                 d = item["d"]
-                f_m = {"stock_pe": round(d[0], 2) if d[0] is not None else "-", "forward_pe": round(d[cite: 1], 2) if d[cite: 1] is not None else "-", "sector_pe": 20.0, "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-", "debt_to_equity": round(d[3], 2) if d[3] is not None else "-", "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-", "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-", "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-", "inst_own": f"{round(d[7], 2)}%" if d[7] is not None else "-"}
+                f_m = {"stock_pe": round(d[0], 2) if d[0] is not None else "-", "forward_pe": round(d[1], 2) if d[1] is not None else "-", "sector_pe": 20.0, "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-", "debt_to_equity": round(d[3], 2) if d[3] is not None else "-", "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-", "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-", "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-", "inst_own": f"{round(d[7], 2)}%" if d[7] is not None else "-"}
                 t_m = {"rsi": round(d[12], 2) if d[12] is not None else "-", "vol_spike": round((d[13] / d[14]) * 100, 2) if d[13] and d[14] and d[14] > 0 else "-", "ema20_prox": round(((d[8] - d[9]) / d[9]) * 100, 2) if d[9] and d[8] else "-", "ema50_prox": round(((d[8] - d[10]) / d[10]) * 100, 2) if d[10] and d[8] else "-", "ema200_prox": round(((d[8] - d[11]) / d[11]) * 100, 2) if d[11] and d[8] else "-"}
                 results_map[ticker_raw] = {"f": f_m, "t": t_m}
     except Exception as e: print(e)
@@ -131,7 +131,7 @@ def check_for_audio_alerts(df_act):
 
 def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
-    col_t1, col_t2 = st.columns([cite: 1])
+    col_t1, col_t2 = st.columns([9, 1])
     with col_t1: st.markdown("### ARC Trading Terminal")
     with col_t2: 
         if st.button("UI Reset", help="Reset tracking dashboard", use_container_width=True):
@@ -350,7 +350,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
-    col_t1, col_t2 = st.columns([cite: 1], vertical_alignment="bottom")
+    col_t1, col_t2 = st.columns([9, 1], vertical_alignment="bottom")
     with col_t1: st.markdown("### Automated Scan Feeds")
     with col_t2: 
         if st.button("UI Reset", help="Reset systems context layer", use_container_width=True):
