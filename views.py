@@ -308,7 +308,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
                             g1, g2, g3, g4, g5 = st.columns(5)
                             if api_success:
-                                g1.metric("Delta", f"{live_delta:.4f}")
+                                g1.metric("Delta", f"{live_delta:.5f}")
                                 g2.metric("Theta", f"{live_theta:.2f} INR")
                                 g3.metric("Underlying (Spot)", f"₹{underlying_px}")
                                 g4.metric("Live IV", f"{live_iv:.2f}%")
