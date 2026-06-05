@@ -102,7 +102,7 @@ def batch_fetch_intelligence(symbols_list):
     tv_tickers = [f"NSE:{t}" for t in clean_tickers]
     
     tech_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"]}
-    fund_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["price_earnings_ttm", "price_earnings_forward", "return_on_equity", "debt_to_equity", "operating_margin", "net_margin", "return_on_capital_employed"]}
+    fund_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["price_earnings_ttm", "price_earnings_forward", "return_on_equity", "debt_to_equity", "operating_margin", "net_margin", "return_on_capital_encoded"]}
     
     for t in clean_tickers:
         results_map[t] = {
@@ -175,7 +175,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             
     primary_watchlist_ws = worksheet.spreadsheet.sheet1
     
-    # ─── FIX 1: API RATE LIMIT PROTECTOR FOR WATCHLIST ───
     try:
         initial_data = primary_watchlist_ws.get_all_records()
         sheet_headers = primary_watchlist_ws.row_values(1)
@@ -372,7 +371,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                             
                                             matched = False
                                             for alias in aliases:
-                                                pattern = r'\b' + re.escape(alias.upper()) + r'\b'
+                                                pattern = r'(?:^|[^A-Z0-9])' + re.escape(alias.upper()) + r'(?:$|[^A-Z0-9])'
                                                 if re.search(pattern, text_upper) or alias.replace(" ", "") in text_normalized:
                                                     matched = True
                                                     break
@@ -448,7 +447,10 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            tab_options, tab_stocks, tab_study, tab_heatmap, tab_scanners, tab_telegram = st.tabs(["Options", "Stocks", "Stocks to Study", "Sector Heatmap", "Scanners", "Telegram Data"])
+            # ─── RE-ORDERED TABS: STOCKS TO STUDY IS NOW DEPLOYED IMMEDIATELY BEFORE TELEGRAM DATA ───
+            tab_options, tab_stocks, tab_heatmap, tab_scanners, tab_study, tab_telegram = st.tabs([
+                "Options", "Stocks", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
+            ])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -478,7 +480,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     study_ws_layer = worksheet.spreadsheet.add_worksheet(title="Stocks to study", rows="3000", cols="5")
                     study_ws_layer.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
                     
-                # ─── FIX 2: API RATE LIMIT PROTECTOR FOR STUDY TAB ───
                 try:
                     study_vals = study_ws_layer.get_all_values()
                     if len(study_vals) > 1:
@@ -532,7 +533,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             
             with tab_scanners:
                 st.markdown("#### Automated Scan Feeds")
-                # ─── FIX 3: API RATE LIMIT PROTECTOR FOR SCANNERS ───
                 try:
                     scanner_data = scanner_sheet.get_all_records()
                 except Exception as e:
@@ -569,7 +569,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
             with tab_telegram:
                 st.markdown("#### Operational Staging Workspaces")
-                # ─── FIX 4: API RATE LIMIT PROTECTOR FOR TELEGRAM LOGS ───
                 try:
                     wb_obj = worksheet.spreadsheet
                     raw_log_ws = wb_obj.worksheet("Telegram_Raw_Logs")
@@ -593,11 +592,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         stock_mentioned = False
                         matched_symbol = ""
                         
+                        # ─── EXTRACTION ENGINE OVERHAUL FOR PUNCTUATION & MARCDOWN RESILIENCY ───
                         text_upper = text.upper()
                         for master_ticker, aliases in ASSET_ALIASES.items():
                             for alias in aliases:
-                                pattern = r'\b' + re.escape(alias.upper()) + r'\b'
-                                if re.search(pattern, text_upper):
+                                pattern = r'(?:^|[^A-Z0-9])' + re.escape(alias.upper()) + r'(?:$|[^A-Z0-9])'
+                                if re.search(pattern, text_upper) or alias.upper() in text_upper.split():
                                     stock_mentioned = True
                                     matched_symbol = master_ticker
                                     break
@@ -605,8 +605,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                     
                         if not stock_mentioned:
                             for index_asset in SECTOR_MAP.keys():
-                                pattern = r'\b' + re.escape(index_asset) + r'\b'
-                                if re.search(pattern, text_upper):
+                                pattern = r'(?:^|[^A-Z0-9])' + re.escape(index_asset) + r'(?:$|[^A-Z0-9])'
+                                if re.search(pattern, text_upper) or index_asset in text_upper.split():
                                     stock_mentioned = True
                                     matched_symbol = index_asset
                                     break
@@ -673,7 +673,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         if b1.button("⚡ Stage Selected Rows", key=f"stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
                             status_updates = []
                             
-                            if tab_name == "News Feeds" or any(kw in str(selected_rows.iloc[0]['Channel Source']).lower() for kw in ["beat the street", "news"]):
+                            # ─── SMART INTELLIGENT ROUTING FALLBACK BLOCK ───
+                            # If asset token is unextracted ("-") OR it belongs to a news queue, route directly to 'Stocks to study'
+                            if tab_name == "News Feeds" or str(selected_rows.iloc[0].get('Extracted_Symbol', '-')) == "-" or any(kw in str(selected_rows.iloc[0]['Channel Source']).lower() for kw in ["beat the street", "news"]):
                                 try: target_study_ws = wb_obj.worksheet("Stocks to study")
                                 except: 
                                     target_study_ws = wb_obj.add_worksheet(title="Stocks to study", rows="3000", cols="5")
@@ -742,6 +744,5 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                 else: st.info("System initializing tracking logs. Awaiting fresh inbound advisory data.")
 
-# Empty fallback handler just to prevent Streamlit startup errors if old references exist
 def render_chartink_scanners(*args, **kwargs):
     pass
