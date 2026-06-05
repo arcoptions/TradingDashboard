@@ -417,7 +417,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            tab_options, tab_stocks, tab_heatmap = st.tabs(["Options", "Stocks", "Sector Heatmap"])
+            # --- THE NEW OBSERVATION DECK TAB INTEGRATION ---
+            tab_options, tab_stocks, tab_heatmap, tab_telegram = st.tabs(["Options", "Stocks", "Sector Heatmap", "Telegram Data"])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -543,6 +544,40 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         </div>
                         """, unsafe_allow_html=True)
                         st.dataframe(df_constituents, use_container_width=True, hide_index=True, column_config={"Stock": st.column_config.TextColumn("Stock Asset"), "Market Cap (Cr)": st.column_config.NumberColumn("Market Cap (Cr)", format="%d"), "LTP (₹)": st.column_config.NumberColumn("LTP (₹)", format="%.2f"), "Change %": st.column_config.NumberColumn("Change %", format="%+.2f")})
+            
+            with tab_telegram:
+                st.markdown("#### Live Raw Telegram Data Feed")
+                st.caption("Monitor unstructured alerts here to analyze discussion formats and tune the NLP extractor.")
+                
+                try:
+                    sh = worksheet.spreadsheet
+                    raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
+                    raw_data = raw_worksheet.get_all_records()
+                    df_raw = pd.DataFrame(raw_data)
+                except Exception as e:
+                    df_raw = pd.DataFrame()
+                    
+                if not df_raw.empty:
+                    df_raw = df_raw.sort_values(by="Timestamp", ascending=False).reset_index(drop=True)
+                    
+                    channels = df_raw["Channel Source"].unique().tolist()
+                    sel_chan = st.multiselect("Filter by Channel:", options=channels, default=[])
+                    if sel_chan:
+                        df_raw = df_raw[df_raw["Channel Source"].isin(sel_chan)]
+                        
+                    st.dataframe(
+                        df_raw, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={
+                            "Timestamp": st.column_config.TextColumn("Time", width="medium"),
+                            "Channel Source": st.column_config.TextColumn("Source", width="medium"),
+                            "Raw Message Text": st.column_config.TextColumn("Raw Text Payload", width="large"),
+                            "Parsing Status": st.column_config.TextColumn("Status", width="medium")
+                        }
+                    )
+                else:
+                    st.info("No raw logs found yet. Send a test message to your tracked channels.")
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
