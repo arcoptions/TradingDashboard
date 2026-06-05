@@ -47,6 +47,10 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
     tab_init_research, tab_psych_exec = st.tabs(["Initial Research", "Psychology & Execution"])
     
     with tab_init_research:
+        if st.button("⬅️ Back to Terminal", key="terminal_escape_btn", use_container_width=True):
+            st.session_state.viewing_trade_row = None
+            st.session_state.viewing_scanner_row_data = None  # <--- Add this exact line here
+            st.rerun()
         with st.container(border=True):
             p_chg = float(trade_data.get("Price Chg %", 0) or 0)
             o_chg = float(trade_data.get("OI Chg %", 0) or 0)
