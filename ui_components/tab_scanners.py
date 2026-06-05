@@ -31,7 +31,7 @@ def run_tv_screener(tickers):
     return results
 
 def render(scanner_sheet, scanner_headers):
-    # --- GLOBAL PROMOTE BUTTON ANCHORED AT TOP RIGHT ---
+    # Global top-level control layout alignment
     c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="bottom")
     c1.markdown("#### Automated Scan Feeds")
     execute_promote = c3.button("Promote Selected", type="primary", use_container_width=True, key="promote_scanners_top")
@@ -61,7 +61,6 @@ def render(scanner_sheet, scanner_headers):
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)
         }
 
-        # Store the active state of all Data Editors sequentially
         edited_dfs = {}
 
         def render_scanner_tab(tab_obj, filter_name):
@@ -69,10 +68,16 @@ def render(scanner_sheet, scanner_headers):
                 df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
                 if not df_filtered.empty:
                     m1, m2, m3, m4 = st.columns(4)
+                    
+                    # FIXED: Sliced conditions using partial text logic to accommodate back-end string variants
+                    holding_above = len(df_filtered[df_filtered['Vs Entry'].astype(str).str.contains('Above', na=False)])
+                    slipped_below = len(df_filtered[df_filtered['Vs Entry'].astype(str).str.contains('Below', na=False)])
+                    flat_pending = len(df_filtered[df_filtered['Vs Entry'].astype(str).str.contains('At Entry', na=False) | (df_filtered['Vs Entry'].astype(str) == '-')])
+                    
                     m1.metric("Total Triggers", len(df_filtered))
-                    m2.metric("Holding Above", len(df_filtered[df_filtered['Vs Entry'] == 'Above']))
-                    m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == 'Below']))
-                    m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['At Entry', '-'])]))
+                    m2.metric("Holding Above", holding_above)
+                    m3.metric("Slipped Below", slipped_below)
+                    m4.metric("Flat / Pending", flat_pending)
                     
                     st.write("")
                     
@@ -91,7 +96,7 @@ def render(scanner_sheet, scanner_headers):
         render_scanner_tab(tab_ce2, "CE2")
         render_scanner_tab(tab_pos, "Positional")
         
-        # --- GLOBAL EXECUTION LOGIC (Evaluated after checking all active tabs) ---
+        # Global promotion processing loop
         if execute_promote:
             all_selected_frames = [df[df["Promote"] == True] for df in edited_dfs.values() if not df.empty and "Promote" in df.columns]
             
@@ -126,7 +131,6 @@ def render(scanner_sheet, scanner_headers):
                     if col in main_headers: new_row[main_headers.index(col)] = str(val)
                 fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
                 
-                # Accurately extract Scanner source metadata from original DataFrame
                 try:
                     source_scanner = df_scan.loc[df_scan['_Sheet_Row'] == row['_Sheet_Row'], 'Scanner'].iloc[0]
                 except:
