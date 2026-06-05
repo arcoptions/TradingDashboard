@@ -24,12 +24,7 @@ SECTOR_MAP = {
     "SONACOMS": "Auto Components", "EXIDEIND": "Auto Components",
     "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma",
     "JSWENERGY": "Power", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
-    "UPL": "Chemicals", "PIIND": "Chemicals",
-    "IRFC": "Railways / Finance", "IREDA": "Green Energy / Finance", "PFC": "Finance", 
-    "GMRAIRPORT": "Infrastructure", "NBCC": "Construction",
-    "SAIL": "Metals", "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals",
-    "PNBGILTS": "Finance", "IFCI": "Finance",
-    "NIFTY": "Market Index", "BANKNIFTY": "Sector Index", "COALINDIA": "Metals / Mining"
+    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "WIPRO": "IT Services", "TATASTEEL": "Metals"
 }
 
 INDEX_CONSTITUENTS = {
@@ -37,37 +32,22 @@ INDEX_CONSTITUENTS = {
     "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
     "Finnifty": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "CHOLAFIN", "PFC", "RECLTD", "BAJAJFINSV", "MUTHOOTFIN", "SHRIRAMFIN"],
     "Nifty Bank": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK"],
-    "Nifty IT": ["INFY", "TCS", "HCLTECH", "WIPRO", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS", "TATAELXSI"],
-    "Nifty FMCG": ["ITC", "HINDUNILVR", "NESTLEIND", "BRITANNIA", "TATACONSUM", "GODREJCP", "DABUR", "VBL", "MARICO", "COLPAL"],
-    "Nifty Auto": ["TATAMOTORS", "M_M", "MARUTI", "BAJAJ_AUTO", "EICHERMOT", "TVSMOTOR", "HEROMOTOCO", "BOSCHLTD", "TIINDIA", "MRF"],
-    "Nifty Energy": ["RELIANCE", "NTPC", "ONGC", "POWERGRID", "COALINDIA", "TATAPOWER", "IOC", "BPCL", "GAIL", "ADANIPOWER"],
-    "Nifty Metal": ["TATASTEEL", "JSWSTEEL", "HINDALCO", "COALINDIA", "VEDL", "JINDALSTEL", "SAIL", "NMDC", "NATIONALUM"],
-    "Nifty Pharma": ["SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "AUROPHARMA", "MANKIND", "TORNTPHARM", "ZYDUSLIFE"],
-    "Nifty Healthcare": ["SUNPHARMA", "APOLLOHOSP", "MAXHEALTH", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "FORTIS", "METROPOLIS"],
-    "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE", "SOBHA", "SUNTECK"]
+    "Nifty IT": ["INFY", "TCS", "HCLTECH", "WIPRO", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS", "TATAELXSI"]
 }
 
 ASSET_ALIASES = {
     "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
     "RELIANCE": ["RELIANCE", "RIL", "RELIANCE INDUSTRIES"],
-    "M&M": ["M&M", "M & M", "MAHINDRA & MAHINDRA", "MAHINDRA"],
-    "TATAMOTORS": ["TATAMOTORS", "TATA MOTORS", "TATAMOTOR"],
-    "TCS": ["TCS", "TATA CONSULTANCY SERVICES", "TATA CONSULTANCY"],
-    "HDFCBANK": ["HDFCBANK", "HDFC BANK", "HDFC"],
-    "ICICIBANK": ["ICICIBANK", "ICICI BANK", "ICICI"],
+    "M&M": ["M&M", "M & M", "MAHINDRA & MAHINDRA"],
+    "TATAMOTORS": ["TATAMOTORS", "TATA MOTORS"],
+    "TCS": ["TCS", "TATA CONSULTANCY SERVICES"],
+    "HDFCBANK": ["HDFCBANK", "HDFC BANK"],
+    "ICICIBANK": ["ICICIBANK", "ICICI BANK"],
     "INFY": ["INFY", "INFOSYS"],
     "SUNPHARMA": ["SUNPHARMA", "SUN PHARMA"],
-    "HCLTECH": ["HCLTECH", "HCL TECHNOLOGIES"],
     "TATASTEEL": ["TATASTEEL", "TATA STEEL"],
     "WIPRO": ["WIPRO"]
 }
-
-# Compile a master list of keywords for the News Routing Engine
-KNOWN_ASSETS = set()
-for aliases in ASSET_ALIASES.values(): KNOWN_ASSETS.update([a.upper() for a in aliases])
-for stocks in INDEX_CONSTITUENTS.values(): 
-    KNOWN_ASSETS.update([s.replace('_', '').upper() for s in stocks])
-    KNOWN_ASSETS.update([s.replace('_', ' ').upper() for s in stocks])
 
 def prox_color(val):
     if val == "-": return "color:#64748B;"
@@ -350,7 +330,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 </div>
                                 """, unsafe_allow_html=True)
                             with pc4:
-                                st.markdown("<span style='font-size:13px; font-weight:bold; color:#0F172A;'>📰 News Feed (Beat The Street)</span>", unsafe_allow_html=True)
+                                st.markdown("<span style='font-size:13px; font-weight:bold; color:#0F172A;'>📰 News Feed</span>", unsafe_allow_html=True)
                                 try:
                                     raw_log_ws = worksheet.spreadsheet.worksheet("Telegram_Raw_Logs")
                                     news_dataset = raw_log_ws.get_all_records()
@@ -424,7 +404,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution conclusion exit parameters.")
+                            except: st.info("Awaiting execution conclusion parameter resolution matrices.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
                             fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
@@ -487,7 +467,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_data[s]["mcap"]/10000000, 2) if all_data[s]["mcap"] else 0.0, "LTP (₹)": all_data[s]["ltp"], "Change %": all_data[s]["change"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_data]
                     st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
             
-            # ─── BATCH PROCESSING UI: MULTI-SELECT TELEGRAM DATA TABLES ───
+            # ─── REFACTORED WORKSPACE INGESTION CONSOLE ───
             with tab_telegram:
                 st.markdown("#### Operational Staging Workspaces")
                 try:
@@ -499,40 +479,35 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 if not df_raw_logs.empty:
                     df_raw_logs["_Row_ID"] = range(2, len(df_raw_logs) + 2)
-                    
-                    # 1. Filter out already processed items
                     df_pending = df_raw_logs[df_raw_logs["Parsing Status"].astype(str).str.strip().str.lower().isin(["pending review", "pending extraction", "pending parsing", "news ingested"])].copy()
                     
                     mentions_list, news_list, discussions_list = [], [], []
                     
-                    # 2. Strict Logical Routing Engine
+                    # ─── MASTER SCRIP MASTER FILTERING LAYER ───
                     for idx, row in df_pending.iterrows():
                         text = str(row['Raw Message Text'])
                         source = str(row['Channel Source'])
-                        is_news_source = any(kw in source.lower() for kw in ["beat the street", "news"])
+                        is_news_channel = any(kw in source.lower() for kw in ["beat the street", "news"])
                         
                         pre_parsed = analytics.parse_telegram_tip(text)
                         t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
                         
-                        stock_mentioned = False
-                        matched_symbol = ""
+                        # Direct Scrip master confirmation
+                        t_sym, t_sec, _ = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
                         
-                        if t_symbol not in ["", "UNKNOWN", "NONE", "NAN"]:
-                            stock_mentioned = True
-                            matched_symbol = t_symbol
-                        else:
-                            # Deep keyword search for explicit stock mentions
-                            text_upper, text_norm = text.upper(), text.upper().replace(" ", "")
-                            for asset in KNOWN_ASSETS:
-                                if asset in text_upper or asset.replace(" ", "") in text_norm:
-                                    stock_mentioned = True
-                                    matched_symbol = asset
+                        if not t_sec:
+                            # Run back-up synonym mapping array logic
+                            text_upper = text.upper()
+                            text_norm = text_upper.replace(" ", "")
+                            for master_ticker, aliases in ASSET_ALIASES.items():
+                                if any(alias in text_upper or alias.replace(" ", "") in text_norm for alias in aliases):
+                                    t_sym, t_sec, _ = api.resolve_instrument(master_ticker)
                                     break
-                                    
-                        if stock_mentioned:
-                            row['Extracted_Symbol'] = matched_symbol
+                        
+                        if t_sec:  # Valid trade asset confirmed by Dhan API Scrip Master
+                            row['Extracted_Symbol'] = t_sym
                             mentions_list.append(row)
-                        elif is_news_source:
+                        elif is_news_channel:
                             row['Extracted_Symbol'] = "-"
                             news_list.append(row)
                         else:
@@ -543,12 +518,14 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     df_news = pd.DataFrame(news_list) if news_list else pd.DataFrame()
                     df_discussions = pd.DataFrame(discussions_list) if discussions_list else pd.DataFrame()
                     
-                    # Ensure current active watchlist is loaded for duplicate checking
-                    running_symbols = initial_df["Symbol / Asset"].astype(str).str.upper().tolist() if not initial_df.empty else []
+                    # Exact Equality duplication boundaries tracking 
+                    watchlist_symbols = []
+                    if not initial_df.empty:
+                        watchlist_symbols += initial_df["Symbol / Asset"].astype(str).str.upper().tolist()
+                        watchlist_symbols += initial_df["Base Asset"].astype(str).str.upper().tolist()
 
                     sub_mentions, sub_news, sub_discussions = st.tabs(["🎯 Stock Mentions", "📰 Exclusive News Log", "💬 General Discussions"])
                     
-                    # ─── HELPER FUNCTION TO RENDER BULK TABLES ───
                     def render_bulk_table(df, tab_name):
                         if df.empty:
                             st.success(f"✨ {tab_name} Queue Clear!")
@@ -557,15 +534,14 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         df_display = df.copy()
                         df_display.insert(0, "Select", False)
                         
+                        # FIX: EXACT TOKEN MATCHING TO REPAIR TATA/BANK LEAKS
                         if tab_name == "Stock Mentions":
-                            df_display["Status"] = df_display["Extracted_Symbol"].apply(lambda x: "⚠️ Duplicate" if any(str(x) in s for s in running_symbols) else "🟢 Unique")
+                            df_display["Status"] = df_display["Extracted_Symbol"].apply(lambda x: "⚠️ Duplicate" if str(x).upper() in watchlist_symbols else "🟢 Unique")
                         else:
                             df_display["Status"] = "ℹ️ Info"
                             
-                        # Top Action Buttons
                         b1, b2, b3 = st.columns([1, 1, 1])
                         
-                        # Data Editor
                         edited_df = st.data_editor(
                             df_display,
                             hide_index=True,
@@ -573,61 +549,59 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             key=f"editor_{tab_name}",
                             column_config={
                                 "Select": st.column_config.CheckboxColumn("✓", width="small"),
-                                "_Row_ID": None,
-                                "Parsing Status": None,
+                                "_Row_ID": None, "Parsing Status": None,
                                 "Timestamp": st.column_config.TextColumn("Time", width="small"),
                                 "Channel Source": st.column_config.TextColumn("Source", width="medium"),
                                 "Raw Message Text": st.column_config.TextColumn("Message Content", width="large"),
-                                "Extracted_Symbol": st.column_config.TextColumn("Asset", width="small"),
+                                "Extracted_Symbol": st.column_config.TextColumn("Asset Token", width="small"),
                                 "Status": st.column_config.TextColumn("Status", width="small")
                             }
                         )
                         
                         selected_rows = edited_df[edited_df["Select"] == True]
                         
-                        if tab_name == "Stock Mentions":
-                            if b1.button("⚡ Stage Selected", key=f"btn_stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
-                                sandbox_ws = wb_obj.worksheet("Telegram_Sandbox")
-                                sandbox_rows = []
-                                status_updates = []
-                                
-                                for _, s_row in selected_rows.iterrows():
-                                    if "Duplicate" in s_row["Status"]: continue # Protect against staging duplicates
-                                    
-                                    t_sym, t_sec, t_exch = api.resolve_instrument(s_row['Extracted_Symbol'])
-                                    pre_parsed = analytics.parse_telegram_tip(s_row['Raw Message Text'])
-                                    
-                                    new_row = [""] * len(sheet_headers)
-                                    def fill(col, val): 
-                                        if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
-                                    
-                                    fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
-                                    fill("Idea Source (Chartink/Telegram/X/Self)", s_row['Channel Source'])
-                                    fill("Symbol / Asset", t_sym)
-                                    fill("Trade Type (Eq/Option)", pre_parsed.get('trade_type', 'Option'))
-                                    fill("Exchange", t_exch)
-                                    fill("Security ID", t_sec)
-                                    fill("Status (Watch/Active/Closed)", "Watchlist")
-                                    fill("Entry CMP / Range", pre_parsed.get('entry', ''))
-                                    fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
-                                    fill("Target 1", pre_parsed.get('t1', ''))
-                                    fill("Raw Tip Text", s_row['Raw Message Text'])
-                                    
-                                    sandbox_rows.append(new_row)
-                                    status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Successfully Staged"]]})
-                                
-                                if sandbox_rows:
-                                    sandbox_ws.append_rows(sandbox_rows)
-                                    raw_log_ws.batch_update(status_updates)
-                                    st.toast(f"Staged {len(sandbox_rows)} rows to Watchlist!")
-                                    time.sleep(0.5); st.rerun()
-
-                        if b2.button("📦 Archive Selected", key=f"btn_arc_{tab_name}", use_container_width=True) and not selected_rows.empty:
-                            try: archive_ws = wb_obj.worksheet("Telegram_Archive")
-                            except: archive_ws = wb_obj.add_worksheet(title="Telegram_Archive", rows="2000", cols="4")
+                        if b1.button("⚡ Stage Selected Rows", key=f"stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
+                            sandbox_ws = wb_obj.worksheet("Telegram_Sandbox")
+                            sandbox_rows, status_updates = [], []
                             
-                            arc_rows = []
-                            status_updates = []
+                            for _, s_row in selected_rows.iterrows():
+                                if "Duplicate" in s_row["Status"]: continue 
+                                
+                                t_sym, t_sec, t_exch = api.resolve_instrument(s_row['Extracted_Symbol'])
+                                pre_parsed = analytics.parse_telegram_tip(s_row['Raw Message Text'])
+                                
+                                new_row = [""] * len(sheet_headers)
+                                def fill(col, val): 
+                                    if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
+                                
+                                fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+                                fill("Idea Source (Chartink/Telegram/X/Self)", s_row['Channel Source'])
+                                fill("Symbol / Asset", t_sym)
+                                fill("Trade Type (Eq/Option)", pre_parsed.get('trade_type', 'Option'))
+                                fill("Exchange", t_exch)
+                                fill("Security ID", t_sec)
+                                fill("Status (Watch/Active/Closed)", "Watchlist")
+                                fill("Entry CMP / Range", pre_parsed.get('entry', ''))
+                                fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
+                                fill("Target 1", pre_parsed.get('t1', ''))
+                                fill("Raw Tip Text", s_row['Raw Message Text'])
+                                
+                                sandbox_rows.append(new_row)
+                                status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Successfully Staged"]]})
+                            
+                            if sandbox_rows:
+                                sandbox_ws.append_rows(sandbox_rows)
+                                raw_log_ws.batch_update(status_updates)
+                                st.toast(f"Staged {len(sandbox_rows)} rows cleanly to Watchlist!")
+                                time.sleep(0.5); st.rerun()
+
+                        if b2.button("📦 Archive Selected Rows", key=f"arc_{tab_name}", use_container_width=True) and not selected_rows.empty:
+                            try: archive_ws = wb_obj.worksheet("Telegram_Archive")
+                            except:
+                                archive_ws = wb_obj.add_worksheet(title="Telegram_Archive", rows="2000", cols="4")
+                                archive_ws.append_row(["Timestamp", "Source", "Raw Text", "Archived Date"])
+                            
+                            arc_rows, status_updates = [], []
                             for _, s_row in selected_rows.iterrows():
                                 arc_rows.append([s_row['Timestamp'], s_row['Channel Source'], s_row['Raw Message Text'], datetime.today().strftime("%Y-%m-%d")])
                                 status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Archived Data"]]})
@@ -635,16 +609,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             if arc_rows:
                                 archive_ws.append_rows(arc_rows)
                                 raw_log_ws.batch_update(status_updates)
-                                st.toast(f"Archived {len(arc_rows)} rows.")
+                                st.toast(f"Archived {len(arc_rows)} elements.")
                                 time.sleep(0.5); st.rerun()
 
-                        if b3.button("🗑️ Discard Selected", key=f"btn_dsc_{tab_name}", use_container_width=True) and not selected_rows.empty:
+                        if b3.button("🗑️ Discard Selected Rows", key=f"dsc_{tab_name}", use_container_width=True) and not selected_rows.empty:
                             status_updates = [{'range': f"D{s_row['_Row_ID']}", 'values': [["Discarded"]]} for _, s_row in selected_rows.iterrows()]
                             raw_log_ws.batch_update(status_updates)
-                            st.toast(f"Discarded {len(status_updates)} rows.")
+                            st.toast(f"Dropped {len(status_updates)} text lines.")
                             time.sleep(0.5); st.rerun()
 
-                    # Render Tabs
                     with sub_mentions: render_bulk_table(df_mentions, "Stock Mentions")
                     with sub_news: render_bulk_table(df_news, "News Feeds")
                     with sub_discussions: render_bulk_table(df_discussions, "General Discussions")
