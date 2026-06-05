@@ -8,7 +8,6 @@ from google.oauth2.service_account import Credentials
 import streamlit as st
 
 def get_secrets():
-    """Retrieve secrets prioritizing Streamlit secrets, then TOML, then Env Variables."""
     try:
         return st.secrets
     except Exception:
@@ -20,7 +19,6 @@ def get_secrets():
 
 @st.cache_resource
 def get_gspread_client():
-    """Initializes and caches the authenticated Google API Client."""
     secrets = get_secrets()
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
@@ -36,7 +34,6 @@ def get_gspread_client():
 
 @st.cache_resource
 def init_sheet_connection():
-    """Authenticates and maps all essential Google Sheets tabs for WRITING data."""
     gc = get_gspread_client()
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
@@ -48,6 +45,8 @@ def init_sheet_connection():
 
     try: 
         study_ws = sh.worksheet("Stocks to study")
+        if not study_ws.row_values(1):
+            study_ws.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
     except gspread.exceptions.WorksheetNotFound:
         study_ws = sh.add_worksheet(title="Stocks to study", rows="3000", cols="5")
         study_ws.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
@@ -60,13 +59,10 @@ def init_sheet_connection():
         
     return sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws
 
-# ─── CRITICAL 429 QUOTA FIX: CACHING & EXPONENTIAL BACKOFF ───
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_dataframe_safe(sheet_title, is_sheet1=False):
-    """Fetches sheet data and holds it in RAM for 15s to block rapid Google API spam."""
     gc = get_gspread_client()
     sh = gc.open("Comprehensive Trading Tracker 2026")
-    
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -74,22 +70,18 @@ def fetch_dataframe_safe(sheet_title, is_sheet1=False):
             vals = worksheet.get_all_values()
             if len(vals) > 1:
                 df = pd.DataFrame(vals[1:], columns=vals[0])
-                # Filter out completely empty rows
                 return df[df[df.columns[0]].astype(str).str.strip() != ""]
             return pd.DataFrame()
         except gspread.exceptions.APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
-                time.sleep(1.5 ** attempt) # Sleeps 1s, 1.5s, 2.25s before retrying
+                time.sleep(1.5 ** attempt) 
                 continue
-            print(f"Sheet Fetch API Error ({sheet_title}): {e}")
             return pd.DataFrame()
         except Exception as e:
-            print(f"Sheet Fetch General Error ({sheet_title}): {e}")
             return pd.DataFrame()
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_settings_cell(cell_id):
-    """Caches the single-cell lookup for the NIFTY ticker tape."""
     try:
         _, _, _, _, _, settings_ws = init_sheet_connection()
         if settings_ws: return settings_ws.acell(cell_id).value
