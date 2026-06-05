@@ -17,11 +17,17 @@ import database as db
 # ─── LIGHTWEIGHT WEB SERVER FOR RENDER FREE TIER ───
 class HealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
-        """Responds to Render and Keep-Alive pings to prevent sleep mode."""
+        """Responds to standard browser and Render health checks."""
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"ARC Ingestion Engine Operational")
+        
+    def do_HEAD(self):
+        """FIX: Responds to UptimeRobot pings to prevent 501 Not Implemented errors."""
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
         
     def log_message(self, format, *args):
         return # Suppress standard log clutter in your terminal window
