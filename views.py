@@ -8,7 +8,7 @@ import inspect
 import time
 from datetime import datetime
 import plotly.express as px
-import gspread # Added to handle dynamic sheet creation
+import gspread 
 import analytics
 import database as db
 import broker_api as api
@@ -174,8 +174,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
     primary_watchlist_ws = worksheet.spreadsheet.sheet1
-    initial_data = primary_watchlist_ws.get_all_records()
-    sheet_headers = primary_watchlist_ws.row_values(1)
+    
+    # ─── FIX 1: API RATE LIMIT PROTECTOR FOR WATCHLIST ───
+    try:
+        initial_data = primary_watchlist_ws.get_all_records()
+        sheet_headers = primary_watchlist_ws.row_values(1)
+    except Exception as e:
+        initial_data = []
+        st.warning("⚠️ Google API Quota Reached. Please wait a few seconds before navigating to allow limits to reset.")
+
     initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
     if not initial_df.empty:
@@ -465,13 +472,13 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 st.markdown("#### Macro Research Staging Deck (`Stocks to study`)")
                 st.caption("Aggregated list of high-conviction insights extracted directly from news wires and automated tickers.")
                 
-                # ─── FIX: SELF-HEALING SHEET CREATOR IF MISSING ───
                 try:
                     study_ws_layer = worksheet.spreadsheet.worksheet("Stocks to study")
                 except gspread.exceptions.WorksheetNotFound:
                     study_ws_layer = worksheet.spreadsheet.add_worksheet(title="Stocks to study", rows="3000", cols="5")
                     study_ws_layer.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
                     
+                # ─── FIX 2: API RATE LIMIT PROTECTOR FOR STUDY TAB ───
                 try:
                     study_vals = study_ws_layer.get_all_values()
                     if len(study_vals) > 1:
@@ -481,6 +488,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         df_study_log = pd.DataFrame()
                 except Exception as e: 
                     df_study_log = pd.DataFrame()
+                    st.warning("⚠️ Temporarily paused sync to respect Google Sheets API Read Quota.")
                 
                 if not df_study_log.empty:
                     st.dataframe(
@@ -524,7 +532,13 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             
             with tab_scanners:
                 st.markdown("#### Automated Scan Feeds")
-                scanner_data = scanner_sheet.get_all_records()
+                # ─── FIX 3: API RATE LIMIT PROTECTOR FOR SCANNERS ───
+                try:
+                    scanner_data = scanner_sheet.get_all_records()
+                except Exception as e:
+                    scanner_data = []
+                    st.warning("⚠️ Scanner feed temporarily paused to respect Google API limits.")
+                
                 df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
                 
                 if not df_scan.empty:
@@ -555,12 +569,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
 
             with tab_telegram:
                 st.markdown("#### Operational Staging Workspaces")
+                # ─── FIX 4: API RATE LIMIT PROTECTOR FOR TELEGRAM LOGS ───
                 try:
                     wb_obj = worksheet.spreadsheet
                     raw_log_ws = wb_obj.worksheet("Telegram_Raw_Logs")
                     raw_data_records = raw_log_ws.get_all_records()
                     df_raw_logs = pd.DataFrame(raw_data_records)
-                except: df_raw_logs = pd.DataFrame()
+                except Exception as e:
+                    df_raw_logs = pd.DataFrame()
+                    st.warning("⚠️ Terminal raw logs feed paused. Background collection is still active.")
                 
                 if not df_raw_logs.empty:
                     df_raw_logs["_Row_ID"] = range(2, len(df_raw_logs) + 2)
@@ -725,4 +742,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                 else: st.info("System initializing tracking logs. Awaiting fresh inbound advisory data.")
 
-def render_chartink_scanners(*args, **kwargs): pass
+# Empty fallback handler just to prevent Streamlit startup errors if old references exist
+def render_chartink_scanners(*args, **kwargs):
+    pass
