@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -69,9 +70,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Application Global States
+# ─── RESTORED: Application Global States ───
+if "viewing_trade" not in st.session_state: st.session_state.viewing_trade = None
 if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
 if "viewing_scanner_row_data" not in st.session_state: st.session_state.viewing_scanner_row_data = None
+if "qp_key" not in st.session_state: st.session_state.qp_key = 0
+if "target_hits" not in st.session_state: st.session_state.target_hits = 0
+if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
 
 @st.cache_data(ttl=60)
 def fetch_all_sectors_data():
@@ -165,15 +170,20 @@ def main():
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
         return
 
-    # --- THE RESTORED SIDEBAR ---
+    # --- SIDEBAR NAVIGATION ---
     with st.sidebar:
-        try: st.image("logo.png", use_container_width=True)
-        except: st.markdown("## ARC Terminal")
+        # Strict OS path checking to completely prevent broken HTML image rendering
+        if os.path.exists("logo.png"):
+            st.image("logo.png", use_container_width=True)
+        elif os.path.exists("assets/logo.png"):
+            st.image("assets/logo.png", use_container_width=True)
+        else:
+            st.markdown("<h2 style='text-align: center;'>ARC Terminal</h2>", unsafe_allow_html=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("Log New Trade", type="primary", use_container_width=True): 
             try: modals.trade_entry_modal(watchlist_ws, watchlist_ws.row_values(1))
-            except: st.info("Logging module unavailable.")
+            except Exception as modal_err: st.error(f"Logging module unavailable. {modal_err}")
             
         st.markdown("<br>", unsafe_allow_html=True)
         st.divider()
@@ -225,9 +235,7 @@ def main():
     scores_col, decisions_col = [], []
     for idx, row in df_watchlist.iterrows():
         sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
-        # --- FIXED SYNTAX ERROR HERE ---
         pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
-        # -------------------------------
         p_chg = float(row.get("Price Chg %", 0) or 0)
         o_chg = float(row.get("OI Chg %", 0) or 0)
         lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
@@ -271,7 +279,6 @@ def main():
             # Rendering Inspector directly
             trade_inspector.render(full_mock_row, intel_pool, saved_token, watchlist_ws, sheet_headers)
         
-        # Stop layout rendering to present the clean Inspector Canvas
         return
 
     # --- MAIN TERMINAL RENDER ALGORITHMS ---
