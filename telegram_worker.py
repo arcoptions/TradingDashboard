@@ -4,6 +4,7 @@ import toml
 import threading
 import sys
 import time
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -11,7 +12,30 @@ import gspread
 from google.oauth2.service_account import Credentials
 import datetime
 
-# ─── LIGHTWEIGHT WEB SERVER FOR RENDER FREE TIER ───
+# ─── MASTER DICTIONARIES FOR BACKGROUND NLP ───
+ASSET_ALIASES = {
+    "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
+    "RELIANCE": ["RELIANCE", "RIL", "RELIANCE INDUSTRIES"],
+    "M&M": ["M&M", "M & M", "MAHINDRA"],
+    "TATAMOTORS": ["TATAMOTORS", "TATA MOTORS"],
+    "TCS": ["TCS", "TATA CONSULTANCY SERVICES"],
+    "HDFCBANK": ["HDFCBANK", "HDFC BANK"],
+    "ICICIBANK": ["ICICIBANK", "ICICI BANK"],
+    "INFY": ["INFY", "INFOSYS"],
+    "SUNPHARMA": ["SUNPHARMA", "SUN PHARMA"],
+    "TATASTEEL": ["TATASTEEL", "TATA STEEL"],
+    "WIPRO": ["WIPRO"],
+    "OIL": ["OIL", "OIL INDIA", "OILINDIA"]
+}
+
+SECTOR_MAP_KEYS = [
+    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "HCLTECH", "WIPRO", "TECHM", 
+    "TATAELXSI", "ITC", "HUL", "NESTLEIND", "VBL", "BRITANNIA", "TATAMOTORS", "M&M", 
+    "TVSMOTOR", "MARUTI", "BAJAJ-AUTO", "SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", 
+    "JSWENERGY", "NTPC", "POWERGRID", "TATAPOWER", "UPL", "PIIND", "COALINDIA", 
+    "TATASTEEL", "OIL"
+]
+
 class HealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
@@ -62,16 +86,13 @@ def init_sheet_connection(secrets):
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    # 1. Active Watchlist (Primary Sheet Workspace Tab)
     watchlist_ws = sh.sheet1
     
-    # 2. Stocks To Study Worksheet Tab
     try: study_ws = sh.worksheet("Stocks to study")
     except gspread.exceptions.WorksheetNotFound:
         study_ws = sh.add_worksheet(title="Stocks to study", rows="3000", cols="6")
         study_ws.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
 
-    # 3. Raw Logs Database Tracking Tab
     try: raw_ws = sh.worksheet("Telegram_Raw_Logs")
     except gspread.exceptions.WorksheetNotFound:
         raw_ws = sh.add_worksheet(title="Telegram_Raw_Logs", rows="5000", cols="5")
@@ -127,20 +148,44 @@ async def run_telegram_listener():
                 try:
                     if not watchlist_ws: watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
                     
-                    pre_parsed = analytics.parse_telegram_tip(raw_text)
-                    t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
-                    t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
-                    
                     if source_name == "Beat The Street":
-                        if t_sec:
-                            # ─── NEWS RULE: Valid stock mentioned goes automatically to Stocks to study ───
-                            study_ws.append_row([timestamp_str, source_name, t_sym, raw_text, datetime.date.today().strftime("%Y-%m-%d")])
-                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Stocks to Study"])
-                        else:
-                            raw_ws.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
+                        # ─── ADVANCED NEWS NLP ENGINE ───
+                        text_upper = raw_text.upper()
+                        text_norm = text_upper.replace(" ", "")
+                        matched_symbol = ""
+                        
+                        # 1. Search custom aliases (e.g. OIL INDIA)
+                        for master_ticker, aliases in ASSET_ALIASES.items():
+                            for alias in aliases:
+                                pattern = r'\b' + re.escape(alias.upper()) + r'\b'
+                                if re.search(pattern, text_upper) or alias.replace(" ", "") in text_norm:
+                                    matched_symbol = master_ticker
+                                    break
+                            if matched_symbol: break
+                                
+                        # 2. Search index dictionary
+                        if not matched_symbol:
+                            for index_asset in SECTOR_MAP_KEYS:
+                                pattern = r'\b' + re.escape(index_asset.upper()) + r'\b'
+                                if re.search(pattern, text_upper):
+                                    matched_symbol = index_asset
+                                    break
+                        
+                        if matched_symbol:
+                            t_sym, t_sec, _ = api.resolve_instrument(matched_symbol)
+                            if t_sec:
+                                study_ws.append_row([timestamp_str, source_name, t_sym, raw_text, datetime.date.today().strftime("%Y-%m-%d")])
+                                raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Stocks to Study"])
+                            else: raw_ws.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
+                        else: raw_ws.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
+                            
                     else:
+                        # ─── ADVISORY NLP ENGINE ───
+                        pre_parsed = analytics.parse_telegram_tip(raw_text)
+                        t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
+                        t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
+                        
                         if t_sec:
-                            # ─── ADVISORY RULE: Valid stock goes automatically to Active Watchlist ───
                             auto_derived_type = "Equity" if "EQ" in str(t_exch) else "Option"
                             new_row = [""] * len(sheet_headers)
                             def fill(col, val): 
