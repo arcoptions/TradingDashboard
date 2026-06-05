@@ -51,9 +51,16 @@ ASSET_ALIASES = {
     "HDFCBANK": ["HDFCBANK", "HDFC BANK"],
     "ICICIBANK": ["ICICIBANK", "ICICI BANK"],
     "INFY": ["INFY", "INFOSYS"],
+    "SUNPHARMA": ["SUNPHARMA", "SUN PHARMA"],
     "TATASTEEL": ["TATASTEEL", "TATA STEEL"],
     "WIPRO": ["WIPRO"]
 }
+
+KNOWN_ASSETS = set()
+for aliases in ASSET_ALIASES.values(): KNOWN_ASSETS.update([a.upper() for a in aliases])
+for stocks in INDEX_CONSTITUENTS.values():
+    KNOWN_ASSETS.update([s.replace('_', '').upper() for s in stocks])
+    KNOWN_ASSETS.update([s.replace('_', ' ').upper() for s in stocks])
 
 def prox_color(val):
     if val == "-": return "color:#64748B;"
@@ -357,7 +364,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                             
                                             matched = False
                                             for alias in aliases:
-                                                if alias in text_upper or alias.replace(" ", "") in text_normalized:
+                                                pattern = r'\b' + re.escape(alias.upper()) + r'\b'
+                                                if re.search(pattern, text_upper) or alias.replace(" ", "") in text_normalized:
                                                     matched = True
                                                     break
                                             
@@ -412,7 +420,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution conclusion exit parameters.")
+                            except: st.info("Awaiting execution parameters.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
                             fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
@@ -432,8 +440,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # ─── COMPLIANT STOCKS TO STUDY TAB WORKFLOW INTEGRATION ───
-            tab_options, tab_stocks, tab_study, tab_heatmap, tab_telegram = st.tabs(["Options", "Stocks", "Stocks to Study", "Sector Heatmap", "Telegram Data"])
+            # ─── INJECTED SCANNERS TAB ───
+            tab_options, tab_stocks, tab_study, tab_heatmap, tab_scanners, tab_telegram = st.tabs(["Options", "Stocks", "Stocks to Study", "Sector Heatmap", "Scanners", "Telegram Data"])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -478,7 +486,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         chgs = [all_data[s]["change"] for s in stocks if s in all_data and all_data[s]["change"] is not None]
                         sector_data.append({"Sector": sec, "Change": sum(chgs)/len(chgs) if chgs else 0.0, "Weight": sector_weights.get(sec, 30)})
                     
-                    # ─── IMAGE_A976C6.PNG COMPLETE RECTIFICATION GRID SCALES ───
                     fig = px.treemap(pd.DataFrame(sector_data), path=['Sector'], values='Weight', color='Change', custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
                     fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
                     fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
@@ -492,7 +499,37 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_data[s]["mcap"]/10000000, 2) if all_data[s]["mcap"] else 0.0, "LTP (₹)": all_data[s]["ltp"], "Change %": all_data[s]["change"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_data]
                     st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
             
-            # ─── BATCH CONSOLE STRATEGIES ───
+            with tab_scanners:
+                st.markdown("#### Automated Scan Feeds")
+                scanner_data = scanner_sheet.get_all_records()
+                df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
+                
+                if not df_scan.empty:
+                    df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+                    df_scan = analytics.compute_scanner_signals(df_scan)
+                    tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
+                    scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
+                    scan_col_config = {"_Sheet_Row": None, "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)}
+
+                    def render_scanner_tab(tab_obj, filter_name):
+                        with tab_obj:
+                            df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
+                            if not df_filtered.empty:
+                                m1, m2, m3, m4 = st.columns(4)
+                                m1.metric("Total Triggers", len(df_filtered))
+                                m2.metric("Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
+                                m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
+                                m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                                st.write("")
+                                st.data_editor(df_filtered[scan_view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}", on_change=db.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers}, column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"])
+                            else: st.info(f"No active triggers for {filter_name}.")
+                    
+                    render_scanner_tab(tab_ce1, "CE1")
+                    render_scanner_tab(tab_ce2, "CE2")
+                    render_scanner_tab(tab_pos, "Positional")
+                else:
+                    st.info("Scanner database is currently empty.")
+
             with tab_telegram:
                 st.markdown("#### Operational Staging Workspaces")
                 try:
@@ -516,7 +553,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         stock_mentioned = False
                         matched_symbol = ""
                         
-                        # ─── FIX: ENHANCED WORD-BOUNDARY REGEX LAYER TO BLOCK ILLEGITIMATE SUBSTRING LEAKS ───
                         text_upper = text.upper()
                         for master_ticker, aliases in ASSET_ALIASES.items():
                             for alias in aliases:
@@ -536,7 +572,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                     break
 
                         if stock_mentioned:
-                            # Confirm through the Scrip master lookup pipeline
                             t_sym, t_sec, t_exch_type = api.resolve_instrument(matched_symbol)
                             if t_sec:
                                 row['Extracted_Symbol'] = t_sym
@@ -598,7 +633,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         if b1.button("⚡ Stage Selected Rows", key=f"stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
                             status_updates = []
                             
-                            # ─── UPDATED ROUTING ACTION SCHEMAS PER SPECIFICATION USER INSTRUCTIONS ───
                             if tab_name == "News Feeds" or any(kw in str(selected_rows.iloc[0]['Channel Source']).lower() for kw in ["beat the street", "news"]):
                                 target_study_ws = wb_obj.worksheet("Stocks to study")
                                 bulk_study_rows = []
@@ -664,36 +698,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                 else: st.info("System initializing tracking logs. Awaiting fresh inbound advisory data.")
 
-def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    render_top_ticker_tape(settings_sheet)
-    col_t1, col_t2 = st.columns([9, 1], vertical_alignment="bottom")
-    with col_t1: st.markdown("### Automated Scan Feeds")
-    with col_t2: 
-        if st.button("UI Reset", use_container_width=True, key="rst_scan"):
-            components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
-    
-    scanner_data = scanner_sheet.get_all_records()
-    df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
-    
-    if not df_scan.empty:
-        df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-        df_scan = analytics.compute_scanner_signals(df_scan)
-        tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
-        scan_view_cols = ["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
-        scan_col_config = {"_Sheet_Row": None, "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)}
-
-        def render_scanner_tab(tab_obj, filter_name):
-            with tab_obj:
-                df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
-                if not df_filtered.empty:
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Total Triggers", len(df_filtered))
-                    m2.metric("Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
-                    m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
-                    m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
-                    st.write("")
-                    st.data_editor(df_filtered[scan_view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}", on_change=db.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers}, column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"])
-        
-        render_scanner_tab(tab_ce1, "CE1")
-        render_scanner_tab(tab_ce2, "CE2")
-        render_scanner_tab(tab_pos, "Positional")
+# Fallback function definition strictly for backward compatibility with app.py 
+# if your main layout explicitly requests to render it outside the tabs.
+def render_chartink_scanners(*args, **kwargs):
+    pass
