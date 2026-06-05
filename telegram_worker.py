@@ -62,17 +62,17 @@ def init_sheet_connection(secrets):
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    # 1. Raw Logs Tab (The Observation & News Deck)
     try:
         raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
     except gspread.exceptions.WorksheetNotFound:
+        print("📁 Creating isolated staging tab: 'Telegram_Raw_Logs'...")
         raw_worksheet = sh.add_worksheet(title="Telegram_Raw_Logs", rows="3000", cols="5")
         raw_worksheet.append_row(["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
 
-    # 2. Sandbox Tab (Staged Items Ready For Execution)
     try:
         sandbox_worksheet = sh.worksheet("Telegram_Sandbox")
     except gspread.exceptions.WorksheetNotFound:
+        print("📁 Creating isolated staging tab: 'Telegram_Sandbox'...")
         sandbox_worksheet = sh.add_worksheet(title="Telegram_Sandbox", rows="2000", cols="15")
         sandbox_worksheet.append_row([
             "Trade Date", "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", 
@@ -91,7 +91,6 @@ async def run_telegram_listener():
     API_HASH = os.environ.get("TELEGRAM_API_HASH", secrets.get("telegram", {}).get("api_hash", "your_api_hash"))
     SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING", secrets.get("telegram", {}).get("session_string", ""))
 
-    # ─── COMPREHENSIVE CHANNEL MATRIX ───
     TRACKED_CHANNELS = [
         -1003141350480,       # Derivates Mr Chartist
         -1003858490010,       # Elephant pro
@@ -134,7 +133,6 @@ async def run_telegram_listener():
                 title_token = getattr(chat_from, 'title', '')
                 username_token = getattr(chat_from, 'username', '')
                 
-                # Normalize names for consistency
                 if "BeatTheStreet" in username_token or "Beat The Street" in title_token:
                     source_name = "Beat The Street"
                 else:
@@ -148,7 +146,6 @@ async def run_telegram_listener():
                         secrets_retry = get_secrets()
                         raw_worksheet, sandbox_worksheet = init_sheet_connection(secrets_retry)
                     
-                    # Direct, safe dump straight to the observation log deck
                     status_flag = "News Ingested" if source_name == "Beat The Street" else "Pending Review"
                     raw_worksheet.append_row([timestamp_str, source_name, raw_text, status_flag])
                 except Exception as log_err:
