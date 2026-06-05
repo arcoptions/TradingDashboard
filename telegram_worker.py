@@ -62,19 +62,13 @@ def init_sheet_connection(secrets):
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    # 1. Raw Logs Tab (The Observation Desk / Feed Archive)
-    try:
-        raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
+    try: raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
     except gspread.exceptions.WorksheetNotFound:
-        print("📁 Creating isolated staging tab: 'Telegram_Raw_Logs'...")
         raw_worksheet = sh.add_worksheet(title="Telegram_Raw_Logs", rows="5000", cols="5")
         raw_worksheet.append_row(["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
 
-    # 2. Sandbox Tab (Staged Items Ready For Execution)
-    try:
-        sandbox_worksheet = sh.worksheet("Telegram_Sandbox")
+    try: sandbox_worksheet = sh.worksheet("Telegram_Sandbox")
     except gspread.exceptions.WorksheetNotFound:
-        print("📁 Creating isolated staging tab: 'Telegram_Sandbox'...")
         sandbox_worksheet = sh.add_worksheet(title="Telegram_Sandbox", rows="2000", cols="15")
         sandbox_worksheet.append_row([
             "Trade Date", "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", 
@@ -83,52 +77,54 @@ def init_sheet_connection(secrets):
             "Target 2", "Time Frame", "Setup Rating", "Raw Tip Text"
         ])
         
-    return raw_worksheet, sandbox_worksheet
+    return raw_worksheet, sandbox_worksheet, sandbox_worksheet.row_values(1)
 
 async def run_telegram_listener():
     secrets = get_secrets()
     if not secrets: return
 
+    import broker_api as api
+    import analytics
+
     API_ID = int(os.environ.get("TELEGRAM_API_ID", secrets.get("telegram", {}).get("api_id", 1234567)))
     API_HASH = os.environ.get("TELEGRAM_API_HASH", secrets.get("telegram", {}).get("api_hash", "your_api_hash"))
     SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING", secrets.get("telegram", {}).get("session_string", ""))
 
-    # ─── MASTER CHANNEL DECK (INBOUND ROUTING ROUTINES) ───
     TRACKED_CHANNELS = [
         -1003141350480,       # Derivates Mr Chartist
         -1003858490010,       # Elephant pro
         -1001320942683,       # Sunil
-        -1005281196022,       # Test (Supergroup Handle Layout)
-        -5281196022,          # Test (Basic Group Handle Layout)
+        -1005281196022,       # Test (Supergroup Layout)
+        -5281196022,          # Test (Basic Group Layout)
         -1003800707569,       # Momentum to multibagger
         -1003770951544,       # Investing corner
-        'Shortterm01',        # Shortterm (Public Handle String)
+        'Shortterm01',        # Shortterm
         -1003148687413,       # Equities Intra and Shortterm
         -1003121140019,       # Equities positional
-        'The_ChartWizard',    # The chart wizard (Public Handle String)
+        'The_ChartWizard',    # The chart wizard
         -1003770810999,       # Family May 2026
         -1003109328674,       # Automater alerts Mr Chartist
-        'SwingWisely',        # Swingwise (Public Handle String)
+        'SwingWisely',        # Swingwise
         -1003101198634,       # Commodities Mr Chartist
         'BeatTheStreetNews'   # Isolated Global Social-Media News Engine
     ]
     
     try:
-        raw_worksheet, sandbox_worksheet = init_sheet_connection(secrets)
-        print("✅ Core Infrastructure Routing Layers Activated.")
+        raw_worksheet, sandbox_worksheet, sheet_headers = init_sheet_connection(secrets)
+        print("✅ Core Infrastructure Layers Synchronized.")
     except Exception as e:
-        print(f"⚠️ Initial sheets verification error: {e}.")
-        raw_worksheet, sandbox_worksheet = None, None
+        print(f"⚠️ Initialization anomaly: {e}.")
+        raw_worksheet, sandbox_worksheet, sheet_headers = None, None, []
 
     while True:
         try:
             client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
             await client.start()
-            print("🚀 MTProto Pipeline Socket Streaming Live...")
+            print("🚀 ARC Ingestion Router Processing...")
 
             @client.on(events.NewMessage(chats=TRACKED_CHANNELS))
             async def handler(event):
-                nonlocal raw_worksheet, sandbox_worksheet
+                nonlocal raw_worksheet, sandbox_worksheet, sheet_headers
                 raw_text = event.message.message
                 if not raw_text: return
                     
@@ -136,28 +132,59 @@ async def run_telegram_listener():
                 title_token = getattr(chat_from, 'title', '')
                 username_token = getattr(chat_from, 'username', '')
                 
-                # Coherence Mapping check
                 if "BeatTheStreet" in username_token or "Beat The Street" in title_token:
                     source_name = "Beat The Street"
                 else:
                     source_name = title_token if title_token else (username_token if username_token else str(event.chat_id))
                     
                 timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"📥 Message broadcast captured from source: [{source_name}]")
                 
                 try:
                     if not raw_worksheet:
                         secrets_retry = get_secrets()
-                        raw_worksheet, sandbox_worksheet = init_sheet_connection(secrets_retry)
+                        raw_worksheet, sandbox_worksheet, sheet_headers = init_sheet_connection(secrets_retry)
                     
-                    status_flag = "News Ingested" if source_name == "Beat The Street" else "Pending Review"
-                    raw_worksheet.append_row([timestamp_str, source_name, raw_text, status_flag])
+                    # ─── AUTOMATED INGESTION FOR ADVISORY CHANNELS ───
+                    if source_name != "Beat The Street":
+                        pre_parsed = analytics.parse_telegram_tip(raw_text)
+                        t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
+                        
+                        # Verify against Dhan Master via resolve_instrument
+                        t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
+                        
+                        if t_sec:  # Valid trade asset verified by Dhan Master
+                            new_row_payload = [""] * len(sheet_headers)
+                            def fill(col, val): 
+                                if col in sheet_headers: new_row_payload[sheet_headers.index(col)] = str(val)
+                                    
+                            fill("Trade Date", datetime.date.today().strftime("%Y-%m-%d"))
+                            fill("Idea Source (Chartink/Telegram/X/Self)", source_name)
+                            fill("Symbol / Asset", t_sym)
+                            fill("Trade Type (Eq/Option)", pre_parsed.get('trade_type', 'Option'))
+                            fill("Exchange", t_exch)
+                            fill("Security ID", t_sec)
+                            fill("Status (Watch/Active/Closed)", "Watchlist")
+                            fill("Entry CMP / Range", pre_parsed.get('entry', ''))
+                            fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
+                            fill("Target 1", pre_parsed.get('t1', ''))
+                            fill("Raw Tip Text", raw_text)
+                            
+                            sandbox_worksheet.append_row(new_row_payload)
+                            raw_worksheet.append_row([timestamp_str, source_name, raw_text, "Automatically Staged"])
+                            print(f"⚡ Autopilot Success: Directed {t_sym} straight to tracking sheets.")
+                        else:
+                            # Not a tradable counter asset, log to standard review queues
+                            raw_worksheet.append_row([timestamp_str, source_name, raw_text, "Pending Review"])
+                    else:
+                        # News channel data goes straight to exclusive news log
+                        raw_worksheet.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
+                        
                 except Exception as log_err:
-                    print(f"⚠️ Sheet append execution failure: {log_err}")
+                    print(f"⚠️ Operational loop exception: {log_err}")
 
             await client.run_until_disconnected()
         except Exception as loop_err:
-            print(f"⚠️ Network stream disconnected: {loop_err}. Auto-reconnecting in 10s...")
+            print(f"⚠️ Socket mapping dropped: {loop_err}. Auto-restarting in 10s...")
             await asyncio.sleep(10)
 
 if __name__ == '__main__':
