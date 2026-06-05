@@ -62,22 +62,22 @@ def init_sheet_connection(secrets):
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    try: raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
+    # 1. Active Watchlist (Primary Sheet Workspace Tab)
+    watchlist_ws = sh.sheet1
+    
+    # 2. Stocks To Study Worksheet Tab
+    try: study_ws = sh.worksheet("Stocks to study")
     except gspread.exceptions.WorksheetNotFound:
-        raw_worksheet = sh.add_worksheet(title="Telegram_Raw_Logs", rows="5000", cols="5")
-        raw_worksheet.append_row(["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
+        study_ws = sh.add_worksheet(title="Stocks to study", rows="3000", cols="6")
+        study_ws.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
 
-    try: sandbox_worksheet = sh.worksheet("Telegram_Sandbox")
+    # 3. Raw Logs Database Tracking Tab
+    try: raw_ws = sh.worksheet("Telegram_Raw_Logs")
     except gspread.exceptions.WorksheetNotFound:
-        sandbox_worksheet = sh.add_worksheet(title="Telegram_Sandbox", rows="2000", cols="15")
-        sandbox_worksheet.append_row([
-            "Trade Date", "Idea Source (Chartink/Telegram/X/Self)", "Symbol / Asset", 
-            "Trade Type (Eq/Option)", "Exchange", "Security ID", "Status (Watch/Active/Closed)", 
-            "Entry CMP / Range", "Add-On / Dip Levels", "Stop Loss (SL)", "Target 1", 
-            "Target 2", "Time Frame", "Setup Rating", "Raw Tip Text"
-        ])
+        raw_ws = sh.add_worksheet(title="Telegram_Raw_Logs", rows="5000", cols="5")
+        raw_ws.append_row(["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
         
-    return raw_worksheet, sandbox_worksheet, sandbox_worksheet.row_values(1)
+    return watchlist_ws, study_ws, raw_ws, watchlist_ws.row_values(1)
 
 async def run_telegram_listener():
     secrets = get_secrets()
@@ -91,40 +91,27 @@ async def run_telegram_listener():
     SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING", secrets.get("telegram", {}).get("session_string", ""))
 
     TRACKED_CHANNELS = [
-        -1003141350480,       # Derivates Mr Chartist
-        -1003858490010,       # Elephant pro
-        -1001320942683,       # Sunil
-        -1005281196022,       # Test (Supergroup Layout)
-        -5281196022,          # Test (Basic Group Layout)
-        -1003800707569,       # Momentum to multibagger
-        -1003770951544,       # Investing corner
-        'Shortterm01',        # Shortterm
-        -1003148687413,       # Equities Intra and Shortterm
-        -1003121140019,       # Equities positional
-        'The_ChartWizard',    # The chart wizard
-        -1003770810999,       # Family May 2026
-        -1003109328674,       # Automater alerts Mr Chartist
-        'SwingWisely',        # Swingwise
-        -1003101198634,       # Commodities Mr Chartist
-        'BeatTheStreetNews'   # Isolated Global Social-Media News Engine
+        -1003141350480, -1003858490010, -1001320942683, -1005281196022, -5281196022,
+        -1003800707569, -1003770951544, 'Shortterm01', -1003148687413, -1003121140019,
+        'The_ChartWizard', -1003770810999, -1003109328674, 'SwingWisely', -1003101198634,
+        'BeatTheStreetNews'
     ]
     
     try:
-        raw_worksheet, sandbox_worksheet, sheet_headers = init_sheet_connection(secrets)
-        print("✅ Core Infrastructure Layers Synchronized.")
+        watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
+        print("✅ Core Infrastructure Automated Routers Armed.")
     except Exception as e:
-        print(f"⚠️ Initialization anomaly: {e}.")
-        raw_worksheet, sandbox_worksheet, sheet_headers = None, None, []
+        print(f"⚠️ Initialization issue: {e}")
+        return
 
     while True:
         try:
             client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
             await client.start()
-            print("🚀 ARC Ingestion Router Processing...")
 
             @client.on(events.NewMessage(chats=TRACKED_CHANNELS))
             async def handler(event):
-                nonlocal raw_worksheet, sandbox_worksheet, sheet_headers
+                nonlocal watchlist_ws, study_ws, raw_ws, sheet_headers
                 raw_text = event.message.message
                 if not raw_text: return
                     
@@ -132,35 +119,36 @@ async def run_telegram_listener():
                 title_token = getattr(chat_from, 'title', '')
                 username_token = getattr(chat_from, 'username', '')
                 
-                if "BeatTheStreet" in username_token or "Beat The Street" in title_token:
-                    source_name = "Beat The Street"
-                else:
-                    source_name = title_token if title_token else (username_token if username_token else str(event.chat_id))
+                if "BeatTheStreet" in username_token or "Beat The Street" in title_token: source_name = "Beat The Street"
+                else: source_name = title_token if title_token else (username_token if username_token else str(event.chat_id))
                     
                 timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 try:
-                    if not raw_worksheet:
-                        secrets_retry = get_secrets()
-                        raw_worksheet, sandbox_worksheet, sheet_headers = init_sheet_connection(secrets_retry)
+                    if not watchlist_ws: watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
                     
-                    # ─── AUTOMATED INGESTION FOR ADVISORY CHANNELS ───
-                    if source_name != "Beat The Street":
-                        pre_parsed = analytics.parse_telegram_tip(raw_text)
-                        t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
-                        
-                        # Verify against Dhan Master via resolve_instrument
-                        t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
-                        
-                        if t_sec:  # Valid trade asset verified by Dhan Master
-                            new_row_payload = [""] * len(sheet_headers)
+                    pre_parsed = analytics.parse_telegram_tip(raw_text)
+                    t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
+                    t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
+                    
+                    if source_name == "Beat The Street":
+                        if t_sec:
+                            # ─── NEWS RULE: Valid stock mentioned goes automatically to Stocks to study ───
+                            study_ws.append_row([timestamp_str, source_name, t_sym, raw_text, datetime.date.today().strftime("%Y-%m-%d")])
+                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Stocks to Study"])
+                        else:
+                            raw_ws.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
+                    else:
+                        if t_sec:
+                            # ─── ADVISORY RULE: Valid stock goes automatically to Active Watchlist ───
+                            auto_derived_type = "Equity" if "EQ" in str(t_exch) else "Option"
+                            new_row = [""] * len(sheet_headers)
                             def fill(col, val): 
-                                if col in sheet_headers: new_row_payload[sheet_headers.index(col)] = str(val)
-                                    
+                                if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
                             fill("Trade Date", datetime.date.today().strftime("%Y-%m-%d"))
                             fill("Idea Source (Chartink/Telegram/X/Self)", source_name)
                             fill("Symbol / Asset", t_sym)
-                            fill("Trade Type (Eq/Option)", pre_parsed.get('trade_type', 'Option'))
+                            fill("Trade Type (Eq/Option)", auto_derived_type)
                             fill("Exchange", t_exch)
                             fill("Security ID", t_sec)
                             fill("Status (Watch/Active/Closed)", "Watchlist")
@@ -169,22 +157,15 @@ async def run_telegram_listener():
                             fill("Target 1", pre_parsed.get('t1', ''))
                             fill("Raw Tip Text", raw_text)
                             
-                            sandbox_worksheet.append_row(new_row_payload)
-                            raw_worksheet.append_row([timestamp_str, source_name, raw_text, "Automatically Staged"])
-                            print(f"⚡ Autopilot Success: Directed {t_sym} straight to tracking sheets.")
+                            watchlist_ws.append_row(new_row)
+                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Watchlist"])
                         else:
-                            # Not a tradable counter asset, log to standard review queues
-                            raw_worksheet.append_row([timestamp_str, source_name, raw_text, "Pending Review"])
-                    else:
-                        # News channel data goes straight to exclusive news log
-                        raw_worksheet.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
-                        
-                except Exception as log_err:
-                    print(f"⚠️ Operational loop exception: {log_err}")
+                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Pending Review"])
+                            
+                except Exception as log_err: print(f"⚠️ Router execution anomaly: {log_err}")
 
             await client.run_until_disconnected()
         except Exception as loop_err:
-            print(f"⚠️ Socket mapping dropped: {loop_err}. Auto-restarting in 10s...")
             await asyncio.sleep(10)
 
 if __name__ == '__main__':
