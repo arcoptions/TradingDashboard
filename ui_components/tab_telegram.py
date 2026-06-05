@@ -65,7 +65,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
             if tab_name == "Stock Mentions":
                 df_display["Status"] = df_display["Extracted_Symbol"].apply(lambda x: "⚠️ Duplicate" if str(x).upper() in watchlist_symbols else "🟢 Unique")
             else:
-                df_display["Status"] = "ℹ expose"
+                df_display["Status"] = "ℹ Info"
                 
             b1, b2, b3 = st.columns([1, 1, 1])
             
@@ -86,19 +86,20 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
             
             if b1.button("⚡ Stage Selected Rows", key=f"stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
                 status_updates = []
+                bulk_study_rows = []
+                bulk_watchlist_rows = []
                 
-                if tab_name == "News Feeds" or str(selected_rows.iloc[0].get('Extracted_Symbol', '-')) == "-" or any(kw in str(selected_rows.iloc[0]['Channel Source']).lower() for kw in ["beat the street", "news"]):
-                    target_study_ws = wb_obj.worksheet("Stocks to study")
-                    bulk_study_rows = []
-                    for _, s_row in selected_rows.iterrows():
+                # REPAIRED: PER-ROW EVALUATION FUNNEL
+                for _, s_row in selected_rows.iterrows():
+                    if "Duplicate" in s_row["Status"]: continue 
+
+                    is_news_source = any(kw in str(s_row['Channel Source']).lower() for kw in ["beat the street", "news"])
+                    is_unextracted = str(s_row.get('Extracted_Symbol', '-')) == "-"
+                    
+                    if tab_name == "News Feeds" or is_unextracted or is_news_source:
                         bulk_study_rows.append([str(s_row['Timestamp']), str(s_row['Channel Source']), str(s_row['Extracted_Symbol']), str(s_row['Raw Message Text']), datetime.today().strftime("%Y-%m-%d")])
                         status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Staged to Study"]]})
-                    if bulk_study_rows: target_study_ws.append_rows(bulk_study_rows)
-                else:
-                    target_watchlist_ws = wb_obj.sheet1
-                    bulk_watchlist_rows = []
-                    for _, s_row in selected_rows.iterrows():
-                        if "Duplicate" in s_row["Status"]: continue 
+                    else:
                         t_sym, t_sec, t_exch = api.resolve_instrument(s_row['Extracted_Symbol'])
                         pre_parsed = analytics.parse_telegram_tip(s_row['Raw Message Text'])
                         auto_derived_trade_type = "Equity" if "EQ" in str(s_row['Exchange_Segment_Verified']) else "Option"
@@ -117,9 +118,17 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                         fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
                         fill("Target 1", pre_parsed.get('t1', ''))
                         fill("Raw Tip Text", s_row['Raw Message Text'])
+                        
                         bulk_watchlist_rows.append(new_row)
                         status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Successfully Staged"]]})
-                    if bulk_watchlist_rows: target_watchlist_ws.append_rows(bulk_watchlist_rows)
+                        
+                if bulk_study_rows:
+                    target_study_ws = wb_obj.worksheet("Stocks to study")
+                    target_study_ws.append_rows(bulk_study_rows)
+                    
+                if bulk_watchlist_rows:
+                    target_watchlist_ws = wb_obj.sheet1
+                    target_watchlist_ws.append_rows(bulk_watchlist_rows)
                     
                 if status_updates:
                     raw_log_ws.batch_update(status_updates)
