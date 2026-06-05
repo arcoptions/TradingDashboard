@@ -104,6 +104,7 @@ async def run_telegram_listener():
         -1003858490010, # Elephant pro
         -1001320942683, # Sunil
         -1005281196022, # Test
+        -5281196022, # Test
         -1003800707569, # Momentum to multibagger
         -1003770951544, # Investing corner
         'Shortterm01',  # Shortterm (Public)
