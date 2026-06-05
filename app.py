@@ -199,21 +199,12 @@ def main():
             try: sec_data_list = json.loads(raw_json)
             except: pass
 
-        if not sec_data_list and not df_watchlist.empty:
-            fallback_df = df_watchlist.copy()
-            fallback_df['Price Chg %'] = pd.to_numeric(fallback_df['Price Chg %'], errors='coerce').fillna(0)
-            grouped = fallback_df.groupby('Sector/Industry').agg({'Price Chg %': 'mean', 'Symbol / Asset': 'count'}).reset_index()
-            grouped.columns = ['sector', 'change', 'weight']
-            df_sectors = grouped
-        elif sec_data_list:
+        if not sec_data_list:
+            st.warning("⚠️ Heatmap data is currently empty.")
+            st.info("👉 Please click **'Sync Live Prices'** in the top right corner to download the latest sector performance data from Dhan.")
+        else:
             df_sectors = pd.DataFrame(sec_data_list)
             df_sectors.columns = [c.lower() for c in df_sectors.columns]
-        else:
-            df_sectors = pd.DataFrame()
-
-        if df_sectors.empty:
-            st.info("Market performance matrices initializing. Tap 'Sync Live Prices' to update vectors.")
-        else:
             df_sectors['weight'] = pd.to_numeric(df_sectors['weight'], errors='coerce').fillna(1)
             df_sectors['change'] = pd.to_numeric(df_sectors['change'], errors='coerce').fillna(0)
             
@@ -226,7 +217,6 @@ def main():
                 color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], 
                 color_continuous_midpoint=0
             )
-            # FIX: Restored proper d3-format binding syntax for Plotly %{customdata[0]:+.2f}%
             fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:+.2f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
             fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
@@ -236,8 +226,8 @@ def main():
             scan_headers = scanner_ws.row_values(1) if scanner_ws else []
             tab_scanners.render(scanner_ws, scan_headers)
 
-    with t_study: tab_study.render(study_ws)
-    with t_tel: tab_telegram.render(sh, watchlist_symbols, sheet_headers)
+    with t_study: tab_study.render()
+    with t_tel: tab_telegram.render(wb_obj=sh, watchlist_symbols=watchlist_symbols, sheet_headers=sheet_headers)
 
 if __name__ == "__main__":
     main()
