@@ -7,10 +7,11 @@ import analytics
 from core_engines.nlp_router import ASSET_ALIASES, SECTOR_MAP, extract_asset_from_text
 from integrations.google_sheets import fetch_dataframe_safe
 
-def render(raw_log_ws, wb_obj, watchlist_symbols, sheet_headers):
+def render(wb_obj, watchlist_symbols, sheet_headers):
     st.markdown("#### Operational Staging Workspaces")
     
-    df_raw_logs = fetch_dataframe_safe(raw_log_ws)
+    df_raw_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
+    raw_log_ws = wb_obj.worksheet("Telegram_Raw_Logs")
     
     if not df_raw_logs.empty:
         df_raw_logs["_Row_ID"] = range(2, len(df_raw_logs) + 2)
@@ -118,6 +119,8 @@ def render(raw_log_ws, wb_obj, watchlist_symbols, sheet_headers):
                     
                 if status_updates:
                     raw_log_ws.batch_update(status_updates)
+                    # Clear Cache forcibly so the updated UI renders immediately
+                    fetch_dataframe_safe.clear()
                     st.toast(f"Staged elements redirected successfully!")
                     time.sleep(0.5); st.rerun()
 
@@ -132,12 +135,14 @@ def render(raw_log_ws, wb_obj, watchlist_symbols, sheet_headers):
                 if arc_rows:
                     archive_ws.append_rows(arc_rows)
                     raw_log_ws.batch_update(status_updates)
+                    fetch_dataframe_safe.clear()
                     st.toast(f"Archived successfully.")
                     time.sleep(0.5); st.rerun()
 
             if b3.button("🗑️ Discard Selected Rows", key=f"dsc_{tab_name}", use_container_width=True) and not selected_rows.empty:
                 status_updates = [{'range': f"D{s_row['_Row_ID']}", 'values': [["Discarded"]]} for _, s_row in selected_rows.iterrows()]
                 raw_log_ws.batch_update(status_updates)
+                fetch_dataframe_safe.clear()
                 st.toast(f"Discarded successfully.")
                 time.sleep(0.5); st.rerun()
 
