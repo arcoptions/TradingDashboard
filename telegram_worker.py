@@ -117,7 +117,19 @@ async def run_telegram_listener():
         print("⚠️ CRITICAL CONFIGURATION NOTICE: Using dummy/empty placeholders for API_ID or Session String.")
         print("👉 Please ensure TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_SESSION_STRING are set in Render's Environment Variables.")
 
-    TRACKED_CHANNELS = ['elephant_pro_signals', 'mr_chartist_alerts']
+    # Replace the previous list in telegram_worker.py with your complete operational matrix
+TRACKED_CHANNELS = [
+    'Derivatives (F&O)- Investology',
+    'Elephant Pro',
+    'Investing Korner',
+    'Momentum to Multibagger - Chikoutrader',
+    'Shortterm01',
+    'Equities (Intra & ShortTerm)- Investology',
+    'Equities Positional- Investology V2',
+    'Family May 2026',
+    'Automated ALerts V2',
+    'Commodities- Investology V2'
+]
     
     try:
         worksheet, sheet_headers = init_sheet_connection(secrets)
