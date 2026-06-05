@@ -31,7 +31,11 @@ def run_tv_screener(tickers):
     return results
 
 def render(scanner_sheet, scanner_headers):
-    st.markdown("#### Automated Scan Feeds")
+    # --- GLOBAL PROMOTE BUTTON ANCHORED AT TOP RIGHT ---
+    c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="bottom")
+    c1.markdown("#### Automated Scan Feeds")
+    execute_promote = c3.button("Promote Selected", type="primary", use_container_width=True, key="promote_scanners_top")
+    
     df_scan = fetch_dataframe_safe("Scanners")
     
     if not df_scan.empty:
@@ -57,6 +61,9 @@ def render(scanner_sheet, scanner_headers):
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)
         }
 
+        # Store the active state of all Data Editors sequentially
+        edited_dfs = {}
+
         def render_scanner_tab(tab_obj, filter_name):
             with tab_obj:
                 df_filtered = df_scan[df_scan["Scanner"] == filter_name].reset_index(drop=True)
@@ -67,10 +74,6 @@ def render(scanner_sheet, scanner_headers):
                     m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == 'Below']))
                     m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['At Entry', '-'])]))
                     
-                    # FIXED: Small, non-intrusive promotion button positioned directly beneath metric totals
-                    c_btn, _ = st.columns([3, 7])
-                    with c_btn:
-                        execute_promote = st.button(f"Promote Selected {filter_name} Scans", key=f"btn_{filter_name}", use_container_width=True)
                     st.write("")
                     
                     edited_scan = st.data_editor(
@@ -79,50 +82,70 @@ def render(scanner_sheet, scanner_headers):
                         kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers}, 
                         column_config=scan_col_config, disabled=["Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
                     )
-                    
-                    selected_rows = edited_scan[edited_scan["Promote"] == True]
-                    if execute_promote:
-                        if selected_rows.empty:
-                            st.warning("Please check rows above first.")
-                            return
-                            
-                        sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
-                        main_headers = watchlist_ws.row_values(1)
-                        bulk_watchlist_rows = []
-                        daily_token = fetch_settings_cell('B2') or ""
-                        
-                        for _, row in selected_rows.iterrows():
-                            sym = str(row['Symbol']).upper().strip()
-                            is_fno = sym in FNO_SYMBOLS
-                            t_sym, t_sec, t_exch = api.resolve_instrument(sym)
-                            contract_symbol = sym
-                            
-                            if is_fno:
-                                chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
-                                if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
-                                    contract_symbol = f"{sym} {chain_data['best_ce']} (Auto-Scanner)"
-                                    
-                            new_row = [""] * len(main_headers)
-                            def fill(col, val): 
-                                if col in main_headers: new_row[main_headers.index(col)] = str(val)
-                            fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
-                            fill("Idea Source (Chartink/Telegram/X/Self)", f"Scanner ({filter_name})")
-                            fill("Symbol / Asset", contract_symbol if is_fno else (t_sym or sym))
-                            fill("Trade Type (Eq/Option)", "Option" if is_fno else "Equity")
-                            fill("Exchange", t_exch or ("NSE_FNO" if is_fno else "NSE_EQ"))
-                            fill("Security ID", t_sec or "")
-                            fill("Status (Watch/Active/Closed)", "Watchlist")
-                            fill("Entry CMP / Range", str(row.get('Trigger Price', '')))
-                            bulk_watchlist_rows.append(new_row)
-                            
-                        if bulk_watchlist_rows:
-                            watchlist_ws.append_rows(bulk_watchlist_rows)
-                            fetch_dataframe_safe.clear()
-                            st.toast("Promoted to Watchlist")
-                            time.sleep(1); st.rerun()
-                else: st.info(f"No active triggers for {filter_name}.")
+                    edited_dfs[filter_name] = edited_scan
+                else: 
+                    st.info(f"No active triggers for {filter_name}.")
+                    edited_dfs[filter_name] = pd.DataFrame()
         
         render_scanner_tab(tab_ce1, "CE1")
         render_scanner_tab(tab_ce2, "CE2")
         render_scanner_tab(tab_pos, "Positional")
-    else: st.info("Scanner database is currently empty.")
+        
+        # --- GLOBAL EXECUTION LOGIC (Evaluated after checking all active tabs) ---
+        if execute_promote:
+            all_selected_frames = [df[df["Promote"] == True] for df in edited_dfs.values() if not df.empty and "Promote" in df.columns]
+            
+            if not all_selected_frames:
+                st.warning("Please check rows to promote first.")
+                return
+                
+            all_selected_rows = pd.concat(all_selected_frames)
+            
+            if all_selected_rows.empty:
+                st.warning("Please check rows to promote first.")
+                return
+                
+            sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
+            main_headers = watchlist_ws.row_values(1)
+            bulk_watchlist_rows = []
+            daily_token = fetch_settings_cell('B2') or ""
+            
+            for _, row in all_selected_rows.iterrows():
+                sym = str(row['Symbol']).upper().strip()
+                is_fno = sym in FNO_SYMBOLS
+                t_sym, t_sec, t_exch = api.resolve_instrument(sym)
+                contract_symbol = sym
+                
+                if is_fno:
+                    chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
+                    if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
+                        contract_symbol = f"{sym} {chain_data['best_ce']} (Auto-Scanner)"
+                        
+                new_row = [""] * len(main_headers)
+                def fill(col, val): 
+                    if col in main_headers: new_row[main_headers.index(col)] = str(val)
+                fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+                
+                # Accurately extract Scanner source metadata from original DataFrame
+                try:
+                    source_scanner = df_scan.loc[df_scan['_Sheet_Row'] == row['_Sheet_Row'], 'Scanner'].iloc[0]
+                except:
+                    source_scanner = "Scanners"
+                    
+                fill("Idea Source (Chartink/Telegram/X/Self)", f"Scanner ({source_scanner})")
+                fill("Symbol / Asset", contract_symbol if is_fno else (t_sym or sym))
+                fill("Trade Type (Eq/Option)", "Option" if is_fno else "Equity")
+                fill("Exchange", t_exch or ("NSE_FNO" if is_fno else "NSE_EQ"))
+                fill("Security ID", t_sec or "")
+                fill("Status (Watch/Active/Closed)", "Watchlist")
+                fill("Entry CMP / Range", str(row.get('Trigger Price', '')))
+                bulk_watchlist_rows.append(new_row)
+                
+            if bulk_watchlist_rows:
+                watchlist_ws.append_rows(bulk_watchlist_rows)
+                fetch_dataframe_safe.clear()
+                st.toast(f"Promoted {len(bulk_watchlist_rows)} scan targets to Watchlist!")
+                time.sleep(1); st.rerun()
+
+    else: 
+        st.info("Scanner database is currently empty.")
