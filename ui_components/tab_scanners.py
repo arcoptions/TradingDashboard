@@ -31,6 +31,7 @@ def run_tv_screener(tickers):
     return results
 
 def render(scanner_sheet, scanner_headers):
+    # Global top-level control layout alignment
     c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="bottom")
     c1.markdown("#### Automated Scan Feeds")
     execute_promote = c3.button("Promote Selected", type="primary", use_container_width=True, key="promote_scanners_top")
@@ -50,8 +51,6 @@ def render(scanner_sheet, scanner_headers):
             
         df_scan["Universal Score"] = df_scan["Universal Score"].fillna(0).astype(int)
         df_scan.insert(0, "Promote", False)
-        
-        # --- ADDED: INTERACTIVE INSPECT INJECTOR COLUMN ---
         df_scan.insert(1, "Inspect", False)
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
@@ -91,13 +90,15 @@ def render(scanner_sheet, scanner_headers):
                     )
                     edited_dfs[filter_name] = edited_scan
                     
-                    # --- CAPTURE LIVE USER INTERACTION ON INSPECT TOGGLE ---
+                    # Capture Live User Interaction on Inspect Toggle
                     if not edited_scan.empty and "Inspect" in edited_scan.columns:
                         inspect_triggers = edited_scan[edited_scan["Inspect"] == True]
                         if not inspect_triggers.empty:
                             target_row = inspect_triggers.iloc[0]
                             target_symbol = str(target_row['Symbol']).upper().strip()
-                            is_fno_asset = target_symbol in FNO_SYMBOLS
+                            
+                            # Auto-detect options if originating from CE1/CE2
+                            is_fno_asset = target_symbol in FNO_SYMBOLS or "CE" in filter_name.upper()
                             
                             st.session_state.viewing_scanner_row_data = {
                                 "Symbol / Asset": target_symbol,
@@ -106,7 +107,7 @@ def render(scanner_sheet, scanner_headers):
                                 "Trade Type (Eq/Option)": "Option" if is_fno_asset else "Equity",
                                 "Exchange": "NSE_FNO" if is_fno_asset else "NSE_EQ",
                                 "Status (Watch/Active/Closed)": "Watchlist",
-                                "_Sheet_Row": -1  # Set to negative boundary to flag outside watchlist bounds
+                                "_Sheet_Row": -1
                             }
                             st.rerun()
                 else: 
@@ -138,7 +139,14 @@ def render(scanner_sheet, scanner_headers):
             
             for _, row in all_selected_rows.iterrows():
                 sym = str(row['Symbol']).upper().strip()
-                is_fno = sym in FNO_SYMBOLS
+                
+                # Fetch scanner name before evaluating FNO logic
+                try: source_scanner = df_scan.loc[df_scan['_Sheet_Row'] == row['_Sheet_Row'], 'Scanner'].iloc[0]
+                except: source_scanner = "Scanners"
+                
+                # --- FIXED: Auto-detect options based on Scanner category ---
+                is_fno = sym in FNO_SYMBOLS or "CE" in source_scanner.upper()
+                
                 t_sym, t_sec, t_exch = api.resolve_instrument(sym)
                 contract_symbol = sym
                 
@@ -151,10 +159,6 @@ def render(scanner_sheet, scanner_headers):
                 def fill(col, val): 
                     if col in main_headers: new_row[main_headers.index(col)] = str(val)
                 fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
-                
-                try: source_scanner = df_scan.loc[df_scan['_Sheet_Row'] == row['_Sheet_Row'], 'Scanner'].iloc[0]
-                except: source_scanner = "Scanners"
-                    
                 fill("Idea Source (Chartink/Telegram/X/Self)", f"Scanner ({source_scanner})")
                 fill("Symbol / Asset", contract_symbol if is_fno else (t_sym or sym))
                 fill("Trade Type (Eq/Option)", "Option" if is_fno else "Equity")
