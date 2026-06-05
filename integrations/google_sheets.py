@@ -8,10 +8,6 @@ from google.oauth2.service_account import Credentials
 import streamlit as st
 from gspread.exceptions import APIError
 
-# --- SESSION LAYER METADATA CACHE ---
-if "cached_spreadsheet_instance" not in st.session_state:
-    st.session_state.cached_spreadsheet_instance = None
-
 def get_secrets():
     try:
         return st.secrets
@@ -22,7 +18,7 @@ def get_secrets():
             with open(".streamlit/secrets.toml", "r") as f: return toml.load(f)
         return None
 
-@st.cache_resource
+@st.cache_resource(ttl=3000) # Re-authenticates every 50 minutes to avoid the strict 1-hour Google OAuth expiry
 def get_gspread_client():
     secrets = get_secrets()
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -39,33 +35,34 @@ def get_gspread_client():
 
 def execute_with_quota_retry(func, *args, **kwargs):
     """Wraps core sheet transactions in an exponential backoff circuit breaker."""
-    max_retries = 5
-    delay = 2.0
+    max_retries = 4
+    delay = 1.5
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
         except APIError as e:
-            # Catch standard 429 quota blockades or internal rate errors
-            if ("429" in str(e) or (e.response is not None and e.response.status_code == 429)) and attempt < max_retries - 1:
+            # Catch standard 429 quota blockades and pause the thread safely
+            if ("429" in str(e) or "Quota" in str(e) or (hasattr(e, 'response') and e.response is not None and e.response.status_code == 429)) and attempt < max_retries - 1:
                 time.sleep(delay)
                 delay *= 2.0
                 continue
             raise e
         except Exception as e:
+            # If a generic network failure occurs, try again before collapsing
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2.0
+                continue
             raise e
 
-def get_cached_spreadsheet():
-    """Manages cross-module spreadsheet instance handles to optimize read usage."""
-    if st.session_state.cached_spreadsheet_instance is None:
-        gc = get_gspread_client()
-        st.session_state.cached_spreadsheet_instance = execute_with_quota_retry(
-            gc.open, "Comprehensive Trading Tracker 2026"
-        )
-    return st.session_state.cached_spreadsheet_instance
+@st.cache_resource(ttl=600) # Holds the spreadsheet metadata for 10 minutes to prevent 429 Quota errors
+def get_spreadsheet():
+    gc = get_gspread_client()
+    return execute_with_quota_retry(gc.open, "Comprehensive Trading Tracker 2026")
 
-@st.cache_resource
+@st.cache_resource(ttl=600)
 def init_sheet_connection():
-    sh = get_cached_spreadsheet()
+    sh = get_spreadsheet()
     
     watchlist_ws = sh.sheet1
     try: scanner_ws = execute_with_quota_retry(sh.worksheet, "Scanners")
@@ -75,16 +72,13 @@ def init_sheet_connection():
 
     try: 
         study_ws = execute_with_quota_retry(sh.worksheet, "Stocks to study")
-        first_row = execute_with_quota_retry(study_ws.row_values, 1)
-        if not first_row:
-            execute_with_quota_retry(study_ws.append_row, ["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
-    except gspread.exceptions.WorksheetNotFound:
+    except Exception:
         study_ws = execute_with_quota_retry(sh.add_worksheet, title="Stocks to study", rows="3000", cols="5")
         execute_with_quota_retry(study_ws.append_row, ["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
         
     try: 
         raw_ws = execute_with_quota_retry(sh.worksheet, "Telegram_Raw_Logs")
-    except gspread.exceptions.WorksheetNotFound:
+    except Exception:
         raw_ws = execute_with_quota_retry(sh.add_worksheet, title="Telegram_Raw_Logs", rows="5000", cols="5")
         execute_with_quota_retry(raw_ws.append_row, ["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
         
@@ -92,25 +86,30 @@ def init_sheet_connection():
 
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_dataframe_safe(sheet_title, is_sheet1=False):
-    try:
-        sh = get_cached_spreadsheet()
-        worksheet = sh.sheet1 if is_sheet1 else execute_with_quota_retry(sh.worksheet, sheet_title)
-        vals = execute_with_quota_retry(worksheet.get_all_values)
-        
-        if len(vals) > 1:
-            df = pd.DataFrame(vals[1:], columns=vals[0])
-            return df[df[df.columns[0]].astype(str).str.strip() != ""]
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            sh = get_spreadsheet()
+            worksheet = sh.sheet1 if is_sheet1 else execute_with_quota_retry(sh.worksheet, sheet_title)
+            vals = execute_with_quota_retry(worksheet.get_all_values)
+            
+            if len(vals) > 1:
+                df = pd.DataFrame(vals[1:], columns=vals[0])
+                # Filter out completely empty rows
+                return df[df[df.columns[0]].astype(str).str.strip() != ""]
+            return pd.DataFrame()
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(1.5 ** attempt)
+                continue
+            return pd.DataFrame()
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_settings_cell(cell_id):
     try:
-        sh = get_cached_spreadsheet()
+        sh = get_spreadsheet()
         settings_ws = execute_with_quota_retry(sh.worksheet, "Settings")
         if settings_ws:
-            cell_node = execute_with_quota_retry(settings_ws.acell, cell_id)
-            return cell_node.value
+            return execute_with_quota_retry(settings_ws.acell, cell_id).value
     except: pass
     return None
