@@ -25,8 +25,9 @@ def render_tv_chart(symbol):
     components.html(html, height=420)
 
 def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_headers):
-    sheet_row_id = int(trade_data['_Sheet_Row'])
-    asset_symbol = trade_data['Symbol / Asset']
+    # Default to -1 if missing, protecting scanner staging inspections
+    sheet_row_id = int(trade_data.get('_Sheet_Row', -1))
+    asset_symbol = trade_data.get('Symbol / Asset', 'Unknown Asset')
     base_ticker_raw = str(trade_data.get("Base Asset", str(asset_symbol).split('-')[0].strip())).upper()
     sym_key = base_ticker_raw.replace("&", "_")
     
@@ -36,12 +37,15 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
 
     head_c1, head_c2 = st.columns([2.5, 7.5], vertical_alignment="center")
     with head_c1:
-        if st.button("⬅️ Back to Terminal", use_container_width=True): 
+        # THE UNIFIED BACK BUTTON
+        if st.button("⬅️ Back to Terminal", key="terminal_escape_btn", use_container_width=True): 
             st.session_state.viewing_trade = None
             st.session_state.viewing_trade_row = None
+            st.session_state.viewing_scanner_row_data = None
             st.rerun()
+            
     with head_c2: 
-        st.markdown(f"<h3 style='margin:0; padding-left:10px;'>Research Analysis: {trade_data.get('Symbol / Asset', 'Unknown Asset')}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='margin:0; padding-left:10px;'>Research Analysis: {asset_symbol}</h3>", unsafe_allow_html=True)
     
     st.write("")
     tab_init_research, tab_psych_exec = st.tabs(["Initial Research", "Psychology & Execution"])
@@ -149,51 +153,50 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
             render_tv_chart(sym_key)
     
     with tab_psych_exec:
-        st.markdown("#### Psychology & Trade Rationale")
-        with st.container(border=True):
-            curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
-            curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
-            if curr_rationale.strip() and curr_rationale != 'nan': st.info(f"**Rationale:** {curr_rationale}")
-            if curr_emotions.strip() and curr_emotions != 'nan': st.warning(f"**Emotions:** {curr_emotions}")
-            
-            with st.expander("📝 Update Psychology Notes"):
-                with st.form("psychology_update_form"):
-                    new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
-                    new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
-                    if st.form_submit_button("Save Notes", type="primary"):
-                        primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
-                        primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
-                        st.rerun()
-                        
-        st.markdown("#### Execution & Asset Repair")
-        with st.container(border=True):
-            col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
-            col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
-            col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
-            col3.metric("Live Price", trade_data.get('Live Price', '-'))
-            col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
-            with col5:
-                try:
-                    entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
-                    exit_val = float(str(trade_data['Exit Price']))
-                    pnl = exit_val - entry_val
-                    if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
-                    else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                except: st.info("Awaiting execution parameters.")
+        # Check if this is an unpromoted scanner row (-1)
+        if sheet_row_id == -1:
+            st.info("Scanner target staged for inspection. Promote this asset to your Watchlist to enable trade logging and position management.")
+        else:
+            st.markdown("#### Psychology & Trade Rationale")
+            with st.container(border=True):
+                curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
+                curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                if curr_rationale.strip() and curr_rationale != 'nan': st.info(f"**Rationale:** {curr_rationale}")
+                if curr_emotions.strip() and curr_emotions != 'nan': st.warning(f"**Emotions:** {curr_emotions}")
                 
-            with st.expander("🛠 Advanced Asset Repair Tool"):
-                fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
-                fix_results = api.search_instruments(fix_query)
-                if not fix_results.empty:
-                    selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
-                    if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
-                        fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
-                        primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
-                        primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
-                        primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
-                        st.rerun()
-
-    if st.button("Unlink Review Canvas", use_container_width=True):
-        st.session_state.viewing_trade = None
-        st.session_state.viewing_trade_row = None
-        st.rerun()
+                with st.expander("📝 Update Psychology Notes"):
+                    with st.form("psychology_update_form"):
+                        new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
+                        new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
+                        if st.form_submit_button("Save Notes", type="primary"):
+                            primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
+                            primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
+                            st.rerun()
+                            
+            st.markdown("#### Execution & Asset Repair")
+            with st.container(border=True):
+                col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 4], gap="small")
+                col1.metric("Status", trade_data.get('Status (Watch/Active/Closed)', 'N/A'))
+                col2.metric("Entry Range", trade_data.get('Entry CMP / Range', 'N/A'))
+                col3.metric("Live Price", trade_data.get('Live Price', '-'))
+                col4.metric("Exit Price", trade_data.get('Exit Price', 'Pending'))
+                with col5:
+                    try:
+                        entry_val = float(re.findall(r'[\d\.]+', str(trade_data['Entry CMP / Range']))[0])
+                        exit_val = float(str(trade_data['Exit Price']))
+                        pnl = exit_val - entry_val
+                        if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
+                        else: st.error(f"Net Points Lost: {round(pnl, 2)}")
+                    except: st.info("Awaiting execution parameters.")
+                    
+                with st.expander("🛠 Advanced Asset Repair Tool"):
+                    fix_query = st.text_input("Search Official Master Database", value=str(trade_data.get('Symbol / Asset', '')).split()[0], key="fix_contract_query")
+                    fix_results = api.search_instruments(fix_query)
+                    if not fix_results.empty:
+                        selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
+                        if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
+                            fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
+                            primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
+                            primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
+                            primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
+                            st.rerun()
