@@ -49,6 +49,12 @@ ASSET_ALIASES = {
     "WIPRO": ["WIPRO"]
 }
 
+KNOWN_ASSETS = set()
+for aliases in ASSET_ALIASES.values(): KNOWN_ASSETS.update([a.upper() for a in aliases])
+for stocks in INDEX_CONSTITUENTS.values(): 
+    KNOWN_ASSETS.update([s.replace('_', '').upper() for s in stocks])
+    KNOWN_ASSETS.update([s.replace('_', ' ').upper() for s in stocks])
+
 def prox_color(val):
     if val == "-": return "color:#64748B;"
     return "color:#089981;" if float(val) > 0 else "color:#F23645;"
@@ -159,7 +165,14 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         if st.button("UI Reset", use_container_width=True):
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
-    initial_data = worksheet.get_all_records()
+    # CRITICAL UI SYNCHRONIZATION: Read terminal layout explicitly from Telegram_Sandbox
+    try:
+        sandbox_read_ws = worksheet.spreadsheet.worksheet("Telegram_Sandbox")
+        initial_data = sandbox_read_ws.get_all_records()
+        sheet_headers = sandbox_read_ws.row_values(1)
+    except:
+        initial_data = worksheet.get_all_records()
+        
     initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
     if not initial_df.empty:
@@ -386,8 +399,13 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
                                 new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
                                 if st.form_submit_button("Save Notes", type="primary"):
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
+                                    try:
+                                        target_sandbox_ws = worksheet.spreadsheet.worksheet("Telegram_Sandbox")
+                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
+                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
+                                    except:
+                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
+                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
                                     st.rerun()
                                     
                     st.markdown("#### Execution & Asset Repair")
@@ -404,7 +422,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution conclusion parameter resolution matrices.")
+                            except: st.info("Awaiting execution conclusion exit parameters.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
                             fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
@@ -413,9 +431,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
                                 if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
                                     fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
+                                    try:
+                                        target_sandbox_ws = worksheet.spreadsheet.worksheet("Telegram_Sandbox")
+                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
+                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
+                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
+                                    except:
+                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
+                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
+                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
                                     st.rerun()
 
                 if st.button("Unlink Review Canvas", use_container_width=True):
@@ -467,7 +491,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_data[s]["mcap"]/10000000, 2) if all_data[s]["mcap"] else 0.0, "LTP (₹)": all_data[s]["ltp"], "Change %": all_data[s]["change"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_data]
                     st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
             
-            # ─── REFACTORED WORKSPACE INGESTION CONSOLE ───
             with tab_telegram:
                 st.markdown("#### Operational Staging Workspaces")
                 try:
@@ -483,7 +506,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                     mentions_list, news_list, discussions_list = [], [], []
                     
-                    # ─── MASTER SCRIP MASTER FILTERING LAYER ───
                     for idx, row in df_pending.iterrows():
                         text = str(row['Raw Message Text'])
                         source = str(row['Channel Source'])
@@ -492,33 +514,33 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         pre_parsed = analytics.parse_telegram_tip(text)
                         t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
                         
-                        # Direct Scrip master confirmation
-                        t_sym, t_sec, _ = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
+                        t_sym, t_sec, t_exch_type = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
                         
                         if not t_sec:
-                            # Run back-up synonym mapping array logic
                             text_upper = text.upper()
                             text_norm = text_upper.replace(" ", "")
                             for master_ticker, aliases in ASSET_ALIASES.items():
                                 if any(alias in text_upper or alias.replace(" ", "") in text_norm for alias in aliases):
-                                    t_sym, t_sec, _ = api.resolve_instrument(master_ticker)
+                                    t_sym, t_sec, t_exch_type = api.resolve_instrument(master_ticker)
                                     break
                         
-                        if t_sec:  # Valid trade asset confirmed by Dhan API Scrip Master
+                        if t_sec:  
                             row['Extracted_Symbol'] = t_sym
+                            row['Exchange_Segment_Verified'] = t_exch_type # Preserve exact exchange asset identifier segment
                             mentions_list.append(row)
                         elif is_news_channel:
                             row['Extracted_Symbol'] = "-"
+                            row['Exchange_Segment_Verified'] = ""
                             news_list.append(row)
                         else:
                             row['Extracted_Symbol'] = "-"
+                            row['Exchange_Segment_Verified'] = ""
                             discussions_list.append(row)
                             
                     df_mentions = pd.DataFrame(mentions_list) if mentions_list else pd.DataFrame()
                     df_news = pd.DataFrame(news_list) if news_list else pd.DataFrame()
                     df_discussions = pd.DataFrame(discussions_list) if discussions_list else pd.DataFrame()
                     
-                    # Exact Equality duplication boundaries tracking 
                     watchlist_symbols = []
                     if not initial_df.empty:
                         watchlist_symbols += initial_df["Symbol / Asset"].astype(str).str.upper().tolist()
@@ -534,7 +556,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         df_display = df.copy()
                         df_display.insert(0, "Select", False)
                         
-                        # FIX: EXACT TOKEN MATCHING TO REPAIR TATA/BANK LEAKS
                         if tab_name == "Stock Mentions":
                             df_display["Status"] = df_display["Extracted_Symbol"].apply(lambda x: "⚠️ Duplicate" if str(x).upper() in watchlist_symbols else "🟢 Unique")
                         else:
@@ -549,7 +570,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             key=f"editor_{tab_name}",
                             column_config={
                                 "Select": st.column_config.CheckboxColumn("✓", width="small"),
-                                "_Row_ID": None, "Parsing Status": None,
+                                "_Row_ID": None, "Parsing Status": None, "Exchange_Segment_Verified": None,
                                 "Timestamp": st.column_config.TextColumn("Time", width="small"),
                                 "Channel Source": st.column_config.TextColumn("Source", width="medium"),
                                 "Raw Message Text": st.column_config.TextColumn("Message Content", width="large"),
@@ -570,6 +591,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 t_sym, t_sec, t_exch = api.resolve_instrument(s_row['Extracted_Symbol'])
                                 pre_parsed = analytics.parse_telegram_tip(s_row['Raw Message Text'])
                                 
+                                # FIX: AUTOMATE DYNAMIC CLASSIFICATION ROUTING VIA EXCHANGE ID SEGMENT
+                                auto_derived_trade_type = "Equity" if "EQ" in str(s_row['Exchange_Segment_Verified']) else "Option"
+                                
                                 new_row = [""] * len(sheet_headers)
                                 def fill(col, val): 
                                     if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
@@ -577,7 +601,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
                                 fill("Idea Source (Chartink/Telegram/X/Self)", s_row['Channel Source'])
                                 fill("Symbol / Asset", t_sym)
-                                fill("Trade Type (Eq/Option)", pre_parsed.get('trade_type', 'Option'))
+                                fill("Trade Type (Eq/Option)", auto_derived_trade_type)
                                 fill("Exchange", t_exch)
                                 fill("Security ID", t_sec)
                                 fill("Status (Watch/Active/Closed)", "Watchlist")
