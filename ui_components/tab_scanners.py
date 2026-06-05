@@ -31,7 +31,6 @@ def run_tv_screener(tickers):
     return results
 
 def render(scanner_sheet, scanner_headers):
-    # Global top-level control layout alignment
     c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="bottom")
     c1.markdown("#### Automated Scan Feeds")
     execute_promote = c3.button("Promote Selected", type="primary", use_container_width=True, key="promote_scanners_top")
@@ -52,10 +51,14 @@ def render(scanner_sheet, scanner_headers):
         df_scan["Universal Score"] = df_scan["Universal Score"].fillna(0).astype(int)
         df_scan.insert(0, "Promote", False)
         
+        # --- ADDED: INTERACTIVE INSPECT INJECTOR COLUMN ---
+        df_scan.insert(1, "Inspect", False)
+        
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
-        scan_view_cols = ["Promote", "Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
+        scan_view_cols = ["Promote", "Inspect", "Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
             "Promote": st.column_config.CheckboxColumn("Promote", width="small"),
+            "Inspect": st.column_config.CheckboxColumn("Inspect", width="small"),
             "Universal Score": st.column_config.ProgressColumn("Sys Score", format="%d/3", min_value=0, max_value=3),
             "_Sheet_Row": None, 
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)
@@ -69,7 +72,6 @@ def render(scanner_sheet, scanner_headers):
                 if not df_filtered.empty:
                     m1, m2, m3, m4 = st.columns(4)
                     
-                    # FIXED: Sliced conditions using partial text logic to accommodate back-end string variants
                     holding_above = len(df_filtered[df_filtered['Vs Entry'].astype(str).str.contains('Above', na=False)])
                     slipped_below = len(df_filtered[df_filtered['Vs Entry'].astype(str).str.contains('Below', na=False)])
                     flat_pending = len(df_filtered[df_filtered['Vs Entry'].astype(str).str.contains('At Entry', na=False) | (df_filtered['Vs Entry'].astype(str) == '-')])
@@ -88,6 +90,25 @@ def render(scanner_sheet, scanner_headers):
                         column_config=scan_col_config, disabled=["Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
                     )
                     edited_dfs[filter_name] = edited_scan
+                    
+                    # --- CAPTURE LIVE USER INTERACTION ON INSPECT TOGGLE ---
+                    if not edited_scan.empty and "Inspect" in edited_scan.columns:
+                        inspect_triggers = edited_scan[edited_scan["Inspect"] == True]
+                        if not inspect_triggers.empty:
+                            target_row = inspect_triggers.iloc[0]
+                            target_symbol = str(target_row['Symbol']).upper().strip()
+                            is_fno_asset = target_symbol in FNO_SYMBOLS
+                            
+                            st.session_state.viewing_scanner_row_data = {
+                                "Symbol / Asset": target_symbol,
+                                "Entry CMP / Range": str(target_row.get('Trigger Price', '')),
+                                "Idea Source (Chartink/Telegram/X/Self)": f"Scanner ({filter_name})",
+                                "Trade Type (Eq/Option)": "Option" if is_fno_asset else "Equity",
+                                "Exchange": "NSE_FNO" if is_fno_asset else "NSE_EQ",
+                                "Status (Watch/Active/Closed)": "Watchlist",
+                                "_Sheet_Row": -1  # Set to negative boundary to flag outside watchlist bounds
+                            }
+                            st.rerun()
                 else: 
                     st.info(f"No active triggers for {filter_name}.")
                     edited_dfs[filter_name] = pd.DataFrame()
@@ -131,10 +152,8 @@ def render(scanner_sheet, scanner_headers):
                     if col in main_headers: new_row[main_headers.index(col)] = str(val)
                 fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
                 
-                try:
-                    source_scanner = df_scan.loc[df_scan['_Sheet_Row'] == row['_Sheet_Row'], 'Scanner'].iloc[0]
-                except:
-                    source_scanner = "Scanners"
+                try: source_scanner = df_scan.loc[df_scan['_Sheet_Row'] == row['_Sheet_Row'], 'Scanner'].iloc[0]
+                except: source_scanner = "Scanners"
                     
                 fill("Idea Source (Chartink/Telegram/X/Self)", f"Scanner ({source_scanner})")
                 fill("Symbol / Asset", contract_symbol if is_fno else (t_sym or sym))
