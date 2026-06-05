@@ -11,37 +11,21 @@ import time
 
 @st.cache_data(ttl=60, show_spinner=False)
 def run_tv_screener(tickers):
-    """Batch requests TradingView to mathematically grade scanner stocks."""
     results = []
     clean_tickers = [str(t).strip().upper().replace("&", "_") for t in tickers if str(t).strip() != "-" and str(t).strip() != ""]
     if not clean_tickers: return []
-    
     tv_tickers = [f"NSE:{t}" for t in set(clean_tickers)]
     payload = {"symbols": {"tickers": tv_tickers}, "columns": ["close", "EMA20", "RSI", "volume", "average_volume_10d"]}
-    
     try:
         res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=6)
         if res.status_code == 200 and res.json().get("data"):
             for item in res.json()["data"]:
                 ticker = item["s"].split(":")[1]
                 d = item["d"]
-                
-                ltp = d[0] if d[0] else 0
-                ema20 = d[1] if d[1] else 0
-                rsi = d[2] if d[2] else 0
-                vol = d[3] if d[3] else 0
-                avg_vol = d[4] if d[4] else 1 
-                
-                if ema20 > 0 and ltp > 0: prox = ((ltp - ema20) / ema20) * 100
-                else: prox = 999
-                
+                ltp, ema20, rsi, vol, avg_vol = d[0] or 0, d[1] or 0, d[2] or 0, d[3] or 0, d[4] or 1
+                prox = ((ltp - ema20) / ema20) * 100 if ema20 > 0 and ltp > 0 else 999
                 vol_spike = (vol / avg_vol) * 100 if avg_vol > 0 else 0
-                
-                is_rsi_good = 55 <= rsi <= 75
-                is_prox_good = 0 <= prox <= 6.0
-                is_vol_good = vol_spike >= 150
-                score = sum([is_rsi_good, is_prox_good, is_vol_good])
-                
+                score = sum([55 <= rsi <= 75, 0 <= prox <= 6.0, vol_spike >= 150])
                 results.append({"Asset": ticker, "Universal Score": int(score)})
     except: pass
     return results
@@ -54,7 +38,6 @@ def render(scanner_sheet, scanner_headers):
         df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
         df_scan = analytics.compute_scanner_signals(df_scan)
         
-        # Universal Scoring Integrator
         all_tickers = df_scan["Symbol"].unique().tolist()
         scan_scores = run_tv_screener(all_tickers)
         df_scores = pd.DataFrame(scan_scores) if scan_scores else pd.DataFrame()
@@ -62,13 +45,13 @@ def render(scanner_sheet, scanner_headers):
         if not df_scores.empty: df_scan = df_scan.merge(df_scores, left_on='Symbol', right_on='Asset', how='left')
         else: df_scan["Universal Score"] = 0
             
-        df_scan["Universal Score"] = df_scan["Universal Score"].fillna(0)
+        df_scan["Universal Score"] = df_scan["Universal Score"].fillna(0).astype(int)
         df_scan.insert(0, "Promote", False)
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
         scan_view_cols = ["Promote", "Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
-            "Promote": st.column_config.CheckboxColumn("Promote 🚀", width="small"),
+            "Promote": st.column_config.CheckboxColumn("Promote", width="small"),
             "Universal Score": st.column_config.ProgressColumn("Sys Score", format="%d/3", min_value=0, max_value=3),
             "_Sheet_Row": None, 
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)
@@ -80,9 +63,14 @@ def render(scanner_sheet, scanner_headers):
                 if not df_filtered.empty:
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Total Triggers", len(df_filtered))
-                    m2.metric("Holding Above", len(df_filtered[df_filtered['Vs Entry'] == '🟢 Above']))
-                    m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == '🔴 Below']))
-                    m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
+                    m2.metric("Holding Above", len(df_filtered[df_filtered['Vs Entry'] == 'Above']))
+                    m3.metric("Slipped Below", len(df_filtered[df_filtered['Vs Entry'] == 'Below']))
+                    m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['At Entry', '-'])]))
+                    
+                    # FIXED: Small, non-intrusive promotion button positioned directly beneath metric totals
+                    c_btn, _ = st.columns([3, 7])
+                    with c_btn:
+                        execute_promote = st.button(f"Promote Selected {filter_name} Scans", key=f"btn_{filter_name}", use_container_width=True)
                     st.write("")
                     
                     edited_scan = st.data_editor(
@@ -93,9 +81,9 @@ def render(scanner_sheet, scanner_headers):
                     )
                     
                     selected_rows = edited_scan[edited_scan["Promote"] == True]
-                    if st.button(f"⚡ Promote Selected {filter_name} Scans to Watchlist", key=f"btn_{filter_name}", use_container_width=True):
+                    if execute_promote:
                         if selected_rows.empty:
-                            st.warning("Please select at least one row to promote.")
+                            st.warning("Please check rows above first.")
                             return
                             
                         sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
@@ -117,7 +105,6 @@ def render(scanner_sheet, scanner_headers):
                             new_row = [""] * len(main_headers)
                             def fill(col, val): 
                                 if col in main_headers: new_row[main_headers.index(col)] = str(val)
-                                
                             fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
                             fill("Idea Source (Chartink/Telegram/X/Self)", f"Scanner ({filter_name})")
                             fill("Symbol / Asset", contract_symbol if is_fno else (t_sym or sym))
@@ -126,15 +113,13 @@ def render(scanner_sheet, scanner_headers):
                             fill("Security ID", t_sec or "")
                             fill("Status (Watch/Active/Closed)", "Watchlist")
                             fill("Entry CMP / Range", str(row.get('Trigger Price', '')))
-                            
                             bulk_watchlist_rows.append(new_row)
                             
                         if bulk_watchlist_rows:
                             watchlist_ws.append_rows(bulk_watchlist_rows)
-                            st.toast(f"Successfully promoted {len(bulk_watchlist_rows)} scan targets to Watchlist!")
                             fetch_dataframe_safe.clear()
-                            time.sleep(1)
-                            st.rerun()
+                            st.toast("Promoted to Watchlist")
+                            time.sleep(1); st.rerun()
                 else: st.info(f"No active triggers for {filter_name}.")
         
         render_scanner_tab(tab_ce1, "CE1")
