@@ -3,12 +3,11 @@ import pandas as pd
 from datetime import datetime
 import streamlit.components.v1 as components
 import requests
-import inspect
 import json
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
 from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
@@ -16,11 +15,10 @@ import scoring_engine as se
 import derivatives_engine as de
 
 # UI COMPONENTS
-from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners
+from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, trade_inspector
 
 st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈")
 
-# ─── TRADINGVIEW INDEPENDENT FETCH ENGINE (BYPASSES DHAN INDEX BUGS) ───
 @st.cache_data(ttl=60)
 def fetch_all_sectors_data():
     all_tickers = set(["NSE:NIFTY"])
@@ -151,6 +149,21 @@ def main():
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
 
+    # ─── ROUTING FIX: IS A ROW SELECTED FOR INSPECTION? ───
+    if st.session_state.get("viewing_trade_row"):
+        trade_rows = df_watchlist[df_watchlist['_Sheet_Row'] == st.session_state.viewing_trade_row]
+        if not trade_rows.empty:
+            trade_data = trade_rows.iloc[0]
+            daily_token = fetch_settings_cell('B2') or ""
+            trade_inspector.render(trade_data, intel_pool, daily_token, watchlist_ws, sheet_headers)
+        else:
+            st.error("Row context lost. Please return to terminal.")
+            if st.button("Reset View"):
+                st.session_state.viewing_trade_row = None
+                st.rerun()
+        # Return early so the tabs don't render below the inspector
+        return
+
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
 
     try:
@@ -213,7 +226,6 @@ def main():
     with t_htmap: 
         if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
         
-        # Pull independent data directly from TradingView cache to construct heatmap
         all_tv_data = fetch_all_sectors_data()
         
         if not all_tv_data: 
@@ -222,7 +234,6 @@ def main():
             sector_weights = {"Nifty 50": 100, "Nifty Bank": 80, "Nifty IT": 60, "Nifty Next 50": 50, "Nifty Auto": 40, "Nifty FMCG": 40, "Nifty Energy": 40, "Nifty Metal": 30, "Nifty Pharma": 30, "Finnifty": 30, "Nifty Healthcare": 20, "Nifty Realty": 10}
             sector_data = []
             
-            # Map valid stock metrics securely
             for sec, stocks in INDEX_CONSTITUENTS.items():
                 chgs = [all_tv_data[s]["change_pct"] for s in stocks if s in all_tv_data and all_tv_data[s]["change_pct"] is not None]
                 avg_chg = sum(chgs)/len(chgs) if chgs else 0.0
