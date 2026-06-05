@@ -3,10 +3,11 @@ import pandas as pd
 from datetime import datetime
 import streamlit.components.v1 as components
 import requests
+import json
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
-from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
+from core_engines.nlp_router import SECTOR_MAP
 import broker_api as api
 import analytics
 import scoring_engine as se
@@ -17,7 +18,6 @@ from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_
 
 st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈")
 
-# ─── MARKET INTELLIGENCE POOL FETCHERS ───
 @st.cache_data(ttl=15)
 def batch_fetch_intelligence(symbols_list):
     results_map = {}
@@ -50,7 +50,6 @@ def batch_fetch_intelligence(symbols_list):
                         "ema200_prox": round(((d[0] - d[3]) / d[3]) * 100, 2) if d[3] and d[0] else "-"
                     }
     except: pass
-
     try:
         res_f = requests.post("https://scanner.tradingview.com/india/scan", json=fund_payload, timeout=6)
         if res_f.status_code == 200 and res_f.json().get("data"):
@@ -68,9 +67,7 @@ def batch_fetch_intelligence(symbols_list):
                         "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-"
                     })
     except: pass
-
     return results_map
-
 
 def format_index_display(name, raw_val):
     if not raw_val or raw_val == "-": return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
@@ -84,46 +81,41 @@ def format_index_display(name, raw_val):
         return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
     return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
 
-def render_top_ticker_tape(settings_sheet):
-    if settings_sheet:
-        try:
-            nifty = format_index_display("NIFTY50", settings_sheet.acell('B10').value)
-            st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
-        except: pass
+def render_top_ticker_tape():
+    nifty_val = fetch_settings_cell('B10')
+    if nifty_val:
+        nifty = format_index_display("NIFTY50", nifty_val)
+        st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
 
 def main():
-    # 1. Establish Master Connections
     try:
         sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
     except Exception as e:
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
         return
 
-    render_top_ticker_tape(settings_ws)
+    render_top_ticker_tape()
 
-    # 2. Main Terminal Header
     col_t1, col_t2 = st.columns([9, 1])
     with col_t1: st.markdown("### ARC Trading Terminal")
     with col_t2: 
         if st.button("UI Reset", use_container_width=True):
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
 
-    # 3. Compile Active State Data
-    df_watchlist = fetch_dataframe_safe(watchlist_ws)
-    sheet_headers = watchlist_ws.row_values(1) if not df_watchlist.empty else []
+    # Fetch cached watchlist
+    df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
+    sheet_headers = df_watchlist.columns.tolist() if not df_watchlist.empty else []
     
     if df_watchlist.empty:
         st.info("Primary tracking database is empty.")
         return
 
-    # ─── RESTORED: DATA ENRICHMENT & Conviction Calculation ENGINE ───
     df_watchlist['_Sheet_Row'] = range(2, len(df_watchlist) + 2)
     df_watchlist["Journal"] = False
     df_watchlist = analytics.compute_signal_indicators(df_watchlist)
     df_watchlist['Base Asset'] = df_watchlist['Symbol / Asset'].apply(lambda x: str(x).split('-')[0].strip().upper())
     df_watchlist['Sector/Industry'] = df_watchlist['Base Asset'].apply(lambda x: SECTOR_MAP.get(x, "General / Mixed"))
 
-    # Compute conviction fields to satisfy view_cols expectations
     batch_tickers = df_watchlist['Symbol / Asset'].tolist()
     intel_pool = batch_fetch_intelligence(batch_tickers)
     
@@ -141,10 +133,8 @@ def main():
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
 
-    # Compile the active symbols list strictly for duplicate prevention routing
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
 
-    # Dynamic Filter Layout
     try:
         col_target = "Idea Source (Chartink/Telegram/X/Self)"
         raw_srcs = df_watchlist[col_target].astype(str).str.strip() if col_target in df_watchlist.columns else pd.Series()
@@ -165,7 +155,6 @@ def main():
     if selected_sources: filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
     if selected_decisions: filtered_df = filtered_df[filtered_df["Decision"].isin(selected_decisions)]
 
-    # Standardized UI Column Config
     view_cols = [
         "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
         "Live Price", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
@@ -196,7 +185,6 @@ def main():
     }
     disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
 
-    # 4. Master Layout Rendering (The Tabs)
     t_opt, t_stk, t_htmap, t_scan, t_study, t_tel = st.tabs([
         "Options", "Stocks", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
     ])
@@ -205,12 +193,9 @@ def main():
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     
     with t_htmap: 
-        # ─── RESTORED SECTOR TREEMAP GENERATION ───
-        try:
-            raw_json = settings_ws.acell('B12').value
-            sec_data_list = json.loads(raw_json) if raw_json else []
-        except: sec_data_list = []
-        
+        import plotly.express as px
+        raw_json = fetch_settings_cell('B12')
+        sec_data_list = json.loads(raw_json) if raw_json else []
         if not sec_data_list:
             st.info("Market performance vectors initializing. Tap 'Sync Live Prices' to populate.")
         else:
@@ -221,11 +206,12 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
     with t_scan:
-        if scanner_ws: tab_scanners.render(scanner_ws, scanner_ws.row_values(1))
+        if scanner_ws: 
+            scan_headers = scanner_ws.row_values(1) if scanner_ws else []
+            tab_scanners.render(scanner_ws, scan_headers)
 
-    with t_study: tab_study.render(study_ws)
-    
-    with t_tel: tab_telegram.render(raw_ws, sh, watchlist_symbols, sheet_headers)
+    with t_study: tab_study.render()
+    with t_tel: tab_telegram.render(wb_obj=sh, watchlist_symbols=watchlist_symbols, sheet_headers=sheet_headers)
 
 if __name__ == "__main__":
     main()
