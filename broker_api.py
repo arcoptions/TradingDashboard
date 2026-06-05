@@ -23,7 +23,7 @@ SECTOR_SYMBOLS = {
 }
 
 @st.cache_data(ttl=43200)
-def get_dhan_scrip_master(v=19):
+def get_dhan_scrip_master():
     try:
         url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         df = pd.read_csv(url, low_memory=False)
@@ -34,15 +34,23 @@ def get_dhan_scrip_master(v=19):
 def search_instruments(query):
     scrip_df = get_dhan_scrip_master()
     if not query or scrip_df.empty: return pd.DataFrame()
-    cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper()
+    cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper().strip()
+    
+    # FIX: Prioritize an absolute exact symbol match first to prevent leaky extraction anomalies
+    exact_match = scrip_df[scrip_df['SEM_TRADING_SYMBOL'] == cleaned_query]
+    if not exact_match.empty:
+        return exact_match.head(1)
+        
     terms = cleaned_query.split()
     if 'SEARCH_STRING' not in scrip_df.columns:
         normalized_trading_sym = scrip_df['SEM_TRADING_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
         normalized_custom_sym = scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
         scrip_df['SEARCH_STRING'] = normalized_trading_sym.str.upper() + " " + normalized_custom_sym.str.upper()
+        
     mask = pd.Series([True] * len(scrip_df))
     for term in terms: mask = mask & scrip_df['SEARCH_STRING'].str.contains(term, regex=False)
     results = scrip_df[mask].copy()
+    
     if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
         results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
         results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
@@ -52,10 +60,12 @@ def resolve_instrument(parsed_sym):
     scrip_df = get_dhan_scrip_master()
     parsed_sym = str(parsed_sym).strip().upper()
     if not parsed_sym or scrip_df.empty: return parsed_sym, "", "NSE_EQ"
-    if len(parsed_sym.split()) == 1:
-        eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
-        if not eq_match.empty:
-            return str(eq_match.iloc[0]['SEM_TRADING_SYMBOL']), str(eq_match.iloc[0]['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+    
+    # Strict single-token extraction validator
+    eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
+    if not eq_match.empty:
+        return str(eq_match.iloc[0]['SEM_TRADING_SYMBOL']), str(eq_match.iloc[0]['SEM_SMST_SECURITY_ID']), "NSE_EQ"
+        
     results = search_instruments(parsed_sym)
     if not results.empty:
         row = results.iloc[0]
@@ -65,9 +75,6 @@ def resolve_instrument(parsed_sym):
     return parsed_sym, "", "NSE_EQ"
 
 def get_option_chain_metrics(asset_symbol, daily_token=None):
-    """
-    Queries Dhan v2 Option Chain. Includes dynamic expiry resolver and Strike PCR logic.
-    """
     import derivatives_engine as de
     contract_meta = de.parse_option_contract(asset_symbol)
     if not contract_meta: return {}
@@ -83,74 +90,40 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
     underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_SEGMENT'] == 'E')]
     if underlying_df.empty:
         underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_EXM_EXCH_ID'] == 'IDX')]
-        
     if underlying_df.empty: return {}
     
     underlying_id = int(underlying_df.iloc[0]['SEM_SMST_SECURITY_ID'])
     exch = underlying_df.iloc[0]['SEM_EXM_EXCH_ID']
     underlying_seg = "IDX_I" if exch == 'IDX' else "NSE_EQ"
     
-    if not daily_token:
-        daily_token = st.secrets["dhan"].get("access_token", "")
-        
-    headers = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'access-token': daily_token,
-        'client-id': st.secrets["dhan"]["dhan_client_id"]
-    }
+    if not daily_token: daily_token = st.secrets["dhan"].get("access_token", "")
+    headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': st.secrets["dhan"]["dhan_client_id"]}
 
-    # Dynamic Expiry Resolver
     valid_expiry = fallback_expiry
     try:
-        exp_res = requests.post(
-            "https://api.dhan.co/v2/optionchain/expirylist", 
-            headers=headers, 
-            json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg},
-            timeout=5
-        )
+        exp_res = requests.post("https://api.dhan.co/v2/optionchain/expirylist", headers=headers, json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg}, timeout=5)
         if exp_res.status_code == 200 and exp_res.json().get("data"):
             exp_list = exp_res.json()["data"]
             parsed_dt = datetime.datetime.strptime(fallback_expiry, "%Y-%m-%d")
-            t_month, t_year = parsed_dt.month, parsed_dt.year
-            
-            matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == t_year and datetime.datetime.strptime(e, "%Y-%m-%d").month == t_month]
-            if matching_expiries:
-                valid_expiry = max(matching_expiries) 
-    except Exception as e:
-        print(f"Expiry Fetch Error: {e}")
-    
-    payload = {
-        "UnderlyingScrip": underlying_id,
-        "UnderlyingSeg": underlying_seg,
-        "Expiry": valid_expiry
-    }
+            matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == parsed_dt.year and datetime.datetime.strptime(e, "%Y-%m-%d").month == parsed_dt.month]
+            if matching_expiries: valid_expiry = max(matching_expiries)
+    except: pass
     
     try:
-        url = "https://api.dhan.co/v2/optionchain"
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        res = requests.post("https://api.dhan.co/v2/optionchain", headers=headers, json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg, "Expiry": valid_expiry}, timeout=10)
         if res.status_code == 200 and res.json().get("data"):
             data_obj = res.json()["data"]
             oc_dict = data_obj.get("oc", {})
-            
             total_call_oi, total_put_oi = 0.0, 0.0
-            metrics_map = {
-                "implied_volatility": 0.0, "delta": 0.0, "theta": 0.0,
-                "strike_pcr": 0.0, "overall_pcr": 1.0, "best_ce": "-", "best_pe": "-"
-            }
-            
+            metrics_map = {"implied_volatility": 0.0, "delta": 0.0, "theta": 0.0, "strike_pcr": 0.0, "overall_pcr": 1.0, "best_ce": "-", "best_pe": "-"}
             ce_pool, pe_pool = [], []
             
             for strike_str, strike_data in oc_dict.items():
                 node_strike = float(strike_str)
-                ce_node = strike_data.get("ce", {})
-                pe_node = strike_data.get("pe", {})
-                
+                ce_node, pe_node = strike_data.get("ce", {}), strike_data.get("pe", {})
                 c_oi = float(ce_node.get("oi", 0) if ce_node else 0)
                 p_oi = float(pe_node.get("oi", 0) if pe_node else 0)
-                
-                total_call_oi += c_oi
-                total_put_oi += p_oi
+                total_call_oi += c_oi; total_put_oi += p_oi
                 
                 if c_oi > 0: ce_pool.append({"strike": node_strike, "oi": c_oi})
                 if p_oi > 0: pe_pool.append({"strike": node_strike, "oi": p_oi})
@@ -158,91 +131,98 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
                 if abs(node_strike - strike) < 0.1:
                     target_node = strike_data.get(opt_type)
                     if target_node:
-                        greeks = target_node.get("greeks", {})
                         metrics_map.update({
                             "implied_volatility": float(target_node.get("implied_volatility", 0.0)),
-                            "delta": float(greeks.get("delta", 0)),
-                            "theta": float(greeks.get("theta", 0)),
+                            "delta": float(target_node.get("greeks", {}).get("delta", 0)),
+                            "theta": float(target_node.get("greeks", {}).get("theta", 0)),
                             "strike_pcr": round(p_oi / c_oi, 2) if c_oi > 0 else 0.0
                         })
-            
             metrics_map["overall_pcr"] = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
-            
-            if ce_pool:
-                metrics_map["best_ce"] = sorted(ce_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
-            if pe_pool:
-                metrics_map["best_pe"] = sorted(pe_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
-                
+            if ce_pool: metrics_map["best_ce"] = sorted(ce_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
+            if pe_pool: metrics_map["best_pe"] = sorted(pe_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
             return metrics_map
-    except Exception as e:
-        print(f"Dhan Option Chain Fetch Error: {e}")
+    except: pass
     return {}
 
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None):
+    """Executes live price sync and heals rows that are missing metadata."""
     try:
         daily_token = settings_sheet.acell('B2').value
-        if not daily_token: return "Missing Dynamic Authorization Token"
-    except Exception as e: return f"Database Read Failure: {e}"
+        if not daily_token: return "Missing dynamic authorization token"
+    except Exception as e: return f"Database connection error: {e}"
     
     scrip_df = get_dhan_scrip_master()
-    idx_ids = [13] 
-    sector_lookup = {}
-    
-    if not scrip_df.empty:
-        idx_df = scrip_df[scrip_df['SEM_EXM_EXCH_ID'] == 'IDX']
-        for sector_name, data in SECTOR_SYMBOLS.items():
-            match = idx_df[idx_df['SEM_TRADING_SYMBOL'] == data['symbol']]
-            if not match.empty:
-                sec_id = int(match.iloc[0]['SEM_SMST_SECURITY_ID'])
-                idx_ids.append(sec_id)
-                sector_lookup[sec_id] = {"name": sector_name, "weight": data["weight"]}
-        
-    payload = {"NSE_EQ": [], "NSE_FNO": [], "BSE_EQ": [], "BSE_FNO": [], "IDX_I": idx_ids}
-    row_map = [] 
+    payload = {"NSE_EQ": [], "NSE_FNO": [], "IDX_I": [13]}
+    row_map = []
+    sheet1_heal_updates = []
     
     try:
         opt_data = worksheet.get_all_records()
         if opt_data:
             df_opt = pd.DataFrame(opt_data)
-            if not df_opt.empty and "Status (Watch/Active/Closed)" in df_opt.columns:
+            if not df_opt.empty:
                 df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
-                for idx, row in df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])].iterrows():
-                    exch, sec_id = str(row.get("Exchange", "")).strip(), str(row.get("Security ID", "")).strip()
-                    if exch in payload and sec_id.isdigit():
+                
+                # Filter for active watchlist rows
+                active_rows = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
+                
+                exch_idx = sheet_headers.index("Exchange") + 1
+                sec_idx = sheet_headers.index("Security ID") + 1
+                type_idx = sheet_headers.index("Trade Type (Eq/Option)") + 1
+                
+                for _, row in active_rows.iterrows():
+                    symbol = str(row.get("Symbol / Asset", "")).strip()
+                    exch = str(row.get("Exchange", "")).strip()
+                    sec_id = str(row.get("Security ID", "")).strip()
+                    
+                    # ─── FIX: AUTO-HEAL BLANK ROWS LACKING METADATA ───
+                    if not exch or not sec_id or sec_id in ["", "-", "None"]:
+                        t_sym, t_sec, t_exch = resolve_instrument(symbol)
+                        if t_sec:
+                            exch, sec_id = t_exch, t_sec
+                            auto_type = "Equity" if "EQ" in t_exch else "Option"
+                            sheet1_heal_updates.append({'range': gspread.utils.rowcol_to_a1(row['_Sheet_Row'], exch_idx), 'values': [[t_exch]]})
+                            sheet1_heal_updates.append({'range': gspread.utils.rowcol_to_a1(row['_Sheet_Row'], sec_idx), 'values': [[t_sec]]})
+                            sheet1_heal_updates.append({'range': gspread.utils.rowcol_to_a1(row['_Sheet_Row'], type_idx), 'values': [[auto_type]]})
+                            
+                    if exch in payload and str(sec_id).isdigit():
                         payload[exch].append(int(sec_id))
-                        row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
+                        row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
 
+        # Process automated scanner sheets
         scan_data = scanner_sheet.get_all_records()
         if scan_data:
             df_scan = pd.DataFrame(scan_data)
-            if not df_scan.empty and "Status" in df_scan.columns:
+            if not df_scan.empty:
                 df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-                for idx, row in df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])].iterrows():
+                for _, row in df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])].iterrows():
                     symbol = str(row.get("Symbol", "")).strip()
                     if symbol:
-                        t_sym, sec_id, exch = resolve_instrument(symbol)
-                        if exch in payload and sec_id.isdigit():
+                        _, sec_id, exch = resolve_instrument(symbol)
+                        if exch in payload and str(sec_id).isdigit():
                             payload[exch].append(int(sec_id))
-                            row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": sec_id})
-    except Exception as e: return f"DataFrame Parse Failure: {e}"
+                            row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
+    except Exception as e: return f"Staging exception: {e}"
+
+    # Push healing updates back to Google Sheets instantly
+    if sheet1_heal_updates:
+        try: worksheet.batch_update(sheet1_heal_updates)
+        except: pass
 
     payload = {k: list(set(v)) for k, v in payload.items() if v}
-    if not payload: return "No targets mapped"
+    if not payload or (len(payload) == 1 and not payload.get("IDX_I")): return "No active sync rows mapped"
         
     client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
     
-    url = "https://api.dhan.co/v2/marketfeed/quote"
-    try: response = requests.post(url, headers=headers, json=payload, timeout=15)
-    except Exception as e: return f"HTTP Connection Timeout: {e}"
+    try: response = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=headers, json=payload, timeout=15)
+    except Exception as e: return f"HTTP Timeout: {e}"
     
     if response.status_code == 200:
         data = response.json().get("data", {})
         opt_updates, scan_updates = [], []
-        
         opt_col_idx = sheet_headers.index("Live Price") + 1
         scan_col_idx = scanner_headers.index("Live Price") + 1
-        
         price_chg_col_idx = sheet_headers.index("Price Chg %") + 1 if "Price Chg %" in sheet_headers else None
         oi_chg_col_idx = sheet_headers.index("OI Chg %") + 1 if "OI Chg %" in sheet_headers else None
         
@@ -251,13 +231,11 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if exch in data and sec_id in data[exch]:
                 sec_data = data[exch][sec_id]
                 last_price = sec_data.get("last_price", "")
-                
                 lp = float(last_price) if last_price else 0.0
                 pc = float(sec_data.get("previous_close") or sec_data.get("ohlc", {}).get("close") or lp)
                 price_chg = round(((lp - pc) / pc * 100), 2) if pc > 0 else 0.0
-                
                 oi = float(sec_data.get("open_interest", 0))
-                prev_oi = float(sec_data.get("previous_open_interest") or sec_data.get("previous_oi") or oi)
+                prev_oi = float(sec_data.get("previous_open_interest") or oi)
                 oi_chg = round(((oi - prev_oi) / prev_oi * 100), 2) if prev_oi > 0 else 0.0
                 
                 if item["type"] == "opt": 
@@ -265,108 +243,52 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     if price_chg_col_idx and oi_chg_col_idx:
                         opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], price_chg_col_idx), 'values': [[str(price_chg)]]})
                         opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], oi_chg_col_idx), 'values': [[str(oi_chg)]]})
-                        
                 elif item["type"] == "scan": 
                     scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
-        
         try:
             if opt_updates: worksheet.batch_update(opt_updates)
             if scan_updates: scanner_sheet.batch_update(scan_updates)
             
-            try:
-                raw_json = settings_sheet.acell('B12').value
-                existing_heatmap = json.loads(raw_json) if raw_json and str(raw_json).strip() not in ["", "-"] else []
-                old_sector_map = {item["sector"]: float(item["change"]) for item in existing_heatmap}
-            except: 
-                old_sector_map = {}
-            
-            hardcoded_eod = {
-                "Financial Services": 0.38, "IT": -5.57, "Oil & Gas / Energy": 0.02,
-                "FMCG": -1.01, "Auto": 0.05, "Pharma": 0.33,
-                "Metal": -0.17, "Realty": -1.39, "Media": -0.50 
-            }
-            
-            if not old_sector_map or all(abs(v) < 0.01 for v in old_sector_map.values()):
-                old_sector_map = hardcoded_eod
-                
-            now_ist = datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            is_market_closed = now_ist.hour >= 16 or now_ist.hour < 9 or now_ist.weekday() >= 5
-            
-            def get_index_metrics(s_id, sector_name=None):
-                item = data.get("IDX_I", {}).get(str(s_id), {})
-                if not item: item = data.get("NSE_IDX", {}).get(str(s_id), {})
-                
-                lp = item.get("last_price")
-                if not lp: return None, None, None
-                
-                lp_f = float(lp)
-                cp_f = lp_f
-                ohlc_c = item.get("ohlc", {}).get("close")
-                
-                if ohlc_c and float(ohlc_c) > 0 and abs(float(ohlc_c) - lp_f) > 0.01:
-                    cp_f = float(ohlc_c)
-                    
-                diff = lp_f - cp_f
-                pct = (diff / cp_f) * 100 if cp_f > 0 else 0.0
-                
-                if is_market_closed or abs(pct) < 0.01:
-                    if sector_name and sector_name in old_sector_map:
-                        pct = old_sector_map[sector_name]
-                        diff = (pct / 100) * lp_f 
-                        
-                return lp_f, diff, pct
-            
-            lp_n50, diff_n50, pct_n50 = get_index_metrics(13)
-            if lp_n50 is not None:
-                if abs(pct_n50) < 0.01:
-                    try:
-                        old_n50 = float(settings_sheet.acell('B10').value.split(',')[2])
-                        if abs(old_n50) > 0.01: pct_n50 = old_n50; diff_n50 = (pct_n50 / 100) * lp_n50
-                    except: pass
+            # Index Heatmap Processing Log
+            idx_item = data.get("IDX_I", {}).get("13", {})
+            lp_n50 = float(idx_item.get("last_price", 0.0))
+            if lp_n50 > 0:
+                ohlc_close = float(idx_item.get("ohlc", {}).get("close", lp_n50))
+                diff_n50 = lp_n50 - ohlc_close
+                pct_n50 = (diff_n50 / ohlc_close) * 100 if ohlc_close > 0 else 0.0
                 settings_sheet.update_acell('B10', f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}")
-
+                
+            # Process remaining sector indices
             heatmap_arr = []
-            for sec_id, info in sector_lookup.items():
-                lp_sec, diff_sec, pct_sec = get_index_metrics(sec_id, sector_name=info["name"])
-                if pct_sec is not None:
-                    heatmap_arr.append({
-                        "sector": info["name"],
-                        "change": round(pct_sec, 2),
-                        "weight": info["weight"]
-                    })
-            
-            if heatmap_arr:
-                settings_sheet.update_acell('B12', json.dumps(heatmap_arr))
-
-            settings_sheet.update_acell('B9', now_ist.strftime("%d-%b %I:%M %p"))
-            
-        except Exception as e: return f"Spreadsheet Write Failure: {e}"
+            idx_master = data.get("IDX_I", {})
+            for name, info in SECTOR_SYMBOLS.items():
+                match_rows = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == info["symbol"]) & (scrip_df['SEM_EXM_EXCH_ID'] == 'IDX')]
+                if not match_rows.empty:
+                    s_id = str(match_rows.iloc[0]['SEM_SMST_SECURITY_ID'])
+                    if s_id in idx_master:
+                        node = idx_master[s_id]
+                        n_lp = float(node.get("last_price", 0.0))
+                        n_pc = float(node.get("ohlc", {}).get("close", n_lp))
+                        n_pct = round(((n_lp - n_pc) / n_pc * 100), 2) if n_pc > 0 else 0.0
+                        heatmap_arr.append({"sector": name, "change": n_pct, "weight": info["weight"]})
+            if heatmap_arr: settings_sheet.update_acell('B12', json.dumps(heatmap_arr))
+            settings_sheet.update_acell('B9', (datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b %I:%M %p"))
+        except Exception as e: return f"Sheets transmission exception: {e}"
         return "Success"
-    return f"API Error: {response.status_code}"
+    return f"API Status Failure Code: {response.status_code}"
 
 def background_sync_loop(gcp_creds_dict, dhan_client_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     while True:
         sleep_timer = 60 
         now = datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        
-        if now.weekday() < 5:
-            start_market = now.replace(hour=9, minute=15, second=0, microsecond=0)
-            end_market = now.replace(hour=15, minute=30, second=0, microsecond=0)
-            
-            if start_market <= now <= end_market:
-                try:
-                    credentials = Credentials.from_service_account_info(gcp_creds_dict, scopes=scopes)
-                    gc = gspread.authorize(credentials)
-                    sh = gc.open("Comprehensive Trading Tracker 2026")
-                    bg_worksheet, bg_scanner_sheet, bg_settings_sheet = sh.sheet1, sh.worksheet("Scanners"), sh.worksheet("Settings")
-                    
-                    try: sleep_timer = int(bg_settings_sheet.acell('B8').value)
-                    except: pass
-                    
-                    execute_core_sync(bg_worksheet, bg_scanner_sheet, bg_settings_sheet, bg_worksheet.row_values(1), bg_scanner_sheet.row_values(1), background_client_id=dhan_client_id)
-                except Exception: pass 
-                
+        if now.weekday() < 5 and (9, 15) <= (now.hour, now.minute) <= (15, 30):
+            try:
+                credentials = Credentials.from_service_account_info(gcp_creds_dict, scopes=scopes)
+                gc = gspread.authorize(credentials)
+                sh = gc.open("Comprehensive Trading Tracker 2026")
+                execute_core_sync(sh.sheet1, sh.worksheet("Scanners"), sh.worksheet("Settings"), sh.sheet1.row_values(1), sh.worksheet("Scanners").row_values(1), background_client_id=dhan_client_id)
+            except: pass 
         time.sleep(sleep_timer)
 
 @st.cache_resource
@@ -379,9 +301,7 @@ def start_cron_daemon_v12(_worksheet, _scanner_sheet, _settings_sheet, _sheet_he
     return True
 
 def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
-    with st.spinner("Fetching live market data from Dhan..."):
+    with st.spinner("Refreshed price feeds synchronizing from Dhan..."):
         result = execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-        if result == "Success":
-            st.success("Successfully updated live prices!")
-            st.rerun()
-        else: st.error(f"Sync Issue: {result}")
+        if result == "Success": st.rerun()
+        else: st.error(f"Sync issue: {result}")
