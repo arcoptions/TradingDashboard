@@ -225,7 +225,7 @@ def main():
     scores_col, decisions_col = [], []
     for idx, row in df_watchlist.iterrows():
         sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
-        pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
+        pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"})
         p_chg = float(row.get("Price Chg %", 0) or 0)
         o_chg = float(row.get("OI Chg %", 0) or 0)
         lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
@@ -241,13 +241,6 @@ def main():
     viewing_scanner = st.session_state.get("viewing_scanner_row_data")
 
     if viewing_trade or viewing_scanner:
-        c_esc, _ = st.columns([2, 8])
-        with c_esc:
-            if st.button("⬅️ Back to Terminal", key="terminal_global_exit_btn", use_container_width=True):
-                st.session_state.viewing_trade_row = None
-                st.session_state.viewing_scanner_row_data = None
-                st.rerun()
-
         try: saved_token = settings_ws.acell('B2').value or ""
         except: saved_token = ""
         
@@ -273,7 +266,7 @@ def main():
             full_mock_row["Entry CMP / Range"] = trade_data["Entry CMP / Range"]
             full_mock_row["_Sheet_Row"] = -1
             
-            # Rendering Inspector directly (No Split Columns or Left Pane)
+            # Rendering Inspector directly
             trade_inspector.render(full_mock_row, intel_pool, saved_token, watchlist_ws, sheet_headers)
         
         # Stop layout rendering to present the clean Inspector Canvas
