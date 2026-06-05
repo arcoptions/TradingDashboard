@@ -150,11 +150,19 @@ def main():
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
 
-    # --- UPDATED: ROUTING MANAGER SUPPORTING SCANNER INSPECTIONS ---
+    # ─── FIXED: GLOBAL ROUTING ENGINE & STATE OVERRIDES ───
     viewing_trade = st.session_state.get("viewing_trade_row")
     viewing_scanner = st.session_state.get("viewing_scanner_row_data")
 
     if viewing_trade or viewing_scanner:
+        # Unified Escape Mechanism: Safely breaks deadlocks for both state structures
+        c_esc, _ = st.columns([2, 8])
+        with c_esc:
+            if st.button("Back to Terminal", key="terminal_global_exit_btn", use_container_width=True):
+                st.session_state.viewing_trade_row = None
+                st.session_state.viewing_scanner_row_data = None
+                st.rerun()
+
         from integrations.google_sheets import fetch_settings_cell
         daily_token = fetch_settings_cell('B2') or ""
         
@@ -164,14 +172,38 @@ def main():
                 trade_inspector.render(trade_rows.iloc[0], intel_pool, daily_token, watchlist_ws, sheet_headers)
             else:
                 st.error("Row context lost.")
-                if st.button("Reset View"):
-                    st.session_state.viewing_trade_row = None; st.rerun()
+                st.session_state.viewing_trade_row = None; st.rerun()
         else:
-            # Reconstruct unlogged scanner rows into pseudo-dataframe rows
+            # Reconstruct unlogged scanner rows into pseudo-dataframe series
             trade_data = pd.Series(viewing_scanner)
             single_intel = batch_fetch_intelligence([trade_data["Symbol / Asset"]])
             intel_pool.update(single_intel)
-            trade_inspector.render(trade_data, intel_pool, daily_token, watchlist_ws, sheet_headers)
+            
+            # FIXED: Handles missing column dependencies to prevent layouts from collapsing
+            st.markdown("<style>div[data-testid='stHorizontalBlock'] > div:first-child { min-width: 320px; }</style>", unsafe_allow_html=True)
+            
+            # Inject structural mock parameters to safely satisfy trade_inspector requirements
+            full_mock_row = pd.Series(index=sheet_headers, dtype=str)
+            full_mock_row["Symbol / Asset"] = trade_data["Symbol / Asset"]
+            full_mock_row["Idea Source (Chartink/Telegram/X/Self)"] = trade_data["Idea Source (Chartink/Telegram/X/Self)"]
+            full_mock_row["Trade Type (Eq/Option)"] = trade_data["Trade Type (Eq/Option)"]
+            full_mock_row["Exchange"] = trade_data["Exchange"]
+            full_mock_row["Status (Watch/Active/Closed)"] = "Watchlist"
+            full_mock_row["Entry CMP / Range"] = trade_data["Entry CMP / Range"]
+            full_mock_row["_Sheet_Row"] = -1
+            
+            # Render layout panels side-by-side
+            c_panel, c_charts = st.columns([3, 7])
+            with c_panel:
+                st.info("Staging Mode Profile")
+                st.warning("Execution logs and psychological planning parameters are read-only. Promote this scanner target to your Watchlist to unlock full position editing.")
+                st.text_input("Asset Ticker", full_mock_row["Symbol / Asset"], disabled=True)
+                st.text_input("Source Pipeline", full_mock_row["Idea Source (Chartink/Telegram/X/Self)"], disabled=True)
+                st.text_input("Assigned Desk", full_mock_row["Trade Type (Eq/Option)"], disabled=True)
+                st.text_input("Trigger Price Reference", full_mock_row["Entry CMP / Range"], disabled=True)
+            
+            with c_charts:
+                trade_inspector.render(full_mock_row, intel_pool, daily_token, watchlist_ws, sheet_headers)
         return
 
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
@@ -265,7 +297,7 @@ def main():
                     st.session_state.active_heatmap_sector = event["selection"]["points"][0].get("label"); st.rerun()
             else: st.plotly_chart(fig, use_container_width=True)
         else:
-            st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
+            st.button("Back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
             rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_tv_data[s]["mcap"]/10000000, 2) if all_tv_data[s].get("mcap") else 0.0, "LTP (₹)": all_tv_data[s]["ltp"], "Change %": all_tv_data[s]["change_pct"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_tv_data]
             st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
 
