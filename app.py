@@ -150,18 +150,28 @@ def main():
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
 
-    if st.session_state.get("viewing_trade_row"):
-        trade_rows = df_watchlist[df_watchlist['_Sheet_Row'] == st.session_state.viewing_trade_row]
-        if not trade_rows.empty:
-            trade_data = trade_rows.iloc[0]
-            from integrations.google_sheets import fetch_settings_cell
-            daily_token = fetch_settings_cell('B2') or ""
-            trade_inspector.render(trade_data, intel_pool, daily_token, watchlist_ws, sheet_headers)
+    # --- UPDATED: ROUTING MANAGER SUPPORTING SCANNER INSPECTIONS ---
+    viewing_trade = st.session_state.get("viewing_trade_row")
+    viewing_scanner = st.session_state.get("viewing_scanner_row_data")
+
+    if viewing_trade or viewing_scanner:
+        from integrations.google_sheets import fetch_settings_cell
+        daily_token = fetch_settings_cell('B2') or ""
+        
+        if viewing_trade:
+            trade_rows = df_watchlist[df_watchlist['_Sheet_Row'] == viewing_trade]
+            if not trade_rows.empty:
+                trade_inspector.render(trade_rows.iloc[0], intel_pool, daily_token, watchlist_ws, sheet_headers)
+            else:
+                st.error("Row context lost.")
+                if st.button("Reset View"):
+                    st.session_state.viewing_trade_row = None; st.rerun()
         else:
-            st.error("Row context lost. Please return to terminal.")
-            if st.button("Reset View"):
-                st.session_state.viewing_trade_row = None
-                st.rerun()
+            # Reconstruct unlogged scanner rows into pseudo-dataframe rows
+            trade_data = pd.Series(viewing_scanner)
+            single_intel = batch_fetch_intelligence([trade_data["Symbol / Asset"]])
+            intel_pool.update(single_intel)
+            trade_inspector.render(trade_data, intel_pool, daily_token, watchlist_ws, sheet_headers)
         return
 
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
@@ -173,7 +183,7 @@ def main():
     except: existing_sources = []
     all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
 
-    # --- UI LAYOUT: FILTERS & SYNC BLOCK ---
+    # Filter Bar Configuration Block
     f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
     with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
     with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
