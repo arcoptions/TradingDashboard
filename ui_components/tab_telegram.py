@@ -4,13 +4,17 @@ import time
 from datetime import datetime
 import broker_api as api
 import analytics
-from core_engines.nlp_router import ASSET_ALIASES, SECTOR_MAP, extract_asset_from_text
+from core_engines.nlp_router import extract_asset_from_text
 from integrations.google_sheets import fetch_dataframe_safe
 
-def render(wb_obj, watchlist_symbols, sheet_headers):
+def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Operational Staging Workspaces")
     
     df_raw_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
+    if wb_obj is None:
+        st.error("Data core connection uninitialized.")
+        return
+        
     raw_log_ws = wb_obj.worksheet("Telegram_Raw_Logs")
     
     if not df_raw_logs.empty:
@@ -61,7 +65,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers):
             if tab_name == "Stock Mentions":
                 df_display["Status"] = df_display["Extracted_Symbol"].apply(lambda x: "⚠️ Duplicate" if str(x).upper() in watchlist_symbols else "🟢 Unique")
             else:
-                df_display["Status"] = "ℹ️ Info"
+                df_display["Status"] = "ℹ expose"
                 
             b1, b2, b3 = st.columns([1, 1, 1])
             
@@ -119,7 +123,6 @@ def render(wb_obj, watchlist_symbols, sheet_headers):
                     
                 if status_updates:
                     raw_log_ws.batch_update(status_updates)
-                    # Clear Cache forcibly so the updated UI renders immediately
                     fetch_dataframe_safe.clear()
                     st.toast(f"Staged elements redirected successfully!")
                     time.sleep(0.5); st.rerun()
