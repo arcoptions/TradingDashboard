@@ -25,6 +25,28 @@ INDEX_CONSTITUENTS = {
     "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE", "SOBHA", "SUNTECK"]
 }
 
+# The Universal Dictionary of NSE F&O Assets
+FNO_SYMBOLS = {
+    "AARTIIND", "ABB", "ABBOTINDIA", "ABCAPITAL", "ABFRL", "ACC", "ADANIENT", "ADANIPORTS", "ALKEM", "AMBUJACEM", 
+    "APOLLOHOSP", "APOLLOTYRE", "ASHOKLEY", "ASIANPAINT", "ASTRAL", "ATUL", "AUBANK", "AUROPHARMA", "AXISBANK", 
+    "BAJAJ-AUTO", "BAJAJFINSV", "BAJFINANCE", "BALRAMCHIN", "BANDHANBNK", "BANKBARODA", "BATAINDIA", "BEL", "BERGEPAINT", 
+    "BHARATFORG", "BHARTIARTL", "BHEL", "BIOCON", "BOSCHLTD", "BPCL", "BRITANNIA", "BSOFT", "CANBK", "CANFINHOME", 
+    "CHAMBLFERT", "CHOLAFIN", "CIPLA", "COALINDIA", "COFORGE", "COLPAL", "CONCOR", "COROMANDEL", "CROMPTON", "CUB", 
+    "CUMMINSIND", "DABUR", "DALBHARAT", "DEEPAKNTR", "DIVISLAB", "DIXON", "DLF", "DRREDDY", "EICHERMOT", "ESCORTS", 
+    "EXIDEIND", "FEDERALBNK", "GAIL", "GLENMARK", "GMRINFRA", "GNFC", "GODREJCP", "GODREJPROP", "GRANULES", "GRASIM", 
+    "GUJGASLTD", "HAL", "HAVELLS", "HCLTECH", "HDFCAMC", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDCOPPER", 
+    "HINDPETRO", "HINDUNILVR", "ICICIBANK", "ICICIGI", "ICICIPRULI", "IDEA", "IDFC", "IDFCFIRSTB", "IEX", "IGL", 
+    "INDHOTEL", "INDIACEM", "INDIAMART", "INDIGO", "INDUSINDBK", "INDUSTOWER", "INFY", "INTELLECT", "IOC", "IPCALAB", 
+    "IRCTC", "ITC", "JINDALSTEL", "JKCEMENT", "JSWSTEEL", "JUBLFOOD", "KOTAKBANK", "L&TFH", "LALPATHLAB", "LAURUSLABS", 
+    "LICHSGFIN", "LT", "LTIM", "LTTS", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", "MARICO", "MARUTI", "MCDOWELL-N", "MCX", 
+    "METROPOLIS", "MFSL", "MGL", "MOTHERSON", "MPHASIS", "MRF", "MUTHOOTFIN", "NATIONALUM", "NAUKRI", "NAVINFLUOR", 
+    "NESTLEIND", "NMDC", "NTPC", "OBEROIRLTY", "OFSS", "ONGC", "PAGEIND", "PEL", "PERSISTENT", "PETRONET", "PFC", 
+    "PIDILITIND", "PIIND", "PNB", "POLYCAB", "POWERGRID", "PVRINOX", "RAMCOCEM", "RBLBANK", "RECLTD", "RELIANCE", 
+    "SAIL", "SBICARD", "SBILIFE", "SBIN", "SHREECEM", "SHRIRAMFIN", "SIEMENS", "SRF", "SUNPHARMA", "SUNTV", "SYNGENE", 
+    "TATACHEM", "TATACOMM", "TATACONSUM", "TATAMOTORS", "TATAPOWER", "TATASTEEL", "TCS", "TECHM", "TITAN", "TORNTPHARM", 
+    "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO", "UPL", "VEDL", "VOLTAS", "WIPRO", "ZEEL", "ZYDUSLIFE", "NIFTY", "BANKNIFTY", "FINNIFTY"
+}
+
 ASSET_ALIASES = {
     "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
     "OIL": ["OIL", "OIL INDIA", "OILINDIA"],
@@ -48,14 +70,11 @@ ASSET_ALIASES = {
 }
 
 def extract_asset_from_text(text):
-    if not text:
-        return "-"
-        
+    if not text: return "-"
     text_upper = str(text).upper().strip()
     
     hashtag_match = re.search(r'#([A-Z0-9_]+)', text_upper)
-    if hashtag_match:
-        return hashtag_match.group(1).replace('_', '')
+    if hashtag_match: return hashtag_match.group(1).replace('_', '')
         
     first_line = text_upper.split('\n')[0].strip()
     prefix_match = re.match(r'^([A-Z0-9\s&]+)\s*[:;]', first_line)
@@ -65,8 +84,7 @@ def extract_asset_from_text(text):
             return candidate
 
     signal_match = re.search(r'\b(?:BUY|SELL|ADD|SHORT)\s+([A-Z0-9&]+)\b', text_upper)
-    if signal_match:
-        return signal_match.group(1)
+    if signal_match: return signal_match.group(1)
     
     sanitized_text = re.sub(r'[^A-Z0-9\s&]', ' ', text_upper)
     sanitized_text = " " + " ".join(sanitized_text.split()) + " "
@@ -83,12 +101,12 @@ def extract_asset_from_text(text):
         spaced_variation = re.sub(r'([A-Z]+)(BANK|MOTORS|MOTOR|STEEL|PHARMA|IND|INDIA|ELXSI)', r'\1 \2', index_asset)
         for variant in [index_asset, spaced_variation]:
             pattern = r'(?:^|[^A-Z0-9])' + re.escape(variant) + r'(?:$|[^A-Z0-9])'
-            if re.search(pattern, sanitized_text):
-                return index_asset
+            if re.search(pattern, sanitized_text): return index_asset
 
     return "-"
 
 def parse_trade_metrics(text):
+    """Dynamically slices options strikes, entries, targets, and stops from raw advisory texts."""
     text = str(text).upper()
     metrics = {"strike": "", "option_type": "", "entry": "", "sl": "", "target_1": "", "target_2": ""}
     
@@ -103,17 +121,14 @@ def parse_trade_metrics(text):
             metrics["strike"] = opt_match_rev.group(2)
             
     entry_match = re.search(r'(?:CMP|AT|@|GIVEN AT)\s*([\d\.]+)(?:\s*-\s*([\d\.]+))?', text)
-    if entry_match: 
-        metrics["entry"] = f"{entry_match.group(1)}-{entry_match.group(2)}" if entry_match.group(2) else entry_match.group(1)
+    if entry_match: metrics["entry"] = f"{entry_match.group(1)}-{entry_match.group(2)}" if entry_match.group(2) else entry_match.group(1)
         
     sl_match = re.search(r'SL\s*(?:AT\s*)?([\d\.]+)', text)
-    if sl_match: 
-        metrics["sl"] = sl_match.group(1)
+    if sl_match: metrics["sl"] = sl_match.group(1)
         
     tgt_match = re.search(r'TARGET(?:S)?\s*([\d\.]+)(?:\s*[-/]\s*([\d\.]+))?', text)
     if tgt_match:
         metrics["target_1"] = tgt_match.group(1)
-        if tgt_match.group(2): 
-            metrics["target_2"] = tgt_match.group(2)
+        if tgt_match.group(2): metrics["target_2"] = tgt_match.group(2)
         
     return metrics
