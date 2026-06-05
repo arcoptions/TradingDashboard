@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 from integrations.google_sheets import fetch_dataframe_safe
 
-def render(study_ws):
-    st.markdown("#### Macro Research Staging Deck (`Stocks to study`)")
+def render(*args, **kwargs):
+    st.markdown("#### Macro Research Staging Deck (`Weighed Stocks to Study`)")
     st.caption("Aggregated list of high-conviction insights extracted directly from news wires and automated tickers.")
     
-    df_study_log = fetch_dataframe_safe(study_ws)
+    df_study_log = fetch_dataframe_safe("Stocks to study")
     
     if not df_study_log.empty:
         st.dataframe(
@@ -22,4 +22,4 @@ def render(study_ws):
             }
         )
     else:
-        st.info("No research items logged yet. New inbound entries from Beat The Street will display here automatically, or you can stage your old messages manually from the Telegram Data tab.")
+        st.info("No research items logged yet. New inbound entries from Beat The Street will display here automatically.")
