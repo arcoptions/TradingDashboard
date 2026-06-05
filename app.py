@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import streamlit.components.v1 as components
+import requests
 
 # --- MODULE IMPORTS ---
 from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
-from core_engines.nlp_router import SECTOR_MAP
+from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
 import scoring_engine as se
@@ -15,6 +16,61 @@ import derivatives_engine as de
 from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners
 
 st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈")
+
+# ─── MARKET INTELLIGENCE POOL FETCHERS ───
+@st.cache_data(ttl=15)
+def batch_fetch_intelligence(symbols_list):
+    results_map = {}
+    if not symbols_list: return results_map
+    clean_tickers = list(set([str(s).split('-')[0].strip().upper().replace("&", "_") for s in symbols_list]))
+    tv_tickers = [f"NSE:{t}" for t in clean_tickers]
+    
+    tech_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["close", "EMA20", "EMA50", "EMA200", "RSI", "volume", "average_volume_10d"]}
+    fund_payload = {"symbols": {"tickers": tv_tickers}, "columns": ["price_earnings_ttm", "price_earnings_forward", "return_on_equity", "debt_to_equity", "operating_margin", "net_margin", "return_on_capital_employed"]}
+    
+    for t in clean_tickers:
+        results_map[t] = {
+            "f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"},
+            "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}
+        }
+
+    try:
+        res_t = requests.post("https://scanner.tradingview.com/india/scan", json=tech_payload, timeout=6)
+        if res_t.status_code == 200 and res_t.json().get("data"):
+            for item in res_t.json()["data"]:
+                t_raw = item["s"].split(":")[1]
+                d = item["d"]
+                if t_raw in results_map:
+                    results_map[t_raw]["t"] = {
+                        "ltp": round(d[0], 2) if d[0] is not None else "-",  
+                        "rsi": round(d[4], 2) if d[4] is not None else "-",
+                        "vol_spike": round((d[5] / d[6]) * 100, 2) if d[5] and d[6] and d[6] > 0 else "-",
+                        "ema20_prox": round(((d[0] - d[1]) / d[1]) * 100, 2) if d[1] and d[0] else "-",
+                        "ema50_prox": round(((d[0] - d[2]) / d[2]) * 100, 2) if d[2] and d[0] else "-",
+                        "ema200_prox": round(((d[0] - d[3]) / d[3]) * 100, 2) if d[3] and d[0] else "-"
+                    }
+    except: pass
+
+    try:
+        res_f = requests.post("https://scanner.tradingview.com/india/scan", json=fund_payload, timeout=6)
+        if res_f.status_code == 200 and res_f.json().get("data"):
+            for item in res_f.json()["data"]:
+                t_raw = item["s"].split(":")[1]
+                d = item["d"]
+                if t_raw in results_map:
+                    results_map[t_raw]["f"].update({
+                        "stock_pe": round(d[0], 2) if d[0] is not None else "-",
+                        "forward_pe": round(d[1], 2) if d[1] is not None else "-",
+                        "roe": f"{round(d[2], 2)}%" if d[2] is not None else "-",
+                        "debt_to_equity": round(d[3], 2) if d[3] is not None else "-",
+                        "ebitda_margin": f"{round(d[4], 2)}%" if d[4] is not None else "-",
+                        "pat_margin": f"{round(d[5], 2)}%" if d[5] is not None else "-",
+                        "roce": f"{round(d[6], 2)}%" if d[6] is not None else "-"
+                    })
+    except: pass
+
+    return results_map
+
 
 def format_index_display(name, raw_val):
     if not raw_val or raw_val == "-": return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
@@ -60,12 +116,30 @@ def main():
         st.info("Primary tracking database is empty.")
         return
 
-    # Data Augmentation Engine
+    # ─── RESTORED: DATA ENRICHMENT & Conviction Calculation ENGINE ───
     df_watchlist['_Sheet_Row'] = range(2, len(df_watchlist) + 2)
     df_watchlist["Journal"] = False
     df_watchlist = analytics.compute_signal_indicators(df_watchlist)
     df_watchlist['Base Asset'] = df_watchlist['Symbol / Asset'].apply(lambda x: str(x).split('-')[0].strip().upper())
     df_watchlist['Sector/Industry'] = df_watchlist['Base Asset'].apply(lambda x: SECTOR_MAP.get(x, "General / Mixed"))
+
+    # Compute conviction fields to satisfy view_cols expectations
+    batch_tickers = df_watchlist['Symbol / Asset'].tolist()
+    intel_pool = batch_fetch_intelligence(batch_tickers)
+    
+    scores_col, decisions_col = [], []
+    for idx, row in df_watchlist.iterrows():
+        sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
+        pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
+        p_chg = float(row.get("Price Chg %", 0) or 0)
+        o_chg = float(row.get("OI Chg %", 0) or 0)
+        lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
+        t_type = row.get("Trade Type (Eq/Option)", "Equity")
+        scr, dec, _ = se.generate_conviction_score(pool_data["f"], pool_data["t"], lbl, trade_type=t_type)
+        scores_col.append(scr); decisions_col.append(dec)
+        
+    df_watchlist["Score"] = scores_col
+    df_watchlist["Decision"] = decisions_col
 
     # Compile the active symbols list strictly for duplicate prevention routing
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
@@ -81,6 +155,7 @@ def main():
     f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
     with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
     with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
+    with f_col3: selected_date_range = st.date_input("Filter by Date Range", value=(datetime.today().date(), datetime.today().date()))
     with f_col4:
         st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
         if st.button("Sync Live Prices", use_container_width=True): 
@@ -93,7 +168,7 @@ def main():
     # Standardized UI Column Config
     view_cols = [
         "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
-        "Live Price", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
+        "Live Price", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
         "Target Status", "Target 1", "Target 2", "Exit Price", 
         "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
     ]
@@ -105,6 +180,7 @@ def main():
         "Vs Entry": st.column_config.TextColumn("Vs Entry"),
         "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
         "Live Price": st.column_config.TextColumn("Live Price"),
+        "Score": st.column_config.NumberColumn("Score", format="%d"),
         "Decision": st.column_config.TextColumn("Decision"),
         "Add-On / Dip Levels": st.column_config.TextColumn("Add-On / Dip Levels"),
         "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss (SL)"),
@@ -118,7 +194,7 @@ def main():
         "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         "_Sheet_Row": None
     }
-    disabled_cols = ["Decision", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
+    disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
 
     # 4. Master Layout Rendering (The Tabs)
     t_opt, t_stk, t_htmap, t_scan, t_study, t_tel = st.tabs([
@@ -129,7 +205,20 @@ def main():
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     
     with t_htmap: 
-        st.info("Heatmap UI Module Migration in progress.") # We will migrate the Plotly tree map chart here next
+        # ─── RESTORED SECTOR TREEMAP GENERATION ───
+        try:
+            raw_json = settings_ws.acell('B12').value
+            sec_data_list = json.loads(raw_json) if raw_json else []
+        except: sec_data_list = []
+        
+        if not sec_data_list:
+            st.info("Market performance vectors initializing. Tap 'Sync Live Prices' to populate.")
+        else:
+            df_sectors = pd.DataFrame(sec_data_list)
+            fig = px.treemap(df_sectors, path=['sector'], values='weight', color='change', custom_data=['change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
+            fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%+.2f%%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
+            fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig, use_container_width=True)
 
     with t_scan:
         if scanner_ws: tab_scanners.render(scanner_ws, scanner_ws.row_values(1))
