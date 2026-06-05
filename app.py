@@ -1,104 +1,142 @@
 import streamlit as st
 import pandas as pd
-import database as db
+from datetime import datetime
+import streamlit.components.v1 as components
+
+# --- MODULE IMPORTS ---
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
+from core_engines.nlp_router import SECTOR_MAP
 import broker_api as api
-import modals
-import views
+import analytics
+import scoring_engine as se
+import derivatives_engine as de
 
-st.set_page_config(page_title="ARC Trading Terminal", layout="wide", initial_sidebar_state="expanded")
+# UI COMPONENTS
+from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners
 
-st.markdown("""
-    <style>
-        #MainMenu {visibility: hidden;}
-        [data-testid="stToolbar"] {display: none !important;} 
-        footer {visibility: hidden;}
-        .block-container {padding-top: 2rem; padding-bottom: 0rem;}
-        :root {
-            --arc-gold-light: #F9E7BE;
-            --arc-gold-mid: #D1A553;
-            --arc-gold-dark: #B88A3B;
-            --arc-text-dark: #1A202C; 
-        }
-        div[data-testid="stSidebar"] .stButton > button,
-        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
-        div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
-            width: 100% !important; min-width: 100% !important; max-width: 100% !important;
-            height: 46px !important; min-height: 46px !important; max-height: 46px !important;
-            box-sizing: border-box !important; margin: 6px 0px !important; padding: 10px 16px !important;
-            border-radius: 6px !important; display: flex !important; align-items: center !important;
-            justify-content: flex-start !important; text-align: left !important; font-size: 15px !important;
-            cursor: pointer !important; transition: all 0.15s ease-in-out !important;
-        }
-        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {display: none !important;}
-        div[data-testid="stSidebar"] .stButton > button p, div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label p {margin: 0 !important; font-size: 15px !important;}
-        div[data-testid="stSidebar"] .stButton > button[kind="primary"], .stButton > button[kind="primary"] {
-            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; color: var(--arc-text-dark) !important; border: 1px solid var(--arc-gold-dark) !important; font-weight: 700 !important;
-        }
-        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; border: 1px solid var(--arc-gold-dark) !important;}
-        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; color: var(--arc-text-dark) !important;}
-        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {color: var(--arc-text-dark) !important;}
-        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {background-color: transparent !important; border: 1px solid #E2E8F0 !important;}
-        .sync-timestamp-text {font-size: 12px !important; color: #64748B !important; text-align: right !important; margin-top: -6px !important; padding-bottom: 14px !important; width: 100%;}
-        
-        /* Light Theme Nifty-Only Transparent Tape styling */
-        .index-tape {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            padding: 8px 0px; 
-            background-color: transparent; 
-            text-align: left; 
-            margin-bottom: 10px;
-            display: inline-flex;
-            align-items: center;
-        }
-    </style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈")
 
-if "viewing_trade" not in st.session_state: st.session_state.viewing_trade = None
-if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
-if "qp_key" not in st.session_state: st.session_state.qp_key = 0
-if "target_hits" not in st.session_state: st.session_state.target_hits = 0
-if "sl_hits" not in st.session_state: st.session_state.sl_hits = 0
+def format_index_display(name, raw_val):
+    if not raw_val or raw_val == "-": return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
+    parts = str(raw_val).split(",")
+    if len(parts) == 3:
+        lp, diff, pct = parts
+        diff_f, pct_f = float(diff), float(pct)
+        color = "#089981" if diff_f >= 0 else "#F23645" if diff_f < 0 else "#64748B"
+        sign = "+" if diff_f > 0 else ""
+        arrow = "▲" if diff_f >= 0 else "▼"
+        return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
+    return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
 
-try:
-    worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers = db.init_db()
-    # ─── Mapped securely to v12 daemon ───
-    api.start_cron_daemon_v12(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-except Exception as e:
-    st.error(f"Database Connection Failed: {e}")
-    st.stop()
+def render_top_ticker_tape(settings_sheet):
+    if settings_sheet:
+        try:
+            nifty = format_index_display("NIFTY50", settings_sheet.acell('B10').value)
+            st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
+        except: pass
 
-with st.sidebar:
-    try: st.image("logo.png", use_container_width=True)
-    except: st.markdown("## ARC Terminal")
+def main():
+    # 1. Establish Master Connections
+    try:
+        sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
+    except Exception as e:
+        st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
+        return
+
+    render_top_ticker_tape(settings_ws)
+
+    # 2. Main Terminal Header
+    col_t1, col_t2 = st.columns([9, 1])
+    with col_t1: st.markdown("### ARC Trading Terminal")
+    with col_t2: 
+        if st.button("UI Reset", use_container_width=True):
+            components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
+
+    # 3. Compile Active State Data
+    df_watchlist = fetch_dataframe_safe(watchlist_ws)
+    sheet_headers = watchlist_ws.row_values(1) if not df_watchlist.empty else []
     
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Log New Trade", type="primary", use_container_width=True): 
-        modals.trade_entry_modal(worksheet, sheet_headers)
-        
-    st.markdown("<br>", unsafe_allow_html=True)
-    current_page = st.radio("Navigation", ["Options & Stocks Terminal", "Chartink Scanners"], label_visibility="collapsed")
-    st.divider()
-    
-    with st.expander("API & Sync Setup", expanded=False):
-        try: 
-            saved_token = settings_sheet.acell('B2').value or ""
-            current_sync = settings_sheet.acell('B8').value or "60"
-        except: 
-            saved_token, current_sync = "", "60"
-            
-        new_token = st.text_input("Dhan Token:", value=saved_token, type="password")
-        sync_mapping = {"30": "30 Seconds", "60": "1 Minute", "180": "3 Minutes", "300": "5 Minutes", "900": "15 Minutes"}
-        rev_mapping = {v: k for k, v in sync_mapping.items()}
-        
-        selected_sync = st.selectbox("Background Sync Speed:", list(sync_mapping.values()), index=list(sync_mapping.keys()).index(current_sync) if current_sync in sync_mapping else 1)
-        
-        if st.button("Save Settings", use_container_width=True):
-            settings_sheet.update_acell('B2', new_token)
-            settings_sheet.update_acell('B8', rev_mapping[selected_sync])
-            st.success("Settings Locked.")
-            st.rerun()
+    if df_watchlist.empty:
+        st.info("Primary tracking database is empty.")
+        return
 
-if current_page == "Options & Stocks Terminal":
-    views.render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-elif current_page == "Chartink Scanners":
-    views.render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
+    # Data Augmentation Engine
+    df_watchlist['_Sheet_Row'] = range(2, len(df_watchlist) + 2)
+    df_watchlist["Journal"] = False
+    df_watchlist = analytics.compute_signal_indicators(df_watchlist)
+    df_watchlist['Base Asset'] = df_watchlist['Symbol / Asset'].apply(lambda x: str(x).split('-')[0].strip().upper())
+    df_watchlist['Sector/Industry'] = df_watchlist['Base Asset'].apply(lambda x: SECTOR_MAP.get(x, "General / Mixed"))
+
+    # Compile the active symbols list strictly for duplicate prevention routing
+    watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
+
+    # Dynamic Filter Layout
+    try:
+        col_target = "Idea Source (Chartink/Telegram/X/Self)"
+        raw_srcs = df_watchlist[col_target].astype(str).str.strip() if col_target in df_watchlist.columns else pd.Series()
+        existing_sources = sorted(list(raw_srcs[(raw_srcs != "") & (raw_srcs != "nan") & (raw_srcs != "None")].unique()))
+    except: existing_sources = []
+    all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
+
+    f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
+    with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
+    with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
+    with f_col4:
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+        if st.button("Sync Live Prices", use_container_width=True): 
+            api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scanner_ws.row_values(1) if scanner_ws else [])
+
+    filtered_df = df_watchlist.copy()
+    if selected_sources: filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
+    if selected_decisions: filtered_df = filtered_df[filtered_df["Decision"].isin(selected_decisions)]
+
+    # Standardized UI Column Config
+    view_cols = [
+        "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
+        "Live Price", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
+        "Target Status", "Target 1", "Target 2", "Exit Price", 
+        "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
+    ]
+    
+    table_column_config = {
+        "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
+        "Base Asset": st.column_config.TextColumn("Stock Name"),
+        "Symbol / Asset": st.column_config.TextColumn("Contract"), 
+        "Vs Entry": st.column_config.TextColumn("Vs Entry"),
+        "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
+        "Live Price": st.column_config.TextColumn("Live Price"),
+        "Decision": st.column_config.TextColumn("Decision"),
+        "Add-On / Dip Levels": st.column_config.TextColumn("Add-On / Dip Levels"),
+        "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss (SL)"),
+        "Target Status": st.column_config.TextColumn("Target Status"),
+        "Target 1": st.column_config.TextColumn("Target 1"),
+        "Target 2": st.column_config.TextColumn("Target 2"),
+        "Exit Price": st.column_config.TextColumn("Exit Price"),
+        "Idea Source (Chartink/Telegram/X/Self)": st.column_config.SelectboxColumn("Source", options=all_sources, required=True),
+        "Sector/Industry": st.column_config.TextColumn("Industry"),
+        "Trade Type (Eq/Option)": st.column_config.SelectboxColumn("Type", options=["Equity", "Option"], required=True),
+        "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
+        "_Sheet_Row": None
+    }
+    disabled_cols = ["Decision", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
+
+    # 4. Master Layout Rendering (The Tabs)
+    t_opt, t_stk, t_htmap, t_scan, t_study, t_tel = st.tabs([
+        "Options", "Stocks", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
+    ])
+
+    with t_opt: tab_options.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
+    with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
+    
+    with t_htmap: 
+        st.info("Heatmap UI Module Migration in progress.") # We will migrate the Plotly tree map chart here next
+
+    with t_scan:
+        if scanner_ws: tab_scanners.render(scanner_ws, scanner_ws.row_values(1))
+
+    with t_study: tab_study.render(study_ws)
+    
+    with t_tel: tab_telegram.render(raw_ws, sh, watchlist_symbols, sheet_headers)
+
+if __name__ == "__main__":
+    main()
