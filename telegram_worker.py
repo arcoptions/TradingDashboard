@@ -62,13 +62,15 @@ def init_sheet_connection(secrets):
     gc = gspread.authorize(credentials)
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
+    # 1. Raw Logs Tab (The Observation Desk / Feed Archive)
     try:
         raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
     except gspread.exceptions.WorksheetNotFound:
         print("📁 Creating isolated staging tab: 'Telegram_Raw_Logs'...")
-        raw_worksheet = sh.add_worksheet(title="Telegram_Raw_Logs", rows="3000", cols="5")
+        raw_worksheet = sh.add_worksheet(title="Telegram_Raw_Logs", rows="5000", cols="5")
         raw_worksheet.append_row(["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
 
+    # 2. Sandbox Tab (Staged Items Ready For Execution)
     try:
         sandbox_worksheet = sh.worksheet("Telegram_Sandbox")
     except gspread.exceptions.WorksheetNotFound:
@@ -91,30 +93,31 @@ async def run_telegram_listener():
     API_HASH = os.environ.get("TELEGRAM_API_HASH", secrets.get("telegram", {}).get("api_hash", "your_api_hash"))
     SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING", secrets.get("telegram", {}).get("session_string", ""))
 
+    # ─── MASTER CHANNEL DECK (INBOUND ROUTING ROUTINES) ───
     TRACKED_CHANNELS = [
         -1003141350480,       # Derivates Mr Chartist
         -1003858490010,       # Elephant pro
         -1001320942683,       # Sunil
-        -1005281196022,       # Test (Supergroup shape)
-        -5281196022,          # Test (Basic group shape)
+        -1005281196022,       # Test (Supergroup Handle Layout)
+        -5281196022,          # Test (Basic Group Handle Layout)
         -1003800707569,       # Momentum to multibagger
         -1003770951544,       # Investing corner
-        'Shortterm01',        # Shortterm (Public)
+        'Shortterm01',        # Shortterm (Public Handle String)
         -1003148687413,       # Equities Intra and Shortterm
         -1003121140019,       # Equities positional
-        'The_ChartWizard',    # The chart wizard (Public)
+        'The_ChartWizard',    # The chart wizard (Public Handle String)
         -1003770810999,       # Family May 2026
         -1003109328674,       # Automater alerts Mr Chartist
-        'SwingWisely',        # Swingwise (Public)
+        'SwingWisely',        # Swingwise (Public Handle String)
         -1003101198634,       # Commodities Mr Chartist
         'BeatTheStreetNews'   # Isolated Global Social-Media News Engine
     ]
     
     try:
         raw_worksheet, sandbox_worksheet = init_sheet_connection(secrets)
-        print("✅ Core Infrastructure Connection Verified.")
+        print("✅ Core Infrastructure Routing Layers Activated.")
     except Exception as e:
-        print(f"⚠️ Initial sheets tracking link dropped: {e}.")
+        print(f"⚠️ Initial sheets verification error: {e}.")
         raw_worksheet, sandbox_worksheet = None, None
 
     while True:
@@ -133,6 +136,7 @@ async def run_telegram_listener():
                 title_token = getattr(chat_from, 'title', '')
                 username_token = getattr(chat_from, 'username', '')
                 
+                # Coherence Mapping check
                 if "BeatTheStreet" in username_token or "Beat The Street" in title_token:
                     source_name = "Beat The Street"
                 else:
@@ -149,7 +153,7 @@ async def run_telegram_listener():
                     status_flag = "News Ingested" if source_name == "Beat The Street" else "Pending Review"
                     raw_worksheet.append_row([timestamp_str, source_name, raw_text, status_flag])
                 except Exception as log_err:
-                    print(f"⚠️ Real-time sheet ingestion logging exception: {log_err}")
+                    print(f"⚠️ Sheet append execution failure: {log_err}")
 
             await client.run_until_disconnected()
         except Exception as loop_err:
