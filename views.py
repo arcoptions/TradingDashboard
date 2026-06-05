@@ -315,7 +315,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             st.markdown("---")
                             st.markdown("**ARC Options Proximity Intelligence & Strike Optimizers**")
                             
-                            # ─── IMAGE_B5398A.PNG GRID COMPLIANCE: 4 COLUMNS INTEGRATING INLINE NEWS ───
                             pc1, pc2, pc3, pc4 = st.columns([1.5, 1.5, 4.5, 2.5])
                             with pc1: st.metric("Strike-Level PCR", f"{strike_pcr:.2f}" if api_success else "0.0")
                             with pc2: st.metric("Overall Asset PCR", f"{overall_pcr:.2f}" if api_success else "0.0")
@@ -336,10 +335,15 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 
                                 match_bullet_items = []
                                 if news_dataset:
+                                    # Normalize the ticker string by stripping all interior spaces
+                                    normalized_target_ticker = base_ticker_raw.replace(" ", "").upper()
                                     for entry in news_dataset:
                                         if str(entry.get("Channel Source", "")).strip() == "Beat The Street":
                                             text_chunk = str(entry.get("Raw Message Text", ""))
-                                            if base_ticker_raw in text_chunk.upper():
+                                            # FIX: Strip interior spaces from raw news chunks to correctly match "COAL INDIA" against "COALINDIA"
+                                            normalized_news_chunk = text_chunk.replace(" ", "").upper()
+                                            
+                                            if normalized_target_ticker in normalized_news_chunk:
                                                 clean_snippet = text_chunk.replace('\n', ' ')[:75] + "..." if len(text_chunk) > 75 else text_chunk.replace('\n', ' ')
                                                 match_bullet_items.append(f"<li style='font-size:11px; margin-bottom:4px; color:#334155;'><b>{entry.get('Timestamp','')[11:16]}</b>: {clean_snippet}</li>")
                                 
@@ -390,7 +394,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution conclusion parameter resolution.")
+                            except: st.info("Awaiting execution conclusion exit parameters.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
                             fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
@@ -453,7 +457,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_data[s]["mcap"]/10000000, 2) if all_data[s]["mcap"] else 0.0, "LTP (₹)": all_data[s]["ltp"], "Change %": all_data[s]["change"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_data]
                     st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
             
-            # ─── ADVANCED INTERACTIVE EOD EXTRACTION & DUPLICATE BLOCKING STAGING PANEL ───
             with tab_telegram:
                 st.markdown("#### Institutional Advisory Staging Queue")
                 st.caption("Review raw signal flow from premium channels, cross-examine metrics, check parameters, and stage directly to watchlists.")
@@ -467,7 +470,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 
                 if not df_raw_logs.empty:
                     df_raw_logs["_Row_ID"] = range(2, len(df_raw_logs) + 2)
-                    df_review_queue = df_raw_logs[df_raw_logs["Parsing Status"] == "Pending Review"].copy()
+                    
+                    # FIX: Flexible case-insensitive array matching to support legacy rows containing 'Pending Extraction' or 'Pending Parsing'
+                    df_review_queue = df_raw_logs[df_raw_logs["Parsing Status"].astype(str).str.strip().str.lower().isin(["pending review", "pending extraction", "pending parsing"])].copy()
                     
                     if df_review_queue.empty:
                         st.success("✨ EOD Queue Clear! All advisory payloads processed or archived.")
@@ -479,12 +484,10 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 c_top1, c_top2 = st.columns([7, 3])
                                 c_top1.markdown(f"🛰️ **Source:** `{row['Channel Source']}` &nbsp;|&nbsp; 🕒 `{row['Timestamp']}`")
                                 
-                                # Auto-extract template logic preview
                                 pre_parsed = analytics.parse_telegram_tip(row['Raw Message Text'])
                                 t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
                                 
                                 with c_top2:
-                                    # Safe duplicate tracking verification checker
                                     is_duplicate = False
                                     if t_symbol != "UNKNOWN" and not initial_df.empty:
                                         running_symbols = initial_df["Symbol / Asset"].astype(str).str.upper().tolist()
@@ -499,7 +502,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 
                                 b1, b2, b3, b4 = st.columns([2.5, 2.5, 2.5, 2.5])
                                 
-                                # ACTION 1: PARSE AND MOVE TO TELEGRAM_SANDBOX WATCHLIST
                                 if b1.button("⚡ Stage to Watchlist", key=f"btn_stg_{row['_Row_ID']}", disabled=is_duplicate, use_container_width=True):
                                     if t_symbol == "UNKNOWN":
                                         st.error("Cannot resolve target ticker tokens from unstructured syntax layout.")
@@ -528,7 +530,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                         st.toast(f"Staged {t_sym} directly to Staging Tracker Sandbox!")
                                         time.sleep(0.5); st.rerun()
                                 
-                                # ACTION 2: STAGE TO LONG-TERM ARCHIVE TAB
                                 if b2.button("📦 Archive Entry", key=f"btn_arc_{row['_Row_ID']}", use_container_width=True):
                                     try: archive_ws = wb_obj.worksheet("Telegram_Archive")
                                     except gspread.exceptions.WorksheetNotFound:
@@ -540,7 +541,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                     st.toast("Record processed cleanly to Archive database.")
                                     time.sleep(0.5); st.rerun()
                                     
-                                # ACTION 3: DISCARD TRASH DATA
                                 if b3.button("🗑️ Discard", key=f"btn_dsc_{row['_Row_ID']}", use_container_width=True):
                                     raw_log_ws.update_cell(int(row['_Row_ID']), 4, "Discarded")
                                     st.toast("Item dropped from active review queues.")
