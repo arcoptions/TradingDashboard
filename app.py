@@ -3,12 +3,13 @@ import pandas as pd
 from datetime import datetime
 import streamlit.components.v1 as components
 import requests
+import inspect
 import json
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
-from core_engines.nlp_router import SECTOR_MAP
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
+from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
 import scoring_engine as se
@@ -18,6 +19,28 @@ import derivatives_engine as de
 from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners
 
 st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈")
+
+# ─── TRADINGVIEW INDEPENDENT FETCH ENGINE (BYPASSES DHAN INDEX BUGS) ───
+@st.cache_data(ttl=60)
+def fetch_all_sectors_data():
+    all_tickers = set(["NSE:NIFTY"])
+    for stocks in INDEX_CONSTITUENTS.values():
+        for s in stocks: all_tickers.add(f"NSE:{s}")
+        
+    payload = {"symbols": {"tickers": list(all_tickers)}, "columns": ["change", "close", "change_abs", "market_cap_basic"]}
+    try:
+        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=5)
+        if res.status_code == 200 and res.json().get("data"):
+            return {
+                item["s"].split(":")[1]: {
+                    "change_pct": item["d"][0], 
+                    "ltp": item["d"][1], 
+                    "change_abs": item["d"][2], 
+                    "mcap": item["d"][3]
+                } for item in res.json()["data"]
+            }
+    except Exception as e: print(e)
+    return {}
 
 @st.cache_data(ttl=15)
 def batch_fetch_intelligence(symbols_list):
@@ -70,23 +93,18 @@ def batch_fetch_intelligence(symbols_list):
     except: pass
     return results_map
 
-def format_index_display(name, raw_val):
-    if not raw_val or raw_val == "-": return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>-</span>"
-    parts = str(raw_val).split(",")
-    if len(parts) == 3:
-        lp, diff, pct = parts
-        diff_f, pct_f = float(diff), float(pct)
-        color = "#089981" if diff_f >= 0 else "#F23645" if diff_f < 0 else "#64748B"
+def render_top_ticker_tape():
+    all_data = fetch_all_sectors_data()
+    if "NIFTY" in all_data:
+        d = all_data["NIFTY"]
+        lp, diff_f, pct_f = d.get("ltp", 0), d.get("change_abs", 0), d.get("change_pct", 0)
+        
+        color = "#089981" if diff_f >= 0 else "#F23645"
         sign = "+" if diff_f > 0 else ""
         arrow = "▲" if diff_f >= 0 else "▼"
-        return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
-    return f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>{name}</span> &nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{raw_val}</span>"
-
-def render_top_ticker_tape():
-    nifty_val = fetch_settings_cell('B10')
-    if nifty_val:
-        nifty = format_index_display("NIFTY50", nifty_val)
-        st.markdown(f"<div class='index-tape'>{nifty}</div>", unsafe_allow_html=True)
+        
+        html = f"<span style='font-size: 15px; font-weight: 500; color: #475569;'>NIFTY50</span> &nbsp;&nbsp; <span style='font-weight: 600; font-size: 16px; color: #0F172A;'>{lp:.2f}</span> &nbsp;&nbsp; <span style='color: {color}; font-size: 14px; font-weight: 500;'>{sign}{diff_f:.2f} ({sign}{pct_f:.2f}%) {arrow}</span>"
+        st.markdown(f"<div class='index-tape'>{html}</div>", unsafe_allow_html=True)
 
 def main():
     try:
@@ -193,33 +211,37 @@ def main():
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     
     with t_htmap: 
-        raw_json = fetch_settings_cell('B12')
-        sec_data_list = []
-        if raw_json:
-            try: sec_data_list = json.loads(raw_json)
-            except: pass
-
-        if not sec_data_list:
-            st.warning("⚠️ Heatmap data is currently empty.")
-            st.info("👉 Please click **'Sync Live Prices'** in the top right corner to download the latest sector performance data from Dhan.")
-        else:
-            df_sectors = pd.DataFrame(sec_data_list)
-            df_sectors.columns = [c.lower() for c in df_sectors.columns]
-            df_sectors['weight'] = pd.to_numeric(df_sectors['weight'], errors='coerce').fillna(1)
-            df_sectors['change'] = pd.to_numeric(df_sectors['change'], errors='coerce').fillna(0)
+        if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
+        
+        # Pull independent data directly from TradingView cache to construct heatmap
+        all_tv_data = fetch_all_sectors_data()
+        
+        if not all_tv_data: 
+            st.info("Market mapping data initializing via TradingView API...")
+        elif st.session_state.active_heatmap_sector is None:
+            sector_weights = {"Nifty 50": 100, "Nifty Bank": 80, "Nifty IT": 60, "Nifty Next 50": 50, "Nifty Auto": 40, "Nifty FMCG": 40, "Nifty Energy": 40, "Nifty Metal": 30, "Nifty Pharma": 30, "Finnifty": 30, "Nifty Healthcare": 20, "Nifty Realty": 10}
+            sector_data = []
             
-            fig = px.treemap(
-                df_sectors, 
-                path=['sector'], 
-                values='weight', 
-                color='change', 
-                custom_data=['change'], 
-                color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], 
-                color_continuous_midpoint=0
-            )
+            # Map valid stock metrics securely
+            for sec, stocks in INDEX_CONSTITUENTS.items():
+                chgs = [all_tv_data[s]["change_pct"] for s in stocks if s in all_tv_data and all_tv_data[s]["change_pct"] is not None]
+                avg_chg = sum(chgs)/len(chgs) if chgs else 0.0
+                sector_data.append({"Sector": sec, "Change": avg_chg, "Weight": sector_weights.get(sec, 30)})
+            
+            df_sectors = pd.DataFrame(sector_data)
+            fig = px.treemap(df_sectors, path=['Sector'], values='Weight', color='Change', custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
             fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:+.2f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
             fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
+            
+            if "on_select" in inspect.signature(st.plotly_chart).parameters:
+                event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="treemap")
+                if event and event.get("selection", {}).get("points"):
+                    st.session_state.active_heatmap_sector = event["selection"]["points"][0].get("label"); st.rerun()
+            else: st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
+            rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_tv_data[s]["mcap"]/10000000, 2) if all_tv_data[s].get("mcap") else 0.0, "LTP (₹)": all_tv_data[s]["ltp"], "Change %": all_tv_data[s]["change_pct"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_tv_data]
+            st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
 
     with t_scan:
         if scanner_ws: 
@@ -227,7 +249,7 @@ def main():
             tab_scanners.render(scanner_ws, scan_headers)
 
     with t_study: tab_study.render()
-    with t_tel: tab_telegram.render(wb_obj=sh, watchlist_symbols=watchlist_symbols, sheet_headers=sheet_headers)
+    with t_tel: tab_telegram.render(sh, watchlist_symbols, sheet_headers)
 
 if __name__ == "__main__":
     main()
