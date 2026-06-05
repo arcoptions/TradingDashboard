@@ -17,8 +17,61 @@ import derivatives_engine as de
 
 # UI COMPONENTS
 from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, trade_inspector
+try:
+    import modals
+except ImportError:
+    pass
 
-st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈")
+st.set_page_config(page_title="ARC Trading Terminal", layout="wide", page_icon="📈", initial_sidebar_state="expanded")
+
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+        [data-testid="stToolbar"] {display: none !important;} 
+        footer {visibility: hidden;}
+        .block-container {padding-top: 2rem; padding-bottom: 0rem;}
+        :root {
+            --arc-gold-light: #F9E7BE;
+            --arc-gold-mid: #D1A553;
+            --arc-gold-dark: #B88A3B;
+            --arc-text-dark: #1A202C; 
+        }
+        div[data-testid="stSidebar"] .stButton > button,
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label,
+        div[data-testid="stSidebar"] div[role="radiogroup"] label[data-testid="stRadioOption"] {
+            width: 100% !important; min-width: 100% !important; max-width: 100% !important;
+            height: 46px !important; min-height: 46px !important; max-height: 46px !important;
+            box-sizing: border-box !important; margin: 6px 0px !important; padding: 10px 16px !important;
+            border-radius: 6px !important; display: flex !important; align-items: center !important;
+            justify-content: flex-start !important; text-align: left !important; font-size: 15px !important;
+            cursor: pointer !important; transition: all 0.15s ease-in-out !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {display: none !important;}
+        div[data-testid="stSidebar"] .stButton > button p, div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label p {margin: 0 !important; font-size: 15px !important;}
+        div[data-testid="stSidebar"] .stButton > button[kind="primary"], .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; color: var(--arc-text-dark) !important; border: 1px solid var(--arc-gold-dark) !important; font-weight: 700 !important;
+        }
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; border: 1px solid var(--arc-gold-dark) !important;}
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {background: linear-gradient(135deg, var(--arc-gold-light) 0%, var(--arc-gold-mid) 100%) !important; color: var(--arc-text-dark) !important;}
+        div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {color: var(--arc-text-dark) !important;}
+        div[data-testid="stSidebar"] div[data-testid="stRadio"] div[role="radiogroup"] label:not([data-checked="true"]) {background-color: transparent !important; border: 1px solid #E2E8F0 !important;}
+        .sync-timestamp-text {font-size: 12px !important; color: #64748B !important; text-align: right !important; margin-top: -6px !important; padding-bottom: 14px !important; width: 100%;}
+        
+        .index-tape {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 8px 0px; 
+            background-color: transparent; 
+            text-align: left; 
+            margin-bottom: 10px;
+            display: inline-flex;
+            align-items: center;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Application Global States
+if "viewing_trade_row" not in st.session_state: st.session_state.viewing_trade_row = None
+if "viewing_scanner_row_data" not in st.session_state: st.session_state.viewing_scanner_row_data = None
 
 @st.cache_data(ttl=60)
 def fetch_all_sectors_data():
@@ -112,6 +165,39 @@ def main():
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
         return
 
+    # --- THE RESTORED SIDEBAR ---
+    with st.sidebar:
+        try: st.image("logo.png", use_container_width=True)
+        except: st.markdown("## ARC Terminal")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Log New Trade", type="primary", use_container_width=True): 
+            try: modals.trade_entry_modal(watchlist_ws, watchlist_ws.row_values(1))
+            except: st.info("Logging module unavailable.")
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.divider()
+        
+        with st.expander("API & Sync Setup", expanded=False):
+            try: 
+                saved_token = settings_ws.acell('B2').value or ""
+                current_sync = settings_ws.acell('B8').value or "60"
+            except: 
+                saved_token, current_sync = "", "60"
+                
+            new_token = st.text_input("Dhan Token:", value=saved_token, type="password")
+            sync_mapping = {"30": "30 Seconds", "60": "1 Minute", "180": "3 Minutes", "300": "5 Minutes", "900": "15 Minutes"}
+            rev_mapping = {v: k for k, v in sync_mapping.items()}
+            
+            selected_sync = st.selectbox("Background Sync Speed:", list(sync_mapping.values()), index=list(sync_mapping.keys()).index(current_sync) if current_sync in sync_mapping else 1)
+            
+            if st.button("Save Settings", use_container_width=True):
+                settings_ws.update_acell('B2', new_token)
+                settings_ws.update_acell('B8', rev_mapping[selected_sync])
+                st.success("Settings Locked.")
+                st.rerun()
+
+    # --- MAIN VIEW INITIALIZATION ---
     render_top_ticker_tape()
 
     col_t1, col_t2 = st.columns([9, 1])
@@ -150,39 +236,34 @@ def main():
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
 
-    # ─── FIXED: GLOBAL ROUTING ENGINE & STATE OVERRIDES ───
+    # --- INSPECTION ROUTING ENGINE ---
     viewing_trade = st.session_state.get("viewing_trade_row")
     viewing_scanner = st.session_state.get("viewing_scanner_row_data")
 
     if viewing_trade or viewing_scanner:
-        # Unified Escape Mechanism: Safely breaks deadlocks for both state structures
         c_esc, _ = st.columns([2, 8])
         with c_esc:
-            if st.button("Back to Terminal", key="terminal_global_exit_btn", use_container_width=True):
+            if st.button("⬅️ Back to Terminal", key="terminal_global_exit_btn", use_container_width=True):
                 st.session_state.viewing_trade_row = None
                 st.session_state.viewing_scanner_row_data = None
                 st.rerun()
 
-        from integrations.google_sheets import fetch_settings_cell
-        daily_token = fetch_settings_cell('B2') or ""
+        try: saved_token = settings_ws.acell('B2').value or ""
+        except: saved_token = ""
         
         if viewing_trade:
             trade_rows = df_watchlist[df_watchlist['_Sheet_Row'] == viewing_trade]
             if not trade_rows.empty:
-                trade_inspector.render(trade_rows.iloc[0], intel_pool, daily_token, watchlist_ws, sheet_headers)
+                trade_inspector.render(trade_rows.iloc[0], intel_pool, saved_token, watchlist_ws, sheet_headers)
             else:
                 st.error("Row context lost.")
-                st.session_state.viewing_trade_row = None; st.rerun()
+                st.session_state.viewing_trade_row = None
+                st.rerun()
         else:
-            # Reconstruct unlogged scanner rows into pseudo-dataframe series
             trade_data = pd.Series(viewing_scanner)
             single_intel = batch_fetch_intelligence([trade_data["Symbol / Asset"]])
             intel_pool.update(single_intel)
             
-            # FIXED: Handles missing column dependencies to prevent layouts from collapsing
-            st.markdown("<style>div[data-testid='stHorizontalBlock'] > div:first-child { min-width: 320px; }</style>", unsafe_allow_html=True)
-            
-            # Inject structural mock parameters to safely satisfy trade_inspector requirements
             full_mock_row = pd.Series(index=sheet_headers, dtype=str)
             full_mock_row["Symbol / Asset"] = trade_data["Symbol / Asset"]
             full_mock_row["Idea Source (Chartink/Telegram/X/Self)"] = trade_data["Idea Source (Chartink/Telegram/X/Self)"]
@@ -192,20 +273,12 @@ def main():
             full_mock_row["Entry CMP / Range"] = trade_data["Entry CMP / Range"]
             full_mock_row["_Sheet_Row"] = -1
             
-            # Render layout panels side-by-side
-            c_panel, c_charts = st.columns([3, 7])
-            with c_panel:
-                st.info("Staging Mode Profile")
-                st.warning("Execution logs and psychological planning parameters are read-only. Promote this scanner target to your Watchlist to unlock full position editing.")
-                st.text_input("Asset Ticker", full_mock_row["Symbol / Asset"], disabled=True)
-                st.text_input("Source Pipeline", full_mock_row["Idea Source (Chartink/Telegram/X/Self)"], disabled=True)
-                st.text_input("Assigned Desk", full_mock_row["Trade Type (Eq/Option)"], disabled=True)
-                st.text_input("Trigger Price Reference", full_mock_row["Entry CMP / Range"], disabled=True)
-            
-            with c_charts:
-                trade_inspector.render(full_mock_row, intel_pool, daily_token, watchlist_ws, sheet_headers)
+            trade_inspector.render(full_mock_row, intel_pool, saved_token, watchlist_ws, sheet_headers)
+        
+        # Stop layout rendering to present the clean Inspector Canvas
         return
 
+    # --- MAIN TERMINAL RENDER ALGORITHMS ---
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
 
     try:
@@ -215,7 +288,6 @@ def main():
     except: existing_sources = []
     all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
 
-    # Filter Bar Configuration Block
     f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
     with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
     with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
@@ -297,7 +369,7 @@ def main():
                     st.session_state.active_heatmap_sector = event["selection"]["points"][0].get("label"); st.rerun()
             else: st.plotly_chart(fig, use_container_width=True)
         else:
-            st.button("Back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
+            st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
             rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_tv_data[s]["mcap"]/10000000, 2) if all_tv_data[s].get("mcap") else 0.0, "LTP (₹)": all_tv_data[s]["ltp"], "Change %": all_tv_data[s]["change_pct"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_tv_data]
             st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
 
