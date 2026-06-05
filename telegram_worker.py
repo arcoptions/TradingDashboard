@@ -128,7 +128,8 @@ TRACKED_CHANNELS = [
     'Equities Positional- Investology V2',
     'Family May 2026',
     'Automated ALerts V2',
-    'Commodities- Investology V2'
+    'Commodities- Investology V2',
+    'Test'
 ]
     
     try:
