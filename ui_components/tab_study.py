@@ -1,7 +1,10 @@
 import streamlit as st
 import pandas as pd
 import requests
-from integrations.google_sheets import fetch_dataframe_safe
+from datetime import datetime
+from integrations.google_sheets import fetch_dataframe_safe, init_sheet_connection, fetch_settings_cell
+import broker_api as api
+from core_engines.nlp_router import FNO_SYMBOLS
 
 @st.cache_data(ttl=60, show_spinner=False)
 def run_tv_screener(tickers):
@@ -24,35 +27,24 @@ def run_tv_screener(tickers):
                 ema20 = d[1] if d[1] else 0
                 rsi = d[2] if d[2] else 0
                 vol = d[3] if d[3] else 0
-                avg_vol = d[4] if d[4] else 1 # Prevent division by zero
+                avg_vol = d[4] if d[4] else 1 
                 
-                if ema20 > 0 and ltp > 0:
-                    prox = ((ltp - ema20) / ema20) * 100
+                if ema20 > 0 and ltp > 0: prox = ((ltp - ema20) / ema20) * 100
                 else: prox = 999
                 
                 vol_spike = (vol / avg_vol) * 100 if avg_vol > 0 else 0
                 
-                # --- STRICT EXECUTION ALGORITHM ---
                 is_rsi_good = 55 <= rsi <= 75
                 is_prox_good = 0 <= prox <= 6.0
                 is_vol_good = vol_spike >= 150
-                
                 score = sum([is_rsi_good, is_prox_good, is_vol_good])
                 
                 results.append({
-                    "Asset": ticker,
-                    "LTP": round(ltp, 2),
-                    "RSI": round(rsi, 2),
-                    "EMA 20 Prox": f"{round(prox, 2)}%",
-                    "Vol Spike": f"{round(vol_spike, 0)}%",
-                    "Checks Passed": int(score),
-                    "Score": score
+                    "Asset": ticker, "LTP": round(ltp, 2), "RSI": round(rsi, 2), "EMA 20 Prox": f"{round(prox, 2)}%",
+                    "Vol Spike": f"{round(vol_spike, 0)}%", "Universal Score": int(score)
                 })
-    except Exception as e:
-        print(f"Screener Error: {e}")
-        
+    except: pass
     return results
-
 
 def render(*args, **kwargs):
     c1, c2 = st.columns([8, 2])
@@ -61,63 +53,81 @@ def render(*args, **kwargs):
         fetch_dataframe_safe.clear()
         st.rerun()
         
-    st.caption("Aggregated list of high-conviction insights extracted directly from news wires and automated tickers.")
-    
     df_study_log = fetch_dataframe_safe("Stocks to study")
     
     if df_study_log.empty:
-        st.info("No research items logged yet. New inbound entries from Beat The Street will display here automatically.")
+        st.info("No research items logged yet.")
         return
 
-    # ─── AUTOMATED CONVERGENCE SCREENER UI ───
-    with st.expander("⚡ Run Automated A+ Convergence Screener", expanded=False):
-        st.markdown("Scans the raw fundamental news list below against live technical indicators to find setups that are **ready to trade right now**.")
-        
-        if st.button("🔍 Filter 150+ Stocks Now", type="primary"):
-            with st.spinner("Querying TradingView API and applying technical constraints..."):
-                all_tickers = df_study_log["Asset Ticker"].unique().tolist()
-                scan_results = run_tv_screener(all_tickers)
-                
-                if scan_results:
-                    df_scan = pd.DataFrame(scan_results).sort_values(by="Score", ascending=False)
-                    
-                    # Core Filter: Only show stocks passing at least 2 out of 3 strict checks
-                    df_qualified = df_scan[df_scan["Score"] >= 2].copy()
-                    
-                    if not df_qualified.empty:
-                        st.success(f"Filtered {len(all_tickers)} raw ideas down to {len(df_qualified)} high-probability execution setups.")
-                        
-                        # Merge the latest fundamental news narrative to the surviving technical stocks
-                        latest_news = df_study_log.drop_duplicates(subset=['Asset Ticker'], keep='last')
-                        df_qualified = df_qualified.merge(latest_news[['Asset Ticker', 'Raw Text Message']], left_on='Asset', right_on='Asset Ticker', how='left')
-                        
-                        st.dataframe(
-                            df_qualified[["Asset", "Checks Passed", "RSI", "EMA 20 Prox", "Vol Spike", "Raw Text Message"]],
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "Checks Passed": st.column_config.ProgressColumn("Technical Match", format="%d/3", min_value=0, max_value=3),
-                                "Raw Text Message": st.column_config.TextColumn("Fundamental Catalyst", width="large")
-                            }
-                        )
-                        st.info("👉 **Next Step:** Manually move these surviving tickers to your main Watchlist, open the **Trade Inspector**, and locate the Optimal CE strike.")
-                    else:
-                        st.warning("No stocks currently meet the strict A+ technical execution criteria. Let the news incubate further until the charts align.")
-                else:
-                    st.error("Could not fetch technical data. Please try again.")
-
-    st.markdown("---")
+    # Run background scoring
+    all_tickers = df_study_log["Asset Ticker"].unique().tolist()
+    scan_results = run_tv_screener(all_tickers)
+    df_scores = pd.DataFrame(scan_results) if scan_results else pd.DataFrame()
     
-    # Render the standard un-filtered database
-    st.dataframe(
-        df_study_log, 
+    if not df_scores.empty:
+        df_display = df_study_log.merge(df_scores, left_on='Asset Ticker', right_on='Asset', how='left')
+    else:
+        df_display = df_study_log.copy()
+        df_display["Universal Score"] = 0
+
+    df_display.insert(0, "Promote to Watchlist", False)
+    
+    st.markdown("Review macro discussions and execution scores. Check the box to auto-promote an asset to the execution desk.")
+    edited_df = st.data_editor(
+        df_display, 
         use_container_width=True, 
         hide_index=True,
         column_config={
+            "Promote to Watchlist": st.column_config.CheckboxColumn("Promote 🚀", width="small"),
+            "Universal Score": st.column_config.ProgressColumn("Sys Score", format="%d/3", min_value=0, max_value=3),
             "Timestamp": st.column_config.TextColumn("Time", width="small"),
             "Source": st.column_config.TextColumn("Wire Source", width="medium"),
             "Asset Ticker": st.column_config.TextColumn("Asset", width="small"),
-            "Raw Text Message": st.column_config.TextColumn("News Narrative", width="large"),
-            "Staging Date": st.column_config.TextColumn("Logged", width="small")
+            "Raw Text Message": st.column_config.TextColumn("News Narrative", width="large")
         }
     )
+    
+    selected_rows = edited_df[edited_df["Promote to Watchlist"] == True]
+    
+    if st.button("⚡ Execute Promotion to Main Watchlist", type="primary", use_container_width=True):
+        if selected_rows.empty:
+            st.warning("Please select at least one row.")
+            return
+            
+        sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
+        sheet_headers = watchlist_ws.row_values(1)
+        bulk_watchlist_rows = []
+        daily_token = fetch_settings_cell('B2') or ""
+        
+        for _, row in selected_rows.iterrows():
+            sym = str(row['Asset Ticker']).upper()
+            is_fno = sym in FNO_SYMBOLS
+            t_sym, t_sec, t_exch = api.resolve_instrument(sym)
+            contract_symbol = sym
+            
+            if is_fno:
+                chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
+                if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
+                    contract_symbol = f"{sym} {chain_data['best_ce']} (Auto)"
+                    
+            new_row = [""] * len(sheet_headers)
+            def fill(col, val): 
+                if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
+                
+            fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+            fill("Idea Source (Chartink/Telegram/X/Self)", str(row['Source']))
+            fill("Symbol / Asset", contract_symbol if is_fno else (t_sym or sym))
+            fill("Trade Type (Eq/Option)", "Option" if is_fno else "Equity")
+            fill("Exchange", t_exch or ("NSE_FNO" if is_fno else "NSE_EQ"))
+            fill("Security ID", t_sec or "")
+            fill("Status (Watch/Active/Closed)", "Watchlist")
+            fill("Raw Tip Text", str(row['Raw Text Message']))
+            
+            bulk_watchlist_rows.append(new_row)
+            
+        if bulk_watchlist_rows:
+            watchlist_ws.append_rows(bulk_watchlist_rows)
+            st.toast(f"Successfully promoted {len(bulk_watchlist_rows)} stocks to Watchlist!")
+            fetch_dataframe_safe.clear()
+            time.sleep(1)
+            st.rerun()
