@@ -4,6 +4,7 @@ from datetime import datetime
 import streamlit.components.v1 as components
 import requests
 import json
+import plotly.express as px
 
 # --- MODULE IMPORTS ---
 from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
@@ -102,7 +103,6 @@ def main():
         if st.button("UI Reset", use_container_width=True):
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
 
-    # Fetch cached watchlist
     df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
     sheet_headers = df_watchlist.columns.tolist() if not df_watchlist.empty else []
     
@@ -193,14 +193,40 @@ def main():
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     
     with t_htmap: 
-        import plotly.express as px
         raw_json = fetch_settings_cell('B12')
-        sec_data_list = json.loads(raw_json) if raw_json else []
-        if not sec_data_list:
-            st.info("Market performance vectors initializing. Tap 'Sync Live Prices' to populate.")
-        else:
+        sec_data_list = []
+        if raw_json:
+            try: sec_data_list = json.loads(raw_json)
+            except: pass
+
+        if not sec_data_list and not df_watchlist.empty:
+            # Fallback Dynamic Calculations if the sheet data is broken or missing keys
+            fallback_df = df_watchlist.copy()
+            fallback_df['Price Chg %'] = pd.to_numeric(fallback_df['Price Chg %'], errors='coerce').fillna(0)
+            grouped = fallback_df.groupby('Sector/Industry').agg({'Price Chg %': 'mean', 'Symbol / Asset': 'count'}).reset_index()
+            grouped.columns = ['sector', 'change', 'weight']
+            df_sectors = grouped
+        elif sec_data_list:
             df_sectors = pd.DataFrame(sec_data_list)
-            fig = px.treemap(df_sectors, path=['sector'], values='weight', color='change', custom_data=['change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
+            df_sectors.columns = [c.lower() for c in df_sectors.columns]  # Enforce lowercase key mapping
+        else:
+            df_sectors = pd.DataFrame()
+
+        if df_sectors.empty:
+            st.info("Market performance matrices initializing. Tap 'Sync Live Prices' to update vectors.")
+        else:
+            df_sectors['weight'] = pd.to_numeric(df_sectors['weight'], errors='coerce').fillna(1)
+            df_sectors['change'] = pd.to_numeric(df_sectors['change'], errors='coerce').fillna(0)
+            
+            fig = px.treemap(
+                df_sectors, 
+                path=['sector'], 
+                values='weight', 
+                color='change', 
+                custom_data=['change'], 
+                color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], 
+                color_continuous_midpoint=0
+            )
             fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%+.2f%%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
             fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
@@ -210,8 +236,9 @@ def main():
             scan_headers = scanner_ws.row_values(1) if scanner_ws else []
             tab_scanners.render(scanner_ws, scan_headers)
 
-    with t_study: tab_study.render()
-    with t_tel: tab_telegram.render(wb_obj=sh, watchlist_symbols=watchlist_symbols, sheet_headers=sheet_headers)
+    # Invocation matches both original signatures and new structural formats
+    with t_study: tab_study.render(study_ws)
+    with t_tel: tab_telegram.render(sh, watchlist_symbols, sheet_headers)
 
 if __name__ == "__main__":
     main()
