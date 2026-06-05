@@ -3,11 +3,12 @@ import pandas as pd
 from datetime import datetime
 import streamlit.components.v1 as components
 import requests
+import inspect
 import json
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
 from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
@@ -149,11 +150,11 @@ def main():
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
 
-    # ─── ROUTING FIX: IS A ROW SELECTED FOR INSPECTION? ───
     if st.session_state.get("viewing_trade_row"):
         trade_rows = df_watchlist[df_watchlist['_Sheet_Row'] == st.session_state.viewing_trade_row]
         if not trade_rows.empty:
             trade_data = trade_rows.iloc[0]
+            from integrations.google_sheets import fetch_settings_cell
             daily_token = fetch_settings_cell('B2') or ""
             trade_inspector.render(trade_data, intel_pool, daily_token, watchlist_ws, sheet_headers)
         else:
@@ -161,7 +162,6 @@ def main():
             if st.button("Reset View"):
                 st.session_state.viewing_trade_row = None
                 st.rerun()
-        # Return early so the tabs don't render below the inspector
         return
 
     watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
