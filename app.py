@@ -225,7 +225,9 @@ def main():
     scores_col, decisions_col = [], []
     for idx, row in df_watchlist.iterrows():
         sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
-        pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"})
+        # --- FIXED SYNTAX ERROR HERE ---
+        pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
+        # -------------------------------
         p_chg = float(row.get("Price Chg %", 0) or 0)
         o_chg = float(row.get("OI Chg %", 0) or 0)
         lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
