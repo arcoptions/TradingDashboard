@@ -173,6 +173,7 @@ def main():
     except: existing_sources = []
     all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
 
+    # --- UI LAYOUT: FILTERS & SYNC BLOCK ---
     f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
     with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
     with f_col2: selected_decisions = st.multiselect("Filter by Decision", options=["STRONG GO", "CAUTION", "NO-GO"], default=[])
@@ -181,6 +182,11 @@ def main():
         st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
         if st.button("Sync Live Prices", use_container_width=True): 
             api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scanner_ws.row_values(1) if scanner_ws else [])
+            st.session_state.last_sync_time = datetime.now().strftime("%I:%M %p")
+            st.rerun()
+            
+        if "last_sync_time" in st.session_state:
+            st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{st.session_state.last_sync_time}</b></div>", unsafe_allow_html=True)
 
     filtered_df = df_watchlist.copy()
     if selected_sources: filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
@@ -225,7 +231,6 @@ def main():
     
     with t_htmap: 
         if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
-        
         all_tv_data = fetch_all_sectors_data()
         
         if not all_tv_data: 
