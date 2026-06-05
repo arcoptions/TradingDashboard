@@ -2,16 +2,11 @@ import streamlit as st
 import pandas as pd
 import database as db
 import analytics
+from integrations.google_sheets import fetch_dataframe_safe
 
 def render(scanner_sheet, scanner_headers):
     st.markdown("#### Automated Scan Feeds")
-    try:
-        scanner_data = scanner_sheet.get_all_records()
-    except Exception as e:
-        scanner_data = []
-        st.warning("⚠️ Scanner feed temporarily paused to respect Google API limits.")
-    
-    df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
+    df_scan = fetch_dataframe_safe("Scanners")
     
     if not df_scan.empty:
         df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
