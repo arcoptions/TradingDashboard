@@ -10,22 +10,6 @@ SECTOR_MAP = {
     "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "TATASTEEL": "Metals", "OIL": "Oil & Gas"
 }
 
-INDEX_CONSTITUENTS = {
-    "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA", "COALINDIA", "WIPRO", "TATASTEEL", "OIL"],
-    "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
-    "Finnifty": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "CHOLAFIN", "PFC", "RECLTD", "BAJAJFINSV", "MUTHOOTFIN", "SHRIRAMFIN"],
-    "Nifty Bank": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK"],
-    "Nifty IT": ["INFY", "TCS", "HCLTECH", "WIPRO", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS", "TATAELXSI"],
-    "Nifty FMCG": ["ITC", "HINDUNILVR", "NESTLEIND", "BRITANNIA", "TATACONSUM", "GODREJCP", "DABUR", "VBL", "MARICO", "COLPAL"],
-    "Nifty Auto": ["TATAMOTORS", "M_M", "MARUTI", "BAJAJ_AUTO", "EICHERMOT", "TVSMOTOR", "HEROMOTOCO", "BOSCHLTD", "TIINDIA", "MRF"],
-    "Nifty Energy": ["RELIANCE", "NTPC", "ONGC", "POWERGRID", "COALINDIA", "TATAPOWER", "IOC", "BPCL", "GAIL", "ADANIPOWER"],
-    "Nifty Metal": ["TATASTEEL", "JSWSTEEL", "HINDALCO", "COALINDIA", "VEDL", "JINDALSTEL", "SAIL", "NMDC", "NATIONALUM"],
-    "Nifty Pharma": ["SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "AUROPHARMA", "MANKIND", "TORNTPHARM", "ZYDUSLIFE"],
-    "Nifty Healthcare": ["SUNPHARMA", "APOLLOHOSP", "MAXHEALTH", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "FORTIS", "METROPOLIS"],
-    "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE", "SOBHA", "SUNTECK"]
-}
-
-# Added new mappings for requested assets
 ASSET_ALIASES = {
     "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
     "OIL": ["OIL", "OIL INDIA", "OILINDIA"],
@@ -50,37 +34,54 @@ ASSET_ALIASES = {
 
 def extract_asset_from_text(text):
     """
-    Robust NLP Token Analyzer with a sanitization layer.
-    Strips out special clutter symbols, markdown syntax, and emojis before 
-    running strict regular expression character boundaries.
+    Advanced NLP Token Analyzer.
+    Isolates hashtags, prefixed announcements, and standard aliases while
+    mitigating false positive corporate substring matches.
     """
     if not text:
-        return False
+        return "-"
         
-    # 1. Standardize text to uppercase
-    text_upper = str(text).upper()
+    text_upper = str(text).upper().strip()
     
-    # 2. Robust Sanitization: Replace noise symbols and punctuation with blank spaces
-    # This turns "#UNIVCABLE" or "IDEA:" into " UNIVCABLE " and " IDEA "
+    # 1. Hashtag Extraction (e.g., #IDEA, #UNIVCABLE)
+    hashtag_match = re.search(r'#([A-Z0-9_]+)', text_upper)
+    if hashtag_match:
+        return hashtag_match.group(1).replace('_', '')
+        
+    # 2. News Prefix Extraction (e.g., "TVS MOTOR : HLX...", "TATA STEEL ; Tata...")
+    first_line = text_upper.split('\n')[0].strip()
+    prefix_match = re.match(r'^([A-Z0-9\s&]+)\s*[:;]', first_line)
+    if prefix_match:
+        candidate = prefix_match.group(1).strip()
+        if len(candidate.split()) <= 4 and candidate not in ["UPDATE", "NEWS", "ALERT"]:
+            return candidate
+
+    # 3. Buy/Sell Signal Extraction (e.g., "BUY VETO AT 140")
+    signal_match = re.search(r'\b(?:BUY|SELL|ADD|SHORT)\s+([A-Z0-9&]+)\b', text_upper)
+    if signal_match:
+        return signal_match.group(1)
+    
+    # 4. Standard Dictionary & Alias Match with robust boundaries
     sanitized_text = re.sub(r'[^A-Z0-9\s&]', ' ', text_upper)
-    
-    # Compress internal whitespace down to single gaps
     sanitized_text = " " + " ".join(sanitized_text.split()) + " "
     
-    # Phase 1: Scan master priority aliases dictionary
     for master_ticker, aliases in ASSET_ALIASES.items():
         for alias in aliases:
             pattern = r'(?:^|[^A-Z0-9])' + re.escape(alias.upper()) + r'(?:$|[^A-Z0-9])'
             if re.search(pattern, sanitized_text):
+                # Mitigate false positives for shared corporate names
+                if alias == "HDFC" and "HDFC SECURITIES" in sanitized_text: continue
+                if alias == "HDFC" and "HDFC AMC" in sanitized_text: continue
+                if alias == "ICICI" and "ICICI LOMBARD" in sanitized_text: continue
+                if alias == "ICICI" and "ICICI PRUDENTIAL" in sanitized_text: continue
                 return master_ticker
-                
-    # Phase 2: Structural Fallback Scanner for general constituents
+
+    # 5. Structural Fallback Scanner for general constituents
     for index_asset in SECTOR_MAP.keys():
         spaced_variation = re.sub(r'([A-Z]+)(BANK|MOTORS|MOTOR|STEEL|PHARMA|IND|INDIA|ELXSI)', r'\1 \2', index_asset)
-        
         for variant in [index_asset, spaced_variation]:
             pattern = r'(?:^|[^A-Z0-9])' + re.escape(variant) + r'(?:$|[^A-Z0-9])'
             if re.search(pattern, sanitized_text):
                 return index_asset
 
-    return False
+    return "-"
