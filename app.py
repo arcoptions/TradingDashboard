@@ -273,6 +273,7 @@ def main():
             full_mock_row["Entry CMP / Range"] = trade_data["Entry CMP / Range"]
             full_mock_row["_Sheet_Row"] = -1
             
+            # Rendering Inspector directly (No Split Columns or Left Pane)
             trade_inspector.render(full_mock_row, intel_pool, saved_token, watchlist_ws, sheet_headers)
         
         # Stop layout rendering to present the clean Inspector Canvas
