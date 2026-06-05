@@ -25,6 +25,7 @@ INDEX_CONSTITUENTS = {
     "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE", "SOBHA", "SUNTECK"]
 }
 
+# Added new mappings for requested assets
 ASSET_ALIASES = {
     "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
     "OIL": ["OIL", "OIL INDIA", "OILINDIA"],
@@ -33,7 +34,7 @@ ASSET_ALIASES = {
     "TATAMOTORS": ["TATAMOTORS", "TATA MOTORS", "TATA MOTOR"],
     "TVSMOTOR": ["TVSMOTOR", "TVS MOTOR", "TVS"],
     "AXISBANK": ["AXISBANK", "AXIS BANK", "AXIS"],
-    "TCS": ["TCS", "TATA CONSULTANCY SERVICES", "TATA CONSULTANCY"],
+    "TCS": ["TCS", "TATA CONSULTANCY SERVICES"],
     "HDFCBANK": ["HDFCBANK", "HDFC BANK", "HDFC"],
     "ICICIBANK": ["ICICIBANK", "ICICI BANK", "ICICI"],
     "INFY": ["INFY", "INFOSYS"],
@@ -42,34 +43,44 @@ ASSET_ALIASES = {
     "WIPRO": ["WIPRO"],
     "NTPC": ["NTPC"],
     "ITC": ["ITC"],
-    "TATAELXSI": ["TATAELXSI", "TATA ELXSI"]
+    "TATAELXSI": ["TATAELXSI", "TATA ELXSI"],
+    "UNIVCABLE": ["UNIVCABLE", "UNIVERSAL CABLES", "UNIVERSAL CABLE"],
+    "IDEA": ["IDEA", "VODAFONE IDEA", "VI"]
 }
 
 def extract_asset_from_text(text):
     """
-    Advanced NLP Token Analyzer.
-    Deploys non-capturing character lookarounds to find explicit asset names
-    while systematically preventing short-token substring leakage.
+    Robust NLP Token Analyzer with a sanitization layer.
+    Strips out special clutter symbols, markdown syntax, and emojis before 
+    running strict regular expression character boundaries.
     """
     if not text:
         return False
         
+    # 1. Standardize text to uppercase
     text_upper = str(text).upper()
     
-    # Phase 1: High-Priority Intent & Alias Extraction
+    # 2. Robust Sanitization: Replace noise symbols and punctuation with blank spaces
+    # This turns "#UNIVCABLE" or "IDEA:" into " UNIVCABLE " and " IDEA "
+    sanitized_text = re.sub(r'[^A-Z0-9\s&]', ' ', text_upper)
+    
+    # Compress internal whitespace down to single gaps
+    sanitized_text = " " + " ".join(sanitized_text.split()) + " "
+    
+    # Phase 1: Scan master priority aliases dictionary
     for master_ticker, aliases in ASSET_ALIASES.items():
         for alias in aliases:
             pattern = r'(?:^|[^A-Z0-9])' + re.escape(alias.upper()) + r'(?:$|[^A-Z0-9])'
-            if re.search(pattern, text_upper):
+            if re.search(pattern, sanitized_text):
                 return master_ticker
                 
-    # Phase 2: Structural Fallback Scanner with Automated Spatial Segmentation
+    # Phase 2: Structural Fallback Scanner for general constituents
     for index_asset in SECTOR_MAP.keys():
         spaced_variation = re.sub(r'([A-Z]+)(BANK|MOTORS|MOTOR|STEEL|PHARMA|IND|INDIA|ELXSI)', r'\1 \2', index_asset)
         
         for variant in [index_asset, spaced_variation]:
             pattern = r'(?:^|[^A-Z0-9])' + re.escape(variant) + r'(?:$|[^A-Z0-9])'
-            if re.search(pattern, text_upper):
+            if re.search(pattern, sanitized_text):
                 return index_asset
 
     return False
