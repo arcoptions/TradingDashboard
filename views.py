@@ -8,6 +8,7 @@ import inspect
 import time
 from datetime import datetime
 import plotly.express as px
+import gspread # Added to handle dynamic sheet creation
 import analytics
 import database as db
 import broker_api as api
@@ -23,11 +24,11 @@ SECTOR_MAP = {
     "TATAMOTORS": "Auto", "M&M": "Auto", "TVSMOTOR": "Auto", "MARUTI": "Auto", "BAJAJ-AUTO": "Auto", 
     "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma",
     "JSWENERGY": "Power", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
-    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "TATASTEEL": "Metals", "OIL": "Oil & Gas"
+    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "TATASTEEL": "Metals"
 }
 
 INDEX_CONSTITUENTS = {
-    "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA", "COALINDIA", "WIPRO", "TATASTEEL", "OIL"],
+    "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA", "COALINDIA", "WIPRO", "TATASTEEL"],
     "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
     "Finnifty": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "CHOLAFIN", "PFC", "RECLTD", "BAJAJFINSV", "MUTHOOTFIN", "SHRIRAMFIN"],
     "Nifty Bank": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK"],
@@ -45,7 +46,7 @@ ASSET_ALIASES = {
     "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
     "OIL": ["OIL", "OIL INDIA", "OILINDIA"],
     "RELIANCE": ["RELIANCE", "RIL", "RELIANCE INDUSTRIES"],
-    "M&M": ["M&M", "M & M", "MAHINDRA"],
+    "M&M": ["M&M", "M & M", "MAHINDRA & MAHINDRA", "MAHINDRA"],
     "TATAMOTORS": ["TATAMOTORS", "TATA MOTORS"],
     "TCS": ["TCS", "TATA CONSULTANCY SERVICES"],
     "HDFCBANK": ["HDFCBANK", "HDFC BANK"],
@@ -440,7 +441,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # ─── INJECTED SCANNERS TAB ───
             tab_options, tab_stocks, tab_study, tab_heatmap, tab_scanners, tab_telegram = st.tabs(["Options", "Stocks", "Stocks to Study", "Sector Heatmap", "Scanners", "Telegram Data"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -464,16 +464,39 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_study:
                 st.markdown("#### Macro Research Staging Deck (`Stocks to study`)")
                 st.caption("Aggregated list of high-conviction insights extracted directly from news wires and automated tickers.")
+                
+                # ─── FIX: SELF-HEALING SHEET CREATOR IF MISSING ───
                 try:
                     study_ws_layer = worksheet.spreadsheet.worksheet("Stocks to study")
-                    study_records = study_ws_layer.get_all_records()
-                    df_study_log = pd.DataFrame(study_records)
-                except: df_study_log = pd.DataFrame()
+                except gspread.exceptions.WorksheetNotFound:
+                    study_ws_layer = worksheet.spreadsheet.add_worksheet(title="Stocks to study", rows="3000", cols="5")
+                    study_ws_layer.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
+                    
+                try:
+                    study_vals = study_ws_layer.get_all_values()
+                    if len(study_vals) > 1:
+                        df_study_log = pd.DataFrame(study_vals[1:], columns=study_vals[0])
+                        df_study_log = df_study_log[df_study_log["Timestamp"].astype(str).str.strip() != ""]
+                    else:
+                        df_study_log = pd.DataFrame()
+                except Exception as e: 
+                    df_study_log = pd.DataFrame()
                 
                 if not df_study_log.empty:
-                    st.dataframe(df_study_log, use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        df_study_log, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={
+                            "Timestamp": st.column_config.TextColumn("Time", width="small"),
+                            "Source": st.column_config.TextColumn("Wire Source", width="medium"),
+                            "Asset Ticker": st.column_config.TextColumn("Asset", width="small"),
+                            "Raw Text Message": st.column_config.TextColumn("News Narrative", width="large"),
+                            "Staging Date": st.column_config.TextColumn("Logged", width="small")
+                        }
+                    )
                 else:
-                    st.info("No research items logged yet. Inbound entries from Beat The Street will display here automatically.")
+                    st.info("No research items logged yet. New inbound entries from Beat The Street will display here automatically, or you can stage your old messages manually from the Telegram Data tab.")
             
             with tab_heatmap:
                 if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
@@ -634,10 +657,14 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             status_updates = []
                             
                             if tab_name == "News Feeds" or any(kw in str(selected_rows.iloc[0]['Channel Source']).lower() for kw in ["beat the street", "news"]):
-                                target_study_ws = wb_obj.worksheet("Stocks to study")
+                                try: target_study_ws = wb_obj.worksheet("Stocks to study")
+                                except: 
+                                    target_study_ws = wb_obj.add_worksheet(title="Stocks to study", rows="3000", cols="5")
+                                    target_study_ws.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
+                                
                                 bulk_study_rows = []
                                 for _, s_row in selected_rows.iterrows():
-                                    bulk_study_rows.append([s_row['Timestamp'], s_row['Channel Source'], s_row['Extracted_Symbol'], s_row['Raw Message Text'], datetime.today().strftime("%Y-%m-%d")])
+                                    bulk_study_rows.append([str(s_row['Timestamp']), str(s_row['Channel Source']), str(s_row['Extracted_Symbol']), str(s_row['Raw Message Text']), datetime.today().strftime("%Y-%m-%d")])
                                     status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Staged to Study"]]})
                                 if bulk_study_rows: target_study_ws.append_rows(bulk_study_rows)
                             else:
@@ -678,7 +705,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                             
                             arc_rows, status_updates = [], []
                             for _, s_row in selected_rows.iterrows():
-                                arc_rows.append([s_row['Timestamp'], s_row['Channel Source'], s_row['Raw Message Text'], datetime.today().strftime("%Y-%m-%d")])
+                                arc_rows.append([str(s_row['Timestamp']), str(s_row['Channel Source']), str(s_row['Raw Message Text']), datetime.today().strftime("%Y-%m-%d")])
                                 status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Archived Data"]]})
                             if arc_rows:
                                 archive_ws.append_rows(arc_rows)
@@ -698,7 +725,4 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     
                 else: st.info("System initializing tracking logs. Awaiting fresh inbound advisory data.")
 
-# Fallback function definition strictly for backward compatibility with app.py 
-# if your main layout explicitly requests to render it outside the tabs.
-def render_chartink_scanners(*args, **kwargs):
-    pass
+def render_chartink_scanners(*args, **kwargs): pass
