@@ -113,7 +113,8 @@ async def run_telegram_listener():
         -1003770810999, # Family May 2026
         -1003109328674, # Automater alerts Mr Chartist
         'SwingWisely',  # Swingwise (Public)
-        -1003101198634  # Commodities Mr Chartist
+        -1003101198634,  # Commodities Mr Chartist
+        'BeatTheStreetnews' #BeatTheStreetNews
     ]
     
     try:
