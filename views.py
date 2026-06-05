@@ -21,15 +21,13 @@ SECTOR_MAP = {
     "INFY": "IT Services", "HCLTECH": "IT Services", "WIPRO": "IT Services", "TECHM": "IT Services", "TATAELXSI": "IT Services",
     "ITC": "FMCG", "HUL": "FMCG", "NESTLEIND": "FMCG", "VBL": "FMCG", "BRITANNIA": "FMCG",
     "TATAMOTORS": "Auto", "M&M": "Auto", "TVSMOTOR": "Auto", "MARUTI": "Auto", "BAJAJ-AUTO": "Auto", 
-    "SONACOMS": "Auto Components", "EXIDEIND": "Auto Components",
     "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma",
     "JSWENERGY": "Power", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
-    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "TATASTEEL": "Metals"
+    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "TATASTEEL": "Metals", "OIL": "Oil & Gas"
 }
 
-# ─── RESTORED COMPLETE SPECIFICATION MATRIX FOR HEATMAPS ───
 INDEX_CONSTITUENTS = {
-    "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA", "COALINDIA", "WIPRO", "TATASTEEL"],
+    "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA", "COALINDIA", "WIPRO", "TATASTEEL", "OIL"],
     "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
     "Finnifty": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "CHOLAFIN", "PFC", "RECLTD", "BAJAJFINSV", "MUTHOOTFIN", "SHRIRAMFIN"],
     "Nifty Bank": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK"],
@@ -45,23 +43,17 @@ INDEX_CONSTITUENTS = {
 
 ASSET_ALIASES = {
     "COALINDIA": ["COALINDIA", "COAL INDIA", "CIL"],
+    "OIL": ["OIL", "OIL INDIA", "OILINDIA"],
     "RELIANCE": ["RELIANCE", "RIL", "RELIANCE INDUSTRIES"],
-    "M&M": ["M&M", "M & M", "MAHINDRA & MAHINDRA"],
+    "M&M": ["M&M", "M & M", "MAHINDRA"],
     "TATAMOTORS": ["TATAMOTORS", "TATA MOTORS"],
     "TCS": ["TCS", "TATA CONSULTANCY SERVICES"],
     "HDFCBANK": ["HDFCBANK", "HDFC BANK"],
     "ICICIBANK": ["ICICIBANK", "ICICI BANK"],
     "INFY": ["INFY", "INFOSYS"],
-    "SUNPHARMA": ["SUNPHARMA", "SUN PHARMA"],
     "TATASTEEL": ["TATASTEEL", "TATA STEEL"],
     "WIPRO": ["WIPRO"]
 }
-
-KNOWN_ASSETS = set()
-for aliases in ASSET_ALIASES.values(): KNOWN_ASSETS.update([a.upper() for a in aliases])
-for stocks in INDEX_CONSTITUENTS.values():
-    KNOWN_ASSETS.update([s.replace('_', '').upper() for s in stocks])
-    KNOWN_ASSETS.update([s.replace('_', ' ').upper() for s in stocks])
 
 def prox_color(val):
     if val == "-": return "color:#64748B;"
@@ -173,11 +165,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         if st.button("UI Reset", use_container_width=True):
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
-    # Read core running records directly from the main active sheet tab (sheet1)
     primary_watchlist_ws = worksheet.spreadsheet.sheet1
     initial_data = primary_watchlist_ws.get_all_records()
     sheet_headers = primary_watchlist_ws.row_values(1)
-        
     initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
     if not initial_df.empty:
@@ -422,7 +412,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution parameters.")
+                            except: st.info("Awaiting execution conclusion exit parameters.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
                             fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
@@ -442,7 +432,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # ─── INJECTED STOCKS TO STUDY TAB WORKFLOW ───
+            # ─── COMPLIANT STOCKS TO STUDY TAB WORKFLOW INTEGRATION ───
             tab_options, tab_stocks, tab_study, tab_heatmap, tab_telegram = st.tabs(["Options", "Stocks", "Stocks to Study", "Sector Heatmap", "Telegram Data"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -488,7 +478,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         chgs = [all_data[s]["change"] for s in stocks if s in all_data and all_data[s]["change"] is not None]
                         sector_data.append({"Sector": sec, "Change": sum(chgs)/len(chgs) if chgs else 0.0, "Weight": sector_weights.get(sec, 30)})
                     
-                    # ─── IMAGE_A976C6.PNG FIX: RENDERS DYNAMIC SCALE ACROSS ALL ALLOCATED SECTORS COMPLETELY ───
+                    # ─── IMAGE_A976C6.PNG COMPLETE RECTIFICATION GRID SCALES ───
                     fig = px.treemap(pd.DataFrame(sector_data), path=['Sector'], values='Weight', color='Change', custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
                     fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
                     fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
@@ -502,6 +492,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_data[s]["mcap"]/10000000, 2) if all_data[s]["mcap"] else 0.0, "LTP (₹)": all_data[s]["ltp"], "Change %": all_data[s]["change"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_data]
                     st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
             
+            # ─── BATCH CONSOLE STRATEGIES ───
             with tab_telegram:
                 st.markdown("#### Operational Staging Workspaces")
                 try:
@@ -522,22 +513,38 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         source = str(row['Channel Source'])
                         is_news_channel = any(kw in source.lower() for kw in ["beat the street", "news"])
                         
-                        pre_parsed = analytics.parse_telegram_tip(text)
-                        t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
-                        t_sym, t_sec, t_exch_type = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
+                        stock_mentioned = False
+                        matched_symbol = ""
                         
-                        if not t_sec:
-                            text_upper = text.upper()
-                            text_norm = text_upper.replace(" ", "")
-                            for master_ticker, aliases in ASSET_ALIASES.items():
-                                if any(alias in text_upper or alias.replace(" ", "") in text_norm for alias in aliases):
-                                    t_sym, t_sec, t_exch_type = api.resolve_instrument(master_ticker)
+                        # ─── FIX: ENHANCED WORD-BOUNDARY REGEX LAYER TO BLOCK ILLEGITIMATE SUBSTRING LEAKS ───
+                        text_upper = text.upper()
+                        for master_ticker, aliases in ASSET_ALIASES.items():
+                            for alias in aliases:
+                                pattern = r'\b' + re.escape(alias.upper()) + r'\b'
+                                if re.search(pattern, text_upper):
+                                    stock_mentioned = True
+                                    matched_symbol = master_ticker
                                     break
-                        
-                        if t_sec:  
-                            row['Extracted_Symbol'] = t_sym
-                            row['Exchange_Segment_Verified'] = t_exch_type
-                            mentions_list.append(row)
+                            if stock_mentioned: break
+                                    
+                        if not stock_mentioned:
+                            for index_asset in SECTOR_MAP.keys():
+                                pattern = r'\b' + re.escape(index_asset) + r'\b'
+                                if re.search(pattern, text_upper):
+                                    stock_mentioned = True
+                                    matched_symbol = index_asset
+                                    break
+
+                        if stock_mentioned:
+                            # Confirm through the Scrip master lookup pipeline
+                            t_sym, t_sec, t_exch_type = api.resolve_instrument(matched_symbol)
+                            if t_sec:
+                                row['Extracted_Symbol'] = t_sym
+                                row['Exchange_Segment_Verified'] = t_exch_type
+                                mentions_list.append(row)
+                            else:
+                                if is_news_channel: news_list.append(row)
+                                else: discussions_list.append(row)
                         elif is_news_channel:
                             row['Extracted_Symbol'] = "-"
                             row['Exchange_Segment_Verified'] = ""
@@ -591,8 +598,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         if b1.button("⚡ Stage Selected Rows", key=f"stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
                             status_updates = []
                             
-                            if tab_name == "News Feeds":
-                                # ─── NEWS FEED MANUALLY OVERRIDE STAGING -> STOCKS TO STUDY TAB ───
+                            # ─── UPDATED ROUTING ACTION SCHEMAS PER SPECIFICATION USER INSTRUCTIONS ───
+                            if tab_name == "News Feeds" or any(kw in str(selected_rows.iloc[0]['Channel Source']).lower() for kw in ["beat the street", "news"]):
                                 target_study_ws = wb_obj.worksheet("Stocks to study")
                                 bulk_study_rows = []
                                 for _, s_row in selected_rows.iterrows():
@@ -600,7 +607,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                     status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Staged to Study"]]})
                                 if bulk_study_rows: target_study_ws.append_rows(bulk_study_rows)
                             else:
-                                # ─── ADVISORY FEED MANUALLY OVERRIDE STAGING -> ACTIVE WATCHLIST TAB (SHEET1) ───
                                 target_watchlist_ws = wb_obj.sheet1
                                 bulk_watchlist_rows = []
                                 for _, s_row in selected_rows.iterrows():
@@ -629,7 +635,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 
                             if status_updates:
                                 raw_log_ws.batch_update(status_updates)
-                                st.toast(f"Staged elements processed successfully!")
+                                st.toast(f"Staged elements redirected successfully!")
                                 time.sleep(0.5); st.rerun()
 
                         if b2.button("📦 Archive Selected Rows", key=f"arc_{tab_name}", use_container_width=True) and not selected_rows.empty:
