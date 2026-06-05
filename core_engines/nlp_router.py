@@ -25,7 +25,6 @@ INDEX_CONSTITUENTS = {
     "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE", "SOBHA", "SUNTECK"]
 }
 
-# The Universal Dictionary of NSE F&O Assets
 FNO_SYMBOLS = {
     "AARTIIND", "ABB", "ABBOTINDIA", "ABCAPITAL", "ABFRL", "ACC", "ADANIENT", "ADANIPORTS", "ALKEM", "AMBUJACEM", 
     "APOLLOHOSP", "APOLLOTYRE", "ASHOKLEY", "ASIANPAINT", "ASTRAL", "ATUL", "AUBANK", "AUROPHARMA", "AXISBANK", 
@@ -83,8 +82,11 @@ def extract_asset_from_text(text):
         if len(candidate.split()) <= 4 and candidate not in ["UPDATE", "NEWS", "ALERT"]:
             return candidate
 
+    IGNORE_LIST = ["MORE", "HTTPS", "HTTP", "BLOCK", "CALL", "PUT", "CE", "PE", "OPTION", "THE", "A", "AN"]
     signal_match = re.search(r'\b(?:BUY|SELL|ADD|SHORT)\s+([A-Z0-9&]+)\b', text_upper)
-    if signal_match: return signal_match.group(1)
+    if signal_match: 
+        candidate = signal_match.group(1)
+        if candidate not in IGNORE_LIST: return candidate
     
     sanitized_text = re.sub(r'[^A-Z0-9\s&]', ' ', text_upper)
     sanitized_text = " " + " ".join(sanitized_text.split()) + " "
@@ -106,7 +108,6 @@ def extract_asset_from_text(text):
     return "-"
 
 def parse_trade_metrics(text):
-    """Dynamically slices options strikes, entries, targets, and stops from raw advisory texts."""
     text = str(text).upper()
     metrics = {"strike": "", "option_type": "", "entry": "", "sl": "", "target_1": "", "target_2": ""}
     
