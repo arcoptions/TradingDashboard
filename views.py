@@ -169,10 +169,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         batch_tickers = initial_df['Symbol / Asset'].tolist()
         intel_pool = batch_fetch_intelligence(batch_tickers)
         
-        try:
-            daily_token = settings_sheet.acell('B2').value
-        except:
-            daily_token = ""
+        try: daily_token = settings_sheet.acell('B2').value
+        except: daily_token = ""
             
         scores_col, decisions_col = [], []
         for idx, row in initial_df.iterrows():
@@ -195,15 +193,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         except: existing_sources = []
         all_sources = sorted(list(set(["Elephant Pro", "Mr Chartist", "IndianTraderXP", "Chikou Trader", "Chartink", "Self/X"] + existing_sources)))
         
-        min_d = datetime.today().date()
-        max_d = datetime.today().date()
+        min_d, max_d = datetime.today().date(), datetime.today().date()
         if "Trade Date" in initial_df.columns:
             initial_df["_Clean_Date"] = pd.to_datetime(initial_df["Trade Date"], errors='coerce').dt.date
             valid_dates = initial_df["_Clean_Date"].dropna().tolist()
-            if valid_dates:
-                min_d, max_d = min(valid_dates), max(valid_dates)
-        else:
-            initial_df["_Clean_Date"] = datetime.today().date()
+            if valid_dates: min_d, max_d = min(valid_dates), max(valid_dates)
+        else: initial_df["_Clean_Date"] = datetime.today().date()
 
         f_col1, f_col2, f_col3, f_col4 = st.columns([2.5, 2.5, 3, 2], gap="small")
         with f_col1: selected_sources = st.multiselect("Filter by Source", options=all_sources, default=[])
@@ -258,7 +253,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             trade_rows = initial_df[initial_df['_Sheet_Row'] == st.session_state.viewing_trade_row]
             if not trade_rows.empty:
                 trade_data = trade_rows.iloc[0]; sheet_row_id = int(trade_data['_Sheet_Row']); asset_symbol = trade_data['Symbol / Asset']
-                sym_key = str(asset_symbol).split('-')[0].strip().upper().replace("&", "_")
+                base_ticker_raw = str(trade_data.get("Base Asset", str(asset_symbol).split('-')[0].strip())).upper()
+                sym_key = base_ticker_raw.replace("&", "_")
+                
                 pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
                 f_metrics = pool_data["f"]; t_metrics = pool_data["t"]
                 
@@ -268,11 +265,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         st.session_state.viewing_trade = None
                         st.session_state.viewing_trade_row = None
                         st.rerun()
-                with head_c2:
-                    st.markdown(f"<h3 style='margin:0; padding-left:10px;'>Research Analysis: {trade_data.get('Symbol / Asset', 'Unknown Asset')}</h3>", unsafe_allow_html=True)
+                with head_c2: st.markdown(f"<h3 style='margin:0; padding-left:10px;'>Research Analysis: {trade_data.get('Symbol / Asset', 'Unknown Asset')}</h3>", unsafe_allow_html=True)
                 
                 st.write("")
-                
                 tab_init_research, tab_psych_exec = st.tabs(["Initial Research", "Psychology & Execution"])
                 
                 with tab_init_research:
@@ -291,7 +286,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     if contract_meta:
                         with st.container(border=True):
                             st.markdown("**Derivatives Profile & Live Greeks (Dhan Feed)**")
-                            
                             underlying_ltp_raw = t_metrics.get("ltp", "-")
                             underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
                             
@@ -311,36 +305,48 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 api_success = False
 
                             g1, g2, g3, g4, g5 = st.columns(5)
-                            if api_success:
-                                iv_display = f"{live_iv:.2f}%" if live_iv > 0 else "0DTE (Expiry)"
+                            iv_display = f"{live_iv:.2f}%" if live_iv > 0 else "0DTE (Expiry)"
+                            g1.metric("Delta", f"{live_delta:.5f}" if api_success else "Syncing...")
+                            g2.metric("Theta", f"{live_theta:.2f} INR" if api_success else "Syncing...")
+                            g3.metric("Underlying (Spot)", f"₹{underlying_px}")
+                            g4.metric("Live IV", iv_display if api_success else "Syncing...")
+                            g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
                                 
-                                g1.metric("Delta", f"{live_delta:.5f}")
-                                g2.metric("Theta", f"{live_theta:.2f} INR")
-                                g3.metric("Underlying (Spot)", f"₹{underlying_px}")
-                                g4.metric("Live IV", iv_display)
-                                g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
+                            st.markdown("---")
+                            st.markdown("**ARC Options Proximity Intelligence & Strike Optimizers**")
+                            
+                            # ─── IMAGE_B5398A.PNG GRID COMPLIANCE: 4 COLUMNS INTEGRATING INLINE NEWS ───
+                            pc1, pc2, pc3, pc4 = st.columns([1.5, 1.5, 4.5, 2.5])
+                            with pc1: st.metric("Strike-Level PCR", f"{strike_pcr:.2f}" if api_success else "0.0")
+                            with pc2: st.metric("Overall Asset PCR", f"{overall_pcr:.2f}" if api_success else "0.0")
+                            with pc3:
+                                st.markdown(f"""
+                                <div style='padding: 10px; border: 1px dashed #D1A553; border-radius: 6px; background-color: #FFFDF9; font-size:13px;'>
+                                    <b>💡 Dhan Option Chain Target Optimizers:</b><br>
+                                    🔹 <b>Optimal Call (CE):</b> {best_ce} <span style='color:#64748B;'>(OI Cluster)</span><br>
+                                    🔹 <b>Optimal Put (PE):</b> {best_pe} <span style='color:#64748B;'>(OI Cluster)</span>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            with pc4:
+                                st.markdown("<span style='font-size:13px; font-weight:bold; color:#0F172A;'>📰 News Feed (Beat The Street)</span>", unsafe_allow_html=True)
+                                try:
+                                    raw_log_ws = worksheet.spreadsheet.worksheet("Telegram_Raw_Logs")
+                                    news_dataset = raw_log_ws.get_all_records()
+                                except: news_dataset = []
                                 
-                                st.markdown("---")
-                                st.markdown("**ARC Options Proximity Intelligence & Strike Optimizers**")
-                                pc1, pc2, pc3 = st.columns([2, 2, 6])
-                                with pc1:
-                                    st.metric("Strike-Level PCR", f"{strike_pcr:.2f}", help="Put OI / Call OI for this specific strike contract")
-                                with pc2:
-                                    st.metric("Overall Asset PCR", f"{overall_pcr:.2f}", help="Cumulative asset open interest Put/Call ratio")
-                                with pc3:
-                                    st.markdown(f"""
-                                    <div style='padding: 12px; border: 1px dashed #D1A553; border-radius: 6px; background-color: #FFFDF9; font-size:14px;'>
-                                        <b>💡 Dhan Option Chain Algorithmic Recommendations:</b><br>
-                                        🔹 <b>Optimal Call (CE) Strike:</b> {best_ce} &nbsp;<span style='color:#64748B;'>(Highest Liquidity Cluster)</span><br>
-                                        🔹 <b>Optimal Put (PE) Strike:</b> {best_pe} &nbsp;<span style='color:#64748B;'>(Highest Liquidity Cluster)</span>
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                            else:
-                                g1.metric("Delta", "Syncing...")
-                                g2.metric("Theta", "Syncing...")
-                                g3.metric("Underlying (Spot)", f"₹{underlying_px}")
-                                g4.metric("Live IV", "Syncing...")
-                                g5.markdown(f"<span style='font-size:14px; font-weight:bold; color:#475569;'>OI Matrix</span><br><span style='font-size:18px; font-weight:bold; color:{oi_color};'>{lbl}</span>", unsafe_allow_html=True)
+                                match_bullet_items = []
+                                if news_dataset:
+                                    for entry in news_dataset:
+                                        if str(entry.get("Channel Source", "")).strip() == "Beat The Street":
+                                            text_chunk = str(entry.get("Raw Message Text", ""))
+                                            if base_ticker_raw in text_chunk.upper():
+                                                clean_snippet = text_chunk.replace('\n', ' ')[:75] + "..." if len(text_chunk) > 75 else text_chunk.replace('\n', ' ')
+                                                match_bullet_items.append(f"<li style='font-size:11px; margin-bottom:4px; color:#334155;'><b>{entry.get('Timestamp','')[11:16]}</b>: {clean_snippet}</li>")
+                                
+                                if match_bullet_items:
+                                    st.markdown(f"<ul style='padding-left:14px; margin:0;'>{''.join(match_bullet_items[:3])}</ul>", unsafe_allow_html=True)
+                                else:
+                                    st.markdown("<div style='font-size:11px; color:#64748B; padding-top:4px;'>No macro news updates found for this asset index.</div>", unsafe_allow_html=True)
                     
                     with st.container(border=True):
                         st.markdown("**Market Intelligence**")
@@ -358,14 +364,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     with st.container(border=True):
                         curr_rationale = str(trade_data.get('Strategic Rationale (Why I took it)', ''))
                         curr_emotions = str(trade_data.get('Emotions at Entry (FOMO, Calm, etc.)', ''))
+                        if curr_rationale.strip() and curr_rationale != 'nan': st.info(f"**Rationale:** {curr_rationale}")
+                        if curr_emotions.strip() and curr_emotions != 'nan': st.warning(f"**Emotions:** {curr_emotions}")
                         
-                        if curr_rationale.strip() and curr_rationale != 'nan':
-                            st.info(f"**Rationale:** {curr_rationale}")
-                        if curr_emotions.strip() and curr_emotions != 'nan':
-                            st.warning(f"**Emotions:** {curr_emotions}")
-                        if (not curr_rationale.strip() or curr_rationale == 'nan') and (not curr_emotions.strip() or curr_emotions == 'nan'):
-                            st.info("No mental model notes captured for this setup yet.")
-
                         with st.expander("📝 Update Psychology Notes"):
                             with st.form("psychology_update_form"):
                                 new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
@@ -389,35 +390,26 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution conclusion exit parameters.")
+                            except: st.info("Awaiting execution conclusion parameter resolution.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
-                            default_search = str(trade_data['Symbol / Asset']).split()[0]
-                            fix_query = st.text_input("Search Official Master Database", value=default_search, key="fix_contract_query")
+                            fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
                             fix_results = api.search_instruments(fix_query)
                             if not fix_results.empty:
                                 selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
                                 if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
                                     fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
-                                    updated_symbol = str(fix_row['SEM_TRADING_SYMBOL'])
-                                    updated_sec_id = str(fix_row['SEM_SMST_SECURITY_ID'])
-                                    exch, seg = str(fix_row['SEM_EXM_EXCH_ID']), str(fix_row['SEM_SEGMENT'])
-                                    updated_exch = "NSE_EQ" if exch == "NSE" and seg == "E" else "NSE_FNO"
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, updated_symbol)
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, updated_sec_id)
-                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, updated_exch)
-                                    st.session_state.viewing_trade = updated_symbol
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
+                                    worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
                                     st.rerun()
 
                 if st.button("Unlink Review Canvas", use_container_width=True):
-                    st.session_state.viewing_trade = None
-                    st.session_state.viewing_trade_row = None
-                    st.rerun()
+                    st.session_state.viewing_trade = None; st.session_state.viewing_trade_row = None; st.rerun()
         else:
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            # --- THE NEW OBSERVATION DECK TAB INTEGRATION ---
             tab_options, tab_stocks, tab_heatmap, tab_telegram = st.tabs(["Options", "Stocks", "Sector Heatmap", "Telegram Data"])
             
             def render_asset_dashboard(df_asset, asset_type):
@@ -425,17 +417,12 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                     st.info(f"No execution matches found.")
                     return
                 sub_wl, sub_act, sub_cls = st.tabs(["Watchlist", "Active", "Closed"])
-                
                 with sub_wl:
                     df_wl = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
                     if not df_wl.empty: st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"wl_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_wl, "state_key": f"wl_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
-                    else: st.info("No records match active filters inside Watchlist.")
-                
                 with sub_act:
                     df_act = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
                     if not df_act.empty: st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"act_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_act, "state_key": f"act_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
-                    else: st.info("No Active positions matching these rules.")
-                
                 with sub_cls:
                     df_cls = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
                     if not df_cls.empty: st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key=f"cls_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_cls, "state_key": f"cls_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
@@ -443,141 +430,123 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             with tab_options: render_asset_dashboard(df_options, "Options")
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             
-            with tab_heatmap: 
+            with tab_heatmap:
                 if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
                 all_data = fetch_all_sectors_data()
-                
-                if not all_data: st.info("Market map data is synchronizing from backend...")
+                if not all_data: st.info("Market mapping array initializing...")
                 elif st.session_state.active_heatmap_sector is None:
-                    st.markdown("#### Live NIFTY Sector Performance")
-                    st.caption("Click on any sector below to drill down to its constituent stocks.")
-                    if st.button("Refresh Market Map", use_container_width=True): 
-                        fetch_all_sectors_data.clear()
-                        st.rerun()
-
                     sector_weights = {"Nifty 50": 100, "Nifty Bank": 80, "Nifty IT": 60, "Nifty Next 50": 50, "Nifty Auto": 40, "Nifty FMCG": 40, "Nifty Energy": 40, "Nifty Metal": 30, "Nifty Pharma": 30, "Finnifty": 30, "Nifty Healthcare": 20, "Nifty Realty": 10}
                     sector_data = []
                     for sec, stocks in INDEX_CONSTITUENTS.items():
                         chgs = [all_data[s]["change"] for s in stocks if s in all_data and all_data[s]["change"] is not None]
-                        avg_chg = sum(chgs)/len(chgs) if chgs else 0.0
-                        sector_data.append({"Sector": sec, "Change": avg_chg, "Weight": sector_weights.get(sec, 30)})
-                        
-                    df_sectors = pd.DataFrame(sector_data)
-                    
-                    fig = px.treemap(
-                        df_sectors, path=['Sector'], values='Weight', color='Change', 
-                        custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0
-                    )
-                    
-                    fig.update_traces(
-                        textinfo="label+text", 
-                        texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", 
-                        textfont=dict(size=16), 
-                        hoverinfo="none",
-                        marker=dict(line=dict(width=3, color='#FFFFFF')),
-                        root_color="rgba(0,0,0,0)"
-                    )
-                    fig.update_layout(
-                        margin=dict(t=0, l=0, r=0, b=0), 
-                        height=450,
-                        paper_bgcolor='rgba(0,0,0,0)', 
-                        plot_bgcolor='rgba(0,0,0,0)'
-                    )
-                    
+                        sector_data.append({"Sector": sec, "Change": sum(chgs)/len(chgs) if chgs else 0.0, "Weight": sector_weights.get(sec, 30)})
+                    fig = px.treemap(pd.DataFrame(sector_data), path=['Sector'], values='Weight', color='Change', custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
+                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", textfont=dict(size=16), root_color="rgba(0,0,0,0)")
+                    fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=450, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                     if "on_select" in inspect.signature(st.plotly_chart).parameters:
                         event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="treemap")
-                        if event and isinstance(event, dict) and "selection" in event and event["selection"].get("points"):
-                            clicked_label = event["selection"]["points"][0].get("label")
-                            if clicked_label in INDEX_CONSTITUENTS:
-                                st.session_state.active_heatmap_sector = clicked_label
-                                st.rerun()
+                        if event and event.get("selection", {}).get("points"):
+                            st.session_state.active_heatmap_sector = event["selection"]["points"][0].get("label"); st.rerun()
                     else: st.plotly_chart(fig, use_container_width=True)
-
-                    st.markdown("##### Quick Select")
-                    btn_cols = st.columns(4)
-                    for i, row in df_sectors.sort_values(by="Change", ascending=False).iterrows():
-                        with btn_cols[i % 4]:
-                            clr = "🟢" if row['Change'] >= 0 else "🔴"
-                            sgn = "+" if row['Change'] > 0 else ""
-                            if st.button(f"{clr} {row['Sector']} \n {sgn}{row['Change']:.2f}%", use_container_width=True):
-                                st.session_state.active_heatmap_sector = row['Sector']
-                                st.rerun()
                 else:
-                    selected_index = st.session_state.active_heatmap_sector
                     st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
-                    
-                    rows = []
-                    for s in INDEX_CONSTITUENTS[selected_index]:
-                        if s in all_data:
-                            d = all_data[s]
-                            rows.append({"Stock": s.replace('_', '-').replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(d["mcap"]/10000000, 2) if d["mcap"] else 0.0, "LTP (₹)": d["ltp"], "Change %": d["change"]})
-                    
-                    df_constituents = pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False).reset_index(drop=True)
-                    
-                    if not df_constituents.empty:
-                        total_count = len(df_constituents)
-                        adv_count = len(df_constituents[df_constituents["Change %"] > 0])
-                        dec_count = len(df_constituents[df_constituents["Change %"] < 0])
-                        flat_count = total_count - (adv_count + dec_count)
-                        
-                        adv_pct = (adv_count / total_count) * 100 if total_count > 0 else 0
-                        dec_pct = (dec_count / total_count) * 100 if total_count > 0 else 0
-                        flat_pct = (flat_count / total_count) * 100 if total_count > 0 else 0
-                        avg_change = round(df_constituents["Change %"].mean(), 2)
-                        
-                        st.markdown(f"""
-                        <div style='margin-top:15px; margin-bottom:15px;'>
-                            <span style='font-size:24px; font-weight:700; color:#0F172A;'>{selected_index} Constituents</span>
-                            &nbsp;&nbsp;<span style='font-size:20px; font-weight:800; color:{"#089981" if avg_change >= 0 else "#F23645"};'>{"++" if avg_change > 0 else ""}{avg_change}%</span>
-                        </div>
-                        <div style='margin-bottom: 20px; padding: 12px; border: 1px solid #E2E8F0; border-radius: 8px; background-color: #F8FAFC;'>
-                            <div style='display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;'>
-                                <span style='color: #089981;'>🔵 Advance: {adv_count}</span>
-                                <span style='color: #64748B;'>⚪ Flat: {flat_count}</span>
-                                <span style='color: #F23645;'>🔴 Decline: {dec_count}</span>
-                            </div>
-                            <div style='width: 100%; background-color: #E2E8F0; height: 10px; border-radius: 5px; display: flex; overflow: hidden;'>
-                                <div style='width: {adv_pct}%; background-color: #089981; height: 100%;'></div>
-                                <div style='width: {flat_pct}%; background-color: #94A3B8; height: 100%;'></div>
-                                <div style='width: {dec_pct}%; background-color: #F23645; height: 100%;'></div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.dataframe(df_constituents, use_container_width=True, hide_index=True, column_config={"Stock": st.column_config.TextColumn("Stock Asset"), "Market Cap (Cr)": st.column_config.NumberColumn("Market Cap (Cr)", format="%d"), "LTP (₹)": st.column_config.NumberColumn("LTP (₹)", format="%.2f"), "Change %": st.column_config.NumberColumn("Change %", format="%+.2f")})
+                    rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_data[s]["mcap"]/10000000, 2) if all_data[s]["mcap"] else 0.0, "LTP (₹)": all_data[s]["ltp"], "Change %": all_data[s]["change"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_data]
+                    st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
             
+            # ─── ADVANCED INTERACTIVE EOD EXTRACTION & DUPLICATE BLOCKING STAGING PANEL ───
             with tab_telegram:
-                st.markdown("#### Live Raw Telegram Data Feed")
-                st.caption("Monitor unstructured alerts here to analyze discussion formats and tune the NLP extractor.")
+                st.markdown("#### Institutional Advisory Staging Queue")
+                st.caption("Review raw signal flow from premium channels, cross-examine metrics, check parameters, and stage directly to watchlists.")
                 
                 try:
-                    sh = worksheet.spreadsheet
-                    raw_worksheet = sh.worksheet("Telegram_Raw_Logs")
-                    raw_data = raw_worksheet.get_all_records()
-                    df_raw = pd.DataFrame(raw_data)
-                except Exception as e:
-                    df_raw = pd.DataFrame()
+                    wb_obj = worksheet.spreadsheet
+                    raw_log_ws = wb_obj.worksheet("Telegram_Raw_Logs")
+                    raw_data_records = raw_log_ws.get_all_records()
+                    df_raw_logs = pd.DataFrame(raw_data_records)
+                except: df_raw_logs = pd.DataFrame()
+                
+                if not df_raw_logs.empty:
+                    df_raw_logs["_Row_ID"] = range(2, len(df_raw_logs) + 2)
+                    df_review_queue = df_raw_logs[df_raw_logs["Parsing Status"] == "Pending Review"].copy()
                     
-                if not df_raw.empty:
-                    df_raw = df_raw.sort_values(by="Timestamp", ascending=False).reset_index(drop=True)
-                    
-                    channels = df_raw["Channel Source"].unique().tolist()
-                    sel_chan = st.multiselect("Filter by Channel:", options=channels, default=[])
-                    if sel_chan:
-                        df_raw = df_raw[df_raw["Channel Source"].isin(sel_chan)]
+                    if df_review_queue.empty:
+                        st.success("✨ EOD Queue Clear! All advisory payloads processed or archived.")
+                    else:
+                        st.info(f"📋 {len(df_review_queue)} unstructured advisory signals awaiting analysis mapping.")
                         
-                    st.dataframe(
-                        df_raw, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "Timestamp": st.column_config.TextColumn("Time", width="medium"),
-                            "Channel Source": st.column_config.TextColumn("Source", width="medium"),
-                            "Raw Message Text": st.column_config.TextColumn("Raw Text Payload", width="large"),
-                            "Parsing Status": st.column_config.TextColumn("Status", width="medium")
-                        }
-                    )
+                        for idx, row in df_review_queue.iterrows():
+                            with st.container(border=True):
+                                c_top1, c_top2 = st.columns([7, 3])
+                                c_top1.markdown(f"🛰️ **Source:** `{row['Channel Source']}` &nbsp;|&nbsp; 🕒 `{row['Timestamp']}`")
+                                
+                                # Auto-extract template logic preview
+                                pre_parsed = analytics.parse_telegram_tip(row['Raw Message Text'])
+                                t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
+                                
+                                with c_top2:
+                                    # Safe duplicate tracking verification checker
+                                    is_duplicate = False
+                                    if t_symbol != "UNKNOWN" and not initial_df.empty:
+                                        running_symbols = initial_df["Symbol / Asset"].astype(str).str.upper().tolist()
+                                        is_duplicate = any(t_symbol in s for s in running_symbols)
+                                    
+                                    if is_duplicate:
+                                        st.markdown("<span style='color:#F23645; font-size:12px; font-weight:bold;'>⚠️ Already in Active Watchlist</span>", unsafe_allow_html=True)
+                                    else:
+                                        st.markdown("<span style='color:#089981; font-size:12px; font-weight:bold;'>🟢 Unique Asset Formula</span>", unsafe_allow_html=True)
+                                
+                                st.text_area("Raw Broadcast Text", value=row['Raw Message Text'], height=90, disabled=True, key=f"txt_{row['_Row_ID']}")
+                                
+                                b1, b2, b3, b4 = st.columns([2.5, 2.5, 2.5, 2.5])
+                                
+                                # ACTION 1: PARSE AND MOVE TO TELEGRAM_SANDBOX WATCHLIST
+                                if b1.button("⚡ Stage to Watchlist", key=f"btn_stg_{row['_Row_ID']}", disabled=is_duplicate, use_container_width=True):
+                                    if t_symbol == "UNKNOWN":
+                                        st.error("Cannot resolve target ticker tokens from unstructured syntax layout.")
+                                    else:
+                                        t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol)
+                                        sandbox_ws = wb_obj.worksheet("Telegram_Sandbox")
+                                        
+                                        new_row_payload = [""] * len(sheet_headers)
+                                        def fill(col, val): 
+                                            if col in sheet_headers: new_row_payload[sheet_headers.index(col)] = str(val)
+                                                
+                                        fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+                                        fill("Idea Source (Chartink/Telegram/X/Self)", row['Channel Source'])
+                                        fill("Symbol / Asset", t_sym)
+                                        fill("Trade Type (Eq/Option)", pre_parsed.get('trade_type', 'Option'))
+                                        fill("Exchange", t_exch)
+                                        fill("Security ID", t_sec)
+                                        fill("Status (Watch/Active/Closed)", "Watchlist")
+                                        fill("Entry CMP / Range", pre_parsed.get('entry', ''))
+                                        fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
+                                        fill("Target 1", pre_parsed.get('t1', ''))
+                                        fill("Raw Tip Text", row['Raw Message Text'])
+                                        
+                                        sandbox_ws.append_row(new_row_payload)
+                                        raw_log_ws.update_cell(int(row['_Row_ID']), 4, "Successfully Staged")
+                                        st.toast(f"Staged {t_sym} directly to Staging Tracker Sandbox!")
+                                        time.sleep(0.5); st.rerun()
+                                
+                                # ACTION 2: STAGE TO LONG-TERM ARCHIVE TAB
+                                if b2.button("📦 Archive Entry", key=f"btn_arc_{row['_Row_ID']}", use_container_width=True):
+                                    try: archive_ws = wb_obj.worksheet("Telegram_Archive")
+                                    except gspread.exceptions.WorksheetNotFound:
+                                        archive_ws = wb_obj.add_worksheet(title="Telegram_Archive", rows="2000", cols="4")
+                                        archive_ws.append_row(["Timestamp", "Source", "Raw Text", "Archived Date"])
+                                        
+                                    archive_ws.append_row([row['Timestamp'], row['Channel Source'], row['Raw Message Text'], datetime.today().strftime("%Y-%m-%d")])
+                                    raw_log_ws.update_cell(int(row['_Row_ID']), 4, "Archived Data")
+                                    st.toast("Record processed cleanly to Archive database.")
+                                    time.sleep(0.5); st.rerun()
+                                    
+                                # ACTION 3: DISCARD TRASH DATA
+                                if b3.button("🗑️ Discard", key=f"btn_dsc_{row['_Row_ID']}", use_container_width=True):
+                                    raw_log_ws.update_cell(int(row['_Row_ID']), 4, "Discarded")
+                                    st.toast("Item dropped from active review queues.")
+                                    time.sleep(0.5); st.rerun()
                 else:
-                    st.info("No raw logs found yet. Send a test message to your tracked channels.")
+                    st.info("System initializing tracking logs. Awaiting fresh inbound advisory data.")
 
 def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
     render_top_ticker_tape(settings_sheet)
@@ -586,11 +555,7 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
     with col_t2: 
         if st.button("UI Reset", use_container_width=True, key="rst_scan"):
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
-    col1, col2 = st.columns([8, 2], vertical_alignment="bottom")
-    with col1: st.write("")
-    with col2:
-        if st.button("Sync Live Prices", use_container_width=True, key="sync_scanner"): api.fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers)
-            
+    
     scanner_data = scanner_sheet.get_all_records()
     df_scan = pd.DataFrame(scanner_data) if scanner_data else pd.DataFrame()
     
