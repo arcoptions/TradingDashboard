@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import requests
 import database as db
 import analytics
 from integrations.google_sheets import fetch_dataframe_safe, init_sheet_connection, fetch_settings_cell
@@ -7,6 +8,43 @@ import broker_api as api
 from core_engines.nlp_router import FNO_SYMBOLS
 from datetime import datetime
 import time
+
+@st.cache_data(ttl=60, show_spinner=False)
+def run_tv_screener(tickers):
+    """Batch requests TradingView to mathematically grade scanner stocks."""
+    results = []
+    clean_tickers = [str(t).strip().upper().replace("&", "_") for t in tickers if str(t).strip() != "-" and str(t).strip() != ""]
+    if not clean_tickers: return []
+    
+    tv_tickers = [f"NSE:{t}" for t in set(clean_tickers)]
+    payload = {"symbols": {"tickers": tv_tickers}, "columns": ["close", "EMA20", "RSI", "volume", "average_volume_10d"]}
+    
+    try:
+        res = requests.post("https://scanner.tradingview.com/india/scan", json=payload, timeout=6)
+        if res.status_code == 200 and res.json().get("data"):
+            for item in res.json()["data"]:
+                ticker = item["s"].split(":")[1]
+                d = item["d"]
+                
+                ltp = d[0] if d[0] else 0
+                ema20 = d[1] if d[1] else 0
+                rsi = d[2] if d[2] else 0
+                vol = d[3] if d[3] else 0
+                avg_vol = d[4] if d[4] else 1 
+                
+                if ema20 > 0 and ltp > 0: prox = ((ltp - ema20) / ema20) * 100
+                else: prox = 999
+                
+                vol_spike = (vol / avg_vol) * 100 if avg_vol > 0 else 0
+                
+                is_rsi_good = 55 <= rsi <= 75
+                is_prox_good = 0 <= prox <= 6.0
+                is_vol_good = vol_spike >= 150
+                score = sum([is_rsi_good, is_prox_good, is_vol_good])
+                
+                results.append({"Asset": ticker, "Universal Score": int(score)})
+    except: pass
+    return results
 
 def render(scanner_sheet, scanner_headers):
     st.markdown("#### Automated Scan Feeds")
@@ -16,13 +54,22 @@ def render(scanner_sheet, scanner_headers):
         df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
         df_scan = analytics.compute_scanner_signals(df_scan)
         
-        # Inject promotion checkbox
+        # Universal Scoring Integrator
+        all_tickers = df_scan["Symbol"].unique().tolist()
+        scan_scores = run_tv_screener(all_tickers)
+        df_scores = pd.DataFrame(scan_scores) if scan_scores else pd.DataFrame()
+        
+        if not df_scores.empty: df_scan = df_scan.merge(df_scores, left_on='Symbol', right_on='Asset', how='left')
+        else: df_scan["Universal Score"] = 0
+            
+        df_scan["Universal Score"] = df_scan["Universal Score"].fillna(0)
         df_scan.insert(0, "Promote", False)
         
         tab_ce1, tab_ce2, tab_pos = st.tabs(["CE1", "CE2", "Positional"])
-        scan_view_cols = ["Promote", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
+        scan_view_cols = ["Promote", "Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time", "Status", "Notes / Analysis", "_Sheet_Row"]
         scan_col_config = {
             "Promote": st.column_config.CheckboxColumn("Promote 🚀", width="small"),
+            "Universal Score": st.column_config.ProgressColumn("Sys Score", format="%d/3", min_value=0, max_value=3),
             "_Sheet_Row": None, 
             "Status": st.column_config.SelectboxColumn("Status", options=["Monitoring", "Moved to Watchlist", "Discarded"], required=True)
         }
@@ -39,12 +86,10 @@ def render(scanner_sheet, scanner_headers):
                     st.write("")
                     
                     edited_scan = st.data_editor(
-                        df_filtered[scan_view_cols], 
-                        use_container_width=True, hide_index=True, num_rows="dynamic", 
+                        df_filtered[scan_view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", 
                         key=f"scan_{filter_name}", on_change=db.run_scanner_sync, 
                         kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers}, 
-                        column_config=scan_col_config, 
-                        disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
+                        column_config=scan_col_config, disabled=["Universal Score", "Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"]
                     )
                     
                     selected_rows = edited_scan[edited_scan["Promote"] == True]
@@ -90,11 +135,9 @@ def render(scanner_sheet, scanner_headers):
                             fetch_dataframe_safe.clear()
                             time.sleep(1)
                             st.rerun()
-                else: 
-                    st.info(f"No active triggers for {filter_name}.")
+                else: st.info(f"No active triggers for {filter_name}.")
         
         render_scanner_tab(tab_ce1, "CE1")
         render_scanner_tab(tab_ce2, "CE2")
         render_scanner_tab(tab_pos, "Positional")
-    else:
-        st.info("Scanner database is currently empty.")
+    else: st.info("Scanner database is currently empty.")
