@@ -15,6 +15,10 @@ TIP_CHANNELS = [
 def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### 📱 Telegram Data Hub & News Feed")
     
+    # ─── ADDED: INTERACTIVE CALENDAR DATE FILTER ───
+    selected_date = st.date_input("📅 Filter Telegram Logs by Date", datetime.today().date(), key="telegram_log_date")
+    st.write("")
+    
     df_raw_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
     if wb_obj is None:
         st.error("Data core connection uninitialized.")
@@ -24,9 +28,12 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     
     if not df_raw_logs.empty:
         df_raw_logs["_Row_ID"] = range(2, len(df_raw_logs) + 2)
+        
+        # Standardize timestamp string elements to true Python date components
+        df_raw_logs["Log_Date"] = pd.to_datetime(df_raw_logs["Timestamp"], errors='coerce').dt.date
         df_pending = df_raw_logs[df_raw_logs["Parsing Status"].astype(str).str.strip().str.lower().isin(["pending review", "pending extraction", "pending parsing", "news ingested"])].copy()
         
-        # --- 1. SILENT BACKGROUND AUTO-ROUTER ---
+        # --- 1. BACKGROUND AUTO-ROUTER PIPELINE ---
         if not df_pending.empty:
             status_updates, bulk_watchlist_rows, bulk_study_rows = [], [], []
             daily_token = ""
@@ -46,16 +53,13 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 raw_symbol = extract_asset_from_text(text)
                 valid_sym, valid_sec, valid_exch = None, None, None
                 
-                # DHAN API STRICT GUARDRAIL (Prevents MORE, HTTPS, BLOCK from passing)
                 if raw_symbol and raw_symbol != "-":
                     valid_sym, valid_sec, valid_exch = api.resolve_instrument(raw_symbol)
                 
-                # Rule A: Beat The Street News (Read-Only)
                 if is_news_channel:
                     status_updates.append({'range': f"D{row['_Row_ID']}", 'values': [["News Logged"]]})
                     continue
                     
-                # Rule B: Fake Extraction Catch (Stock doesn't exist on Dhan)
                 if not valid_sec:
                     status_updates.append({'range': f"D{row['_Row_ID']}", 'values': [["Logged (No Valid Stock)"]]})
                     continue
@@ -72,7 +76,6 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                         if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
                             contract_symbol = f"{raw_symbol} {chain_data['best_ce']} (Auto)"
 
-                # Rule C: Core Tip Channels -> Main Watchlist
                 if is_tip_channel:
                     if contract_symbol in watchlist_symbols:
                         status_updates.append({'range': f"D{row['_Row_ID']}", 'values': [["Duplicate Watchlist Item"]]})
@@ -98,7 +101,6 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                     bulk_watchlist_rows.append(new_row)
                     status_updates.append({'range': f"D{row['_Row_ID']}", 'values': [["Auto-Staged to Watchlist"]]})
                     
-                # Rule D: General Chatter -> Stocks to Study
                 else:
                     bulk_study_rows.append([
                         str(row['Timestamp']), 
@@ -125,21 +127,23 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 fetch_dataframe_safe.clear()
                 st.rerun()
 
-        # --- 2. VISUAL LOG RENDERING (Lets you read the data) ---
-        df_display = df_raw_logs.sort_values(by="_Row_ID", ascending=False).head(300)
+        # --- 2. VISUAL LOG RENDERING (WITH DUAL SECURITY CONTROLS) ---
+        df_filtered_by_date = df_raw_logs[df_raw_logs["Log_Date"] == selected_date]
+        df_display = df_filtered_by_date.sort_values(by="_Row_ID", ascending=False).head(300)
         
         def is_news(src): return any(kw in str(src).lower() for kw in ["beat the street", "news"])
         def is_tip(src): return any(tip in str(src).upper() for tip in TIP_CHANNELS)
         
+        # FIXED: Enforced strict exclusion constraints so news channels can NEVER leak into Tips or Discussions
         df_news = df_display[df_display["Channel Source"].apply(is_news)]
-        df_mentions = df_display[df_display["Channel Source"].apply(is_tip)]
+        df_mentions = df_display[df_display["Channel Source"].apply(is_tip) & ~df_display["Channel Source"].apply(is_news)]
         df_discussions = df_display[~df_display["Channel Source"].apply(is_news) & ~df_display["Channel Source"].apply(is_tip)]
 
         sub_news, sub_mentions, sub_discussions = st.tabs(["📰 Exclusive News Log", "🎯 Auto-Routed Tips", "💬 General Discussions"])
         
         def render_log_table(df, title):
             if df.empty:
-                st.info("No recent logs for this category.")
+                st.info(f"No log items recorded for {selected_date.strftime('%Y-%m-%d')}.")
                 return
             st.dataframe(
                 df[["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"]],
