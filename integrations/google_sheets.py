@@ -1,6 +1,7 @@
 import os
 import json
 import toml
+import time
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
@@ -17,8 +18,9 @@ def get_secrets():
             with open(".streamlit/secrets.toml", "r") as f: return toml.load(f)
         return None
 
-def init_sheet_connection():
-    """Authenticates and maps all essential Google Sheets tabs, healing missing tabs instantly."""
+@st.cache_resource
+def get_gspread_client():
+    """Initializes and caches the authenticated Google API Client."""
     secrets = get_secrets()
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
@@ -30,24 +32,26 @@ def init_sheet_connection():
         else: raise ValueError("Missing Google Service Account credentials mapping.")
 
     credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    gc = gspread.authorize(credentials)
+    return gspread.authorize(credentials)
+
+@st.cache_resource
+def init_sheet_connection():
+    """Authenticates and maps all essential Google Sheets tabs for WRITING data."""
+    gc = get_gspread_client()
     sh = gc.open("Comprehensive Trading Tracker 2026")
     
-    # 1. Core Worksheets
     watchlist_ws = sh.sheet1
     try: scanner_ws = sh.worksheet("Scanners")
     except: scanner_ws = None
     try: settings_ws = sh.worksheet("Settings")
     except: settings_ws = None
 
-    # 2. Self-Healing Tab: Stocks to Study
     try: 
         study_ws = sh.worksheet("Stocks to study")
     except gspread.exceptions.WorksheetNotFound:
         study_ws = sh.add_worksheet(title="Stocks to study", rows="3000", cols="5")
         study_ws.append_row(["Timestamp", "Source", "Asset Ticker", "Raw Text Message", "Staging Date"])
         
-    # 3. Self-Healing Tab: Telegram Raw Logs
     try: 
         raw_ws = sh.worksheet("Telegram_Raw_Logs")
     except gspread.exceptions.WorksheetNotFound:
@@ -56,15 +60,38 @@ def init_sheet_connection():
         
     return sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws
 
-def fetch_dataframe_safe(worksheet):
-    """Fetches sheet data with rate-limit protection and blank-header bypass."""
+# ─── CRITICAL 429 QUOTA FIX: CACHING & EXPONENTIAL BACKOFF ───
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_dataframe_safe(sheet_title, is_sheet1=False):
+    """Fetches sheet data and holds it in RAM for 15s to block rapid Google API spam."""
+    gc = get_gspread_client()
+    sh = gc.open("Comprehensive Trading Tracker 2026")
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            worksheet = sh.sheet1 if is_sheet1 else sh.worksheet(sheet_title)
+            vals = worksheet.get_all_values()
+            if len(vals) > 1:
+                df = pd.DataFrame(vals[1:], columns=vals[0])
+                # Filter out completely empty rows
+                return df[df[df.columns[0]].astype(str).str.strip() != ""]
+            return pd.DataFrame()
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                time.sleep(1.5 ** attempt) # Sleeps 1s, 1.5s, 2.25s before retrying
+                continue
+            print(f"Sheet Fetch API Error ({sheet_title}): {e}")
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"Sheet Fetch General Error ({sheet_title}): {e}")
+            return pd.DataFrame()
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_settings_cell(cell_id):
+    """Caches the single-cell lookup for the NIFTY ticker tape."""
     try:
-        vals = worksheet.get_all_values()
-        if len(vals) > 1:
-            df = pd.DataFrame(vals[1:], columns=vals[0])
-            # Filter out completely empty rows
-            return df[df[df.columns[0]].astype(str).str.strip() != ""]
-        return pd.DataFrame()
-    except Exception as e:
-        print(f"Sheet Fetch Error: {e}")
-        return pd.DataFrame()
+        _, _, _, _, _, settings_ws = init_sheet_connection()
+        if settings_ws: return settings_ws.acell(cell_id).value
+    except: pass
+    return None
