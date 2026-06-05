@@ -24,15 +24,23 @@ SECTOR_MAP = {
     "SONACOMS": "Auto Components", "EXIDEIND": "Auto Components",
     "SUNPHARMA": "Pharma", "CIPLA": "Pharma", "DRREDDY": "Pharma", "DIVISLAB": "Pharma",
     "JSWENERGY": "Power", "NTPC": "Power", "POWERGRID": "Power", "TATAPOWER": "Power",
-    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "WIPRO": "IT Services", "TATASTEEL": "Metals"
+    "UPL": "Chemicals", "PIIND": "Chemicals", "COALINDIA": "Metals / Mining", "TATASTEEL": "Metals"
 }
 
+# ─── RESTORED COMPLETE SPECIFICATION MATRIX FOR HEATMAPS ───
 INDEX_CONSTITUENTS = {
     "Nifty 50": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "TCS", "LT", "BHARTIARTL", "SBIN", "BAJFINANCE", "AXISBANK", "HINDUNILVR", "HCLTECH", "MARUTI", "SUNPHARMA", "COALINDIA", "WIPRO", "TATASTEEL"],
     "Nifty Next 50": ["TRENT", "BEL", "HAL", "CHOLAFIN", "INDIGO", "SIEMENS", "VBL", "BANKBARODA", "BHEL", "PIDILITIND", "PNB", "DLF", "GAIL", "ZOMATO", "IRFC"],
     "Finnifty": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "CHOLAFIN", "PFC", "RECLTD", "BAJAJFINSV", "MUTHOOTFIN", "SHRIRAMFIN"],
     "Nifty Bank": ["HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK"],
-    "Nifty IT": ["INFY", "TCS", "HCLTECH", "WIPRO", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS", "TATAELXSI"]
+    "Nifty IT": ["INFY", "TCS", "HCLTECH", "WIPRO", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS", "TATAELXSI"],
+    "Nifty FMCG": ["ITC", "HINDUNILVR", "NESTLEIND", "BRITANNIA", "TATACONSUM", "GODREJCP", "DABUR", "VBL", "MARICO", "COLPAL"],
+    "Nifty Auto": ["TATAMOTORS", "M_M", "MARUTI", "BAJAJ_AUTO", "EICHERMOT", "TVSMOTOR", "HEROMOTOCO", "BOSCHLTD", "TIINDIA", "MRF"],
+    "Nifty Energy": ["RELIANCE", "NTPC", "ONGC", "POWERGRID", "COALINDIA", "TATAPOWER", "IOC", "BPCL", "GAIL", "ADANIPOWER"],
+    "Nifty Metal": ["TATASTEEL", "JSWSTEEL", "HINDALCO", "COALINDIA", "VEDL", "JINDALSTEL", "SAIL", "NMDC", "NATIONALUM"],
+    "Nifty Pharma": ["SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "AUROPHARMA", "MANKIND", "TORNTPHARM", "ZYDUSLIFE"],
+    "Nifty Healthcare": ["SUNPHARMA", "APOLLOHOSP", "MAXHEALTH", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN", "FORTIS", "METROPOLIS"],
+    "Nifty Realty": ["DLF", "MACROTECH", "GODREJPROP", "PRESTIGE", "OBEROIRLTY", "PHOENIXLTD", "BRIGADE", "SOBHA", "SUNTECK"]
 }
 
 ASSET_ALIASES = {
@@ -51,7 +59,7 @@ ASSET_ALIASES = {
 
 KNOWN_ASSETS = set()
 for aliases in ASSET_ALIASES.values(): KNOWN_ASSETS.update([a.upper() for a in aliases])
-for stocks in INDEX_CONSTITUENTS.values(): 
+for stocks in INDEX_CONSTITUENTS.values():
     KNOWN_ASSETS.update([s.replace('_', '').upper() for s in stocks])
     KNOWN_ASSETS.update([s.replace('_', ' ').upper() for s in stocks])
 
@@ -165,13 +173,10 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         if st.button("UI Reset", use_container_width=True):
             components.html("<script>window.parent.localStorage.clear(); window.parent.location.reload();</script>", height=0, width=0)
             
-    # CRITICAL UI SYNCHRONIZATION: Read terminal layout explicitly from Telegram_Sandbox
-    try:
-        sandbox_read_ws = worksheet.spreadsheet.worksheet("Telegram_Sandbox")
-        initial_data = sandbox_read_ws.get_all_records()
-        sheet_headers = sandbox_read_ws.row_values(1)
-    except:
-        initial_data = worksheet.get_all_records()
+    # Read core running records directly from the main active sheet tab (sheet1)
+    primary_watchlist_ws = worksheet.spreadsheet.sheet1
+    initial_data = primary_watchlist_ws.get_all_records()
+    sheet_headers = primary_watchlist_ws.row_values(1)
         
     initial_df = pd.DataFrame(initial_data) if initial_data else pd.DataFrame()
 
@@ -245,7 +250,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
         table_column_config = {
             "Journal": st.column_config.CheckboxColumn("Inspect", default=False),
             "Base Asset": st.column_config.TextColumn("Stock Name"),
-            "Symbol / Asset": st.column_config.TextColumn("Option Contract"), 
+            "Symbol / Asset": st.column_config.TextColumn("Contract"), 
             "Vs Entry": st.column_config.TextColumn("Vs Entry"),
             "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
             "Live Price": st.column_config.TextColumn("Live Price"),
@@ -399,13 +404,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 new_rationale = st.text_area("Execution Rationale", value=curr_rationale if curr_rationale != 'nan' else '')
                                 new_emotions = st.text_area("Psychological State", value=curr_emotions if curr_emotions != 'nan' else '')
                                 if st.form_submit_button("Save Notes", type="primary"):
-                                    try:
-                                        target_sandbox_ws = worksheet.spreadsheet.worksheet("Telegram_Sandbox")
-                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
-                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
-                                    except:
-                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
-                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
+                                    primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
+                                    primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
                                     st.rerun()
                                     
                     st.markdown("#### Execution & Asset Repair")
@@ -422,7 +422,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 pnl = exit_val - entry_val
                                 if pnl > 0: st.success(f"Net Points Captured: +{round(pnl, 2)}")
                                 else: st.error(f"Net Points Lost: {round(pnl, 2)}")
-                            except: st.info("Awaiting execution conclusion exit parameters.")
+                            except: st.info("Awaiting execution parameters.")
                             
                         with st.expander("🛠 Advanced Asset Repair Tool"):
                             fix_query = st.text_input("Search Official Master Database", value=str(trade_data['Symbol / Asset']).split()[0], key="fix_contract_query")
@@ -431,15 +431,9 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                                 selected_fix = st.selectbox("Select Correct Contract:", fix_results['SEM_TRADING_SYMBOL'].tolist(), key="fix_contract_select")
                                 if st.button("Save & Re-Link Asset", type="primary", use_container_width=True):
                                     fix_row = fix_results[fix_results['SEM_TRADING_SYMBOL'] == selected_fix].iloc[0]
-                                    try:
-                                        target_sandbox_ws = worksheet.spreadsheet.worksheet("Telegram_Sandbox")
-                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
-                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
-                                        target_sandbox_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
-                                    except:
-                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
-                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
-                                        worksheet.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
+                                    primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
+                                    primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
+                                    primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
                                     st.rerun()
 
                 if st.button("Unlink Review Canvas", use_container_width=True):
@@ -448,7 +442,8 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
             df_stocks = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["equity", "stock"])].copy()
             df_options = filtered_df[filtered_df["Trade Type (Eq/Option)"].str.lower().isin(["option", "fno"])].copy()
             
-            tab_options, tab_stocks, tab_heatmap, tab_telegram = st.tabs(["Options", "Stocks", "Sector Heatmap", "Telegram Data"])
+            # ─── INJECTED STOCKS TO STUDY TAB WORKFLOW ───
+            tab_options, tab_stocks, tab_study, tab_heatmap, tab_telegram = st.tabs(["Options", "Stocks", "Stocks to Study", "Sector Heatmap", "Telegram Data"])
             
             def render_asset_dashboard(df_asset, asset_type):
                 if df_asset.empty:
@@ -457,30 +452,46 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                 sub_wl, sub_act, sub_cls = st.tabs(["Watchlist", "Active", "Closed"])
                 with sub_wl:
                     df_wl = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Watchlist"])].copy().reset_index(drop=True)
-                    if not df_wl.empty: st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"wl_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_wl, "state_key": f"wl_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                    if not df_wl.empty: st.data_editor(df_wl[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"wl_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_wl, "state_key": f"wl_{asset_type}", "worksheet": primary_watchlist_ws, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 with sub_act:
                     df_act = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Active"])].copy().reset_index(drop=True)
-                    if not df_act.empty: st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"act_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_act, "state_key": f"act_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                    if not df_act.empty: st.data_editor(df_act[view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"act_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_act, "state_key": f"act_{asset_type}", "worksheet": primary_watchlist_ws, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
                 with sub_cls:
                     df_cls = df_asset[df_asset["Status (Watch/Active/Closed)"].isin(["Closed"])].copy().reset_index(drop=True)
-                    if not df_cls.empty: st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key=f"cls_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_cls, "state_key": f"cls_{asset_type}", "worksheet": worksheet, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
+                    if not df_cls.empty: st.data_editor(df_cls[view_cols], use_container_width=True, hide_index=True, num_rows="fixed", key=f"cls_{asset_type}", on_change=db.run_background_sync, kwargs={f"df_filtered": df_cls, "state_key": f"cls_{asset_type}", "worksheet": primary_watchlist_ws, "sheet_headers": sheet_headers}, column_config=table_column_config, disabled=disabled_cols)
 
             with tab_options: render_asset_dashboard(df_options, "Options")
             with tab_stocks: render_asset_dashboard(df_stocks, "Stocks")
             
+            with tab_study:
+                st.markdown("#### Macro Research Staging Deck (`Stocks to study`)")
+                st.caption("Aggregated list of high-conviction insights extracted directly from news wires and automated tickers.")
+                try:
+                    study_ws_layer = worksheet.spreadsheet.worksheet("Stocks to study")
+                    study_records = study_ws_layer.get_all_records()
+                    df_study_log = pd.DataFrame(study_records)
+                except: df_study_log = pd.DataFrame()
+                
+                if not df_study_log.empty:
+                    st.dataframe(df_study_log, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No research items logged yet. Inbound entries from Beat The Street will display here automatically.")
+            
             with tab_heatmap:
                 if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
                 all_data = fetch_all_sectors_data()
-                if not all_data: st.info("Market mapping array initializing...")
+                if not all_data: st.info("Market mapping data refreshing...")
                 elif st.session_state.active_heatmap_sector is None:
                     sector_weights = {"Nifty 50": 100, "Nifty Bank": 80, "Nifty IT": 60, "Nifty Next 50": 50, "Nifty Auto": 40, "Nifty FMCG": 40, "Nifty Energy": 40, "Nifty Metal": 30, "Nifty Pharma": 30, "Finnifty": 30, "Nifty Healthcare": 20, "Nifty Realty": 10}
                     sector_data = []
                     for sec, stocks in INDEX_CONSTITUENTS.items():
                         chgs = [all_data[s]["change"] for s in stocks if s in all_data and all_data[s]["change"] is not None]
                         sector_data.append({"Sector": sec, "Change": sum(chgs)/len(chgs) if chgs else 0.0, "Weight": sector_weights.get(sec, 30)})
+                    
+                    # ─── IMAGE_A976C6.PNG FIX: RENDERS DYNAMIC SCALE ACROSS ALL ALLOCATED SECTORS COMPLETELY ───
                     fig = px.treemap(pd.DataFrame(sector_data), path=['Sector'], values='Weight', color='Change', custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
-                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", textfont=dict(size=16), root_color="rgba(0,0,0,0)")
-                    fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=450, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                    fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:.2f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
+                    fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                     if "on_select" in inspect.signature(st.plotly_chart).parameters:
                         event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="treemap")
                         if event and event.get("selection", {}).get("points"):
@@ -513,7 +524,6 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         
                         pre_parsed = analytics.parse_telegram_tip(text)
                         t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
-                        
                         t_sym, t_sec, t_exch_type = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
                         
                         if not t_sec:
@@ -526,7 +536,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         
                         if t_sec:  
                             row['Extracted_Symbol'] = t_sym
-                            row['Exchange_Segment_Verified'] = t_exch_type # Preserve exact exchange asset identifier segment
+                            row['Exchange_Segment_Verified'] = t_exch_type
                             mentions_list.append(row)
                         elif is_news_channel:
                             row['Extracted_Symbol'] = "-"
@@ -564,10 +574,7 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         b1, b2, b3 = st.columns([1, 1, 1])
                         
                         edited_df = st.data_editor(
-                            df_display,
-                            hide_index=True,
-                            use_container_width=True,
-                            key=f"editor_{tab_name}",
+                            df_display, hide_index=True, use_container_width=True, key=f"editor_{tab_name}",
                             column_config={
                                 "Select": st.column_config.CheckboxColumn("✓", width="small"),
                                 "_Row_ID": None, "Parsing Status": None, "Exchange_Segment_Verified": None,
@@ -582,64 +589,67 @@ def render_options_tracker(worksheet, scanner_sheet, settings_sheet, sheet_heade
                         selected_rows = edited_df[edited_df["Select"] == True]
                         
                         if b1.button("⚡ Stage Selected Rows", key=f"stg_{tab_name}", use_container_width=True) and not selected_rows.empty:
-                            sandbox_ws = wb_obj.worksheet("Telegram_Sandbox")
-                            sandbox_rows, status_updates = [], []
+                            status_updates = []
                             
-                            for _, s_row in selected_rows.iterrows():
-                                if "Duplicate" in s_row["Status"]: continue 
+                            if tab_name == "News Feeds":
+                                # ─── NEWS FEED MANUALLY OVERRIDE STAGING -> STOCKS TO STUDY TAB ───
+                                target_study_ws = wb_obj.worksheet("Stocks to study")
+                                bulk_study_rows = []
+                                for _, s_row in selected_rows.iterrows():
+                                    bulk_study_rows.append([s_row['Timestamp'], s_row['Channel Source'], s_row['Extracted_Symbol'], s_row['Raw Message Text'], datetime.today().strftime("%Y-%m-%d")])
+                                    status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Staged to Study"]]})
+                                if bulk_study_rows: target_study_ws.append_rows(bulk_study_rows)
+                            else:
+                                # ─── ADVISORY FEED MANUALLY OVERRIDE STAGING -> ACTIVE WATCHLIST TAB (SHEET1) ───
+                                target_watchlist_ws = wb_obj.sheet1
+                                bulk_watchlist_rows = []
+                                for _, s_row in selected_rows.iterrows():
+                                    if "Duplicate" in s_row["Status"]: continue 
+                                    t_sym, t_sec, t_exch = api.resolve_instrument(s_row['Extracted_Symbol'])
+                                    pre_parsed = analytics.parse_telegram_tip(s_row['Raw Message Text'])
+                                    auto_derived_trade_type = "Equity" if "EQ" in str(s_row['Exchange_Segment_Verified']) else "Option"
+                                    
+                                    new_row = [""] * len(sheet_headers)
+                                    def fill(col, val): 
+                                        if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
+                                    fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
+                                    fill("Idea Source (Chartink/Telegram/X/Self)", s_row['Channel Source'])
+                                    fill("Symbol / Asset", t_sym)
+                                    fill("Trade Type (Eq/Option)", auto_derived_trade_type)
+                                    fill("Exchange", t_exch)
+                                    fill("Security ID", t_sec)
+                                    fill("Status (Watch/Active/Closed)", "Watchlist")
+                                    fill("Entry CMP / Range", pre_parsed.get('entry', ''))
+                                    fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
+                                    fill("Target 1", pre_parsed.get('t1', ''))
+                                    fill("Raw Tip Text", s_row['Raw Message Text'])
+                                    bulk_watchlist_rows.append(new_row)
+                                    status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Successfully Staged"]]})
+                                if bulk_watchlist_rows: target_watchlist_ws.append_rows(bulk_watchlist_rows)
                                 
-                                t_sym, t_sec, t_exch = api.resolve_instrument(s_row['Extracted_Symbol'])
-                                pre_parsed = analytics.parse_telegram_tip(s_row['Raw Message Text'])
-                                
-                                # FIX: AUTOMATE DYNAMIC CLASSIFICATION ROUTING VIA EXCHANGE ID SEGMENT
-                                auto_derived_trade_type = "Equity" if "EQ" in str(s_row['Exchange_Segment_Verified']) else "Option"
-                                
-                                new_row = [""] * len(sheet_headers)
-                                def fill(col, val): 
-                                    if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
-                                
-                                fill("Trade Date", datetime.today().strftime("%Y-%m-%d"))
-                                fill("Idea Source (Chartink/Telegram/X/Self)", s_row['Channel Source'])
-                                fill("Symbol / Asset", t_sym)
-                                fill("Trade Type (Eq/Option)", auto_derived_trade_type)
-                                fill("Exchange", t_exch)
-                                fill("Security ID", t_sec)
-                                fill("Status (Watch/Active/Closed)", "Watchlist")
-                                fill("Entry CMP / Range", pre_parsed.get('entry', ''))
-                                fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
-                                fill("Target 1", pre_parsed.get('t1', ''))
-                                fill("Raw Tip Text", s_row['Raw Message Text'])
-                                
-                                sandbox_rows.append(new_row)
-                                status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Successfully Staged"]]})
-                            
-                            if sandbox_rows:
-                                sandbox_ws.append_rows(sandbox_rows)
+                            if status_updates:
                                 raw_log_ws.batch_update(status_updates)
-                                st.toast(f"Staged {len(sandbox_rows)} rows cleanly to Watchlist!")
+                                st.toast(f"Staged elements processed successfully!")
                                 time.sleep(0.5); st.rerun()
 
                         if b2.button("📦 Archive Selected Rows", key=f"arc_{tab_name}", use_container_width=True) and not selected_rows.empty:
                             try: archive_ws = wb_obj.worksheet("Telegram_Archive")
-                            except:
-                                archive_ws = wb_obj.add_worksheet(title="Telegram_Archive", rows="2000", cols="4")
-                                archive_ws.append_row(["Timestamp", "Source", "Raw Text", "Archived Date"])
+                            except: archive_ws = wb_obj.add_worksheet(title="Telegram_Archive", rows="2000", cols="4")
                             
                             arc_rows, status_updates = [], []
                             for _, s_row in selected_rows.iterrows():
                                 arc_rows.append([s_row['Timestamp'], s_row['Channel Source'], s_row['Raw Message Text'], datetime.today().strftime("%Y-%m-%d")])
                                 status_updates.append({'range': f"D{s_row['_Row_ID']}", 'values': [["Archived Data"]]})
-                                
                             if arc_rows:
                                 archive_ws.append_rows(arc_rows)
-                                raw_log_ws.batch_update(status_updates)
-                                st.toast(f"Archived {len(arc_rows)} elements.")
+                                wb_obj.worksheet("Telegram_Raw_Logs").batch_update(status_updates)
+                                st.toast(f"Archived successfully.")
                                 time.sleep(0.5); st.rerun()
 
                         if b3.button("🗑️ Discard Selected Rows", key=f"dsc_{tab_name}", use_container_width=True) and not selected_rows.empty:
                             status_updates = [{'range': f"D{s_row['_Row_ID']}", 'values': [["Discarded"]]} for _, s_row in selected_rows.iterrows()]
-                            raw_log_ws.batch_update(status_updates)
-                            st.toast(f"Dropped {len(status_updates)} text lines.")
+                            wb_obj.worksheet("Telegram_Raw_Logs").batch_update(status_updates)
+                            st.toast(f"Discarded successfully.")
                             time.sleep(0.5); st.rerun()
 
                     with sub_mentions: render_bulk_table(df_mentions, "Stock Mentions")
@@ -677,7 +687,6 @@ def render_chartink_scanners(worksheet, scanner_sheet, settings_sheet, sheet_hea
                     m4.metric("Flat / Pending", len(df_filtered[df_filtered['Vs Entry'].isin(['⚪ At Entry', '-'])]))
                     st.write("")
                     st.data_editor(df_filtered[scan_view_cols], use_container_width=True, hide_index=True, num_rows="dynamic", key=f"scan_{filter_name}", on_change=db.run_scanner_sync, kwargs={"df_filtered": df_filtered, "state_key": f"scan_{filter_name}", "scanner_sheet": scanner_sheet, "scanner_headers": scanner_headers}, column_config=scan_col_config, disabled=["Date Added", "Symbol", "Trigger Price", "Live Price", "Vs Entry", "Trigger Time"])
-                else: st.info(f"No active triggers for {filter_name}.")
         
         render_scanner_tab(tab_ce1, "CE1")
         render_scanner_tab(tab_ce2, "CE2")
