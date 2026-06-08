@@ -84,7 +84,8 @@ def init_sheet_connection():
         
     return sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws
 
-@st.cache_data(ttl=15, show_spinner=False)
+# CACHE HELD FOR 1 HOUR: Only resets when a CRUD operation triggers .clear()
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_dataframe_safe(sheet_title, is_sheet1=False):
     max_retries = 3
     for attempt in range(max_retries):
@@ -104,7 +105,8 @@ def fetch_dataframe_safe(sheet_title, is_sheet1=False):
                 continue
             return pd.DataFrame()
 
-@st.cache_data(ttl=30, show_spinner=False)
+# CACHE HELD FOR 1 HOUR: Protects the sidebar from constantly pinging the API
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_settings_cell(cell_id):
     try:
         sh = get_spreadsheet()
