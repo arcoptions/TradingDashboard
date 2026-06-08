@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 import analytics
 import broker_api as api
+from integrations.google_sheets import fetch_dataframe_safe
 
 @st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal(worksheet, sheet_headers):
@@ -67,7 +68,6 @@ def trade_entry_modal(worksheet, sheet_headers):
             with tc2: add_levels = st.text_input("Add-On Levels", value=parsed_data["add_levels"], placeholder="Add-On Levels")
             with tc3: emotions = st.text_input("Psychology", placeholder="Emotions at Entry")
             
-            # --- EXTENDED METADATA INPUTS FOR SPOT EQUITY CHECKS ---
             xc1, xc2 = st.columns(2)
             with xc1: timeframe_val = st.text_input("Horizon Time Frame (TF)", value=parsed_data["tf"], placeholder="e.g. 2 Months, 1 Year")
             with xc2: rating_val = st.text_input("Setup Strategic Rating", value=parsed_data["rating"], placeholder="e.g. 8.75/10")
@@ -92,12 +92,12 @@ def trade_entry_modal(worksheet, sheet_headers):
                 set_val("Strategic Rationale (Why I took it)", rationale)
                 set_val("Emotions at Entry (FOMO, Calm, etc.)", emotions)
                 
-                # Push extended metrics to database structure
                 set_val("Time Frame", timeframe_val)
                 set_val("Setup Rating", rating_val)
                 set_val("Raw Tip Text", raw_tip_captured)
                 
                 worksheet.append_row(new_row)
+                fetch_dataframe_safe.clear()
                 st.session_state.qp_key += 1
                 st.rerun()
 
@@ -143,4 +143,5 @@ def trade_entry_modal(worksheet, sheet_headers):
                 
             if rows_to_insert:
                 worksheet.append_rows(rows_to_insert)
+                fetch_dataframe_safe.clear()
                 st.rerun()
