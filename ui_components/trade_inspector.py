@@ -5,6 +5,7 @@ import re
 import broker_api as api
 import derivatives_engine as de
 import scoring_engine as se
+from integrations.google_sheets import fetch_dataframe_safe
 
 def prox_color(val):
     if val == "-": return "color:#64748B;"
@@ -110,7 +111,6 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                     st.markdown("<span style='font-size:13px; font-weight:bold; color:#0F172A;'>📰 News Feed</span>", unsafe_allow_html=True)
                     
                     from core_engines.nlp_router import ASSET_ALIASES
-                    from integrations.google_sheets import fetch_dataframe_safe
                     
                     df_news_dataset = fetch_dataframe_safe("Telegram_Raw_Logs")
                     
@@ -171,6 +171,7 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                         if st.form_submit_button("Save Notes", type="primary"):
                             primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Strategic Rationale (Why I took it)") + 1, str(new_rationale))
                             primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Emotions at Entry (FOMO, Calm, etc.)") + 1, str(new_emotions))
+                            fetch_dataframe_safe.clear()
                             st.rerun()
                             
             st.markdown("#### Execution & Asset Repair")
@@ -199,4 +200,5 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                             primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Symbol / Asset") + 1, str(fix_row['SEM_TRADING_SYMBOL']))
                             primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Security ID") + 1, str(fix_row['SEM_SMST_SECURITY_ID']))
                             primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
+                            fetch_dataframe_safe.clear()
                             st.rerun()
