@@ -9,7 +9,7 @@ import json
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
 from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
@@ -172,7 +172,6 @@ def main():
 
     # --- SIDEBAR NAVIGATION ---
     with st.sidebar:
-        # Strict OS path checking to completely prevent broken HTML image rendering
         if os.path.exists("logo.png"):
             st.image("logo.png", use_container_width=True)
         elif os.path.exists("assets/logo.png"):
@@ -189,9 +188,10 @@ def main():
         st.divider()
         
         with st.expander("API & Sync Setup", expanded=False):
+            # FIXED QUOTA BUG: Fetch from cache instead of querying Google on every UI click
             try: 
-                saved_token = settings_ws.acell('B2').value or ""
-                current_sync = settings_ws.acell('B8').value or "60"
+                saved_token = fetch_settings_cell('B2') or ""
+                current_sync = fetch_settings_cell('B8') or "60"
             except: 
                 saved_token, current_sync = "", "60"
                 
@@ -204,6 +204,7 @@ def main():
             if st.button("Save Settings", use_container_width=True):
                 settings_ws.update_acell('B2', new_token)
                 settings_ws.update_acell('B8', rev_mapping[selected_sync])
+                fetch_settings_cell.clear() # Invalidate cache to fetch new settings
                 st.success("Settings Locked.")
                 st.rerun()
 
@@ -251,7 +252,7 @@ def main():
     viewing_scanner = st.session_state.get("viewing_scanner_row_data")
 
     if viewing_trade or viewing_scanner:
-        try: saved_token = settings_ws.acell('B2').value or ""
+        try: saved_token = fetch_settings_cell('B2') or ""
         except: saved_token = ""
         
         if viewing_trade:
@@ -298,21 +299,25 @@ def main():
     with f_col4:
         st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
         
-        # ─── UPDATED SYNC LIVE PRICES TO IST TIMESTAMP ───
+        # ─── UPDATED MANUAL SYNC ROUTER ───
         if st.button("Sync Live Prices", use_container_width=True): 
             try:
                 scan_headers = scanner_ws.row_values(1) if scanner_ws else []
             except Exception:
                 scan_headers = []
             
-            api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scan_headers)
+            res = api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scan_headers)
+            if res == "Success":
+                fetch_dataframe_safe.clear()
+                fetch_settings_cell.clear()
+                st.rerun()
+            else:
+                st.error(f"Sync issue: {res}")
             
-            # Strictly convert server UTC to IST
-            st.session_state.last_sync_time = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b %I:%M %p")
-            st.rerun()
-            
-        if "last_sync_time" in st.session_state:
-            st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{st.session_state.last_sync_time}</b></div>", unsafe_allow_html=True)
+        # Extracts global IST Sync timestamp directly from Database Settings B9
+        global_sync_time = fetch_settings_cell('B9')
+        if global_sync_time:
+            st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{global_sync_time}</b></div>", unsafe_allow_html=True)
 
     filtered_df = df_watchlist.copy()
     if selected_sources: filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
