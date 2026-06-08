@@ -114,20 +114,50 @@ def trade_entry_modal(worksheet, sheet_headers):
             unique_lines = list(dict.fromkeys(raw_lines))
             rows_to_insert = []
             
+            # --- Duplicate Check Preparations ---
+            try: existing_records = worksheet.get_all_records()
+            except: existing_records = []
+            existing_symbols = [str(r.get('Symbol / Asset', '')).upper().strip() for r in existing_records]
+            existing_bases = [s.split('-')[0].split(' ')[0].strip() for s in existing_symbols]
+            
+            try: from core_engines.nlp_router import FNO_SYMBOLS
+            except: FNO_SYMBOLS = []
+            from integrations.google_sheets import fetch_settings_cell
+            daily_token = fetch_settings_cell('B2') or ""
+            
             for line in unique_lines:
                 p_data = analytics.parse_telegram_tip(line)
                 if not p_data['symbol']: continue
                 t_sym, t_sec, t_exch = api.resolve_instrument(p_data['symbol'])
+                if not t_sec: continue
                 
+                # --- Duplicate Prevention Engine ---
+                base_to_check = t_sym.split('-')[0].split(' ')[0].strip()
+                if base_to_check in existing_bases: continue
+                
+                is_fno = base_to_check in FNO_SYMBOLS or p_data.get('trade_type') == 'Option'
+                contract_symbol = t_sym
+                auto_derived_type = "Option" if is_fno else "Equity"
+                final_exch = "NSE_FNO" if is_fno else t_exch
+                
+                # --- Auto-Options Assigner ---
+                if is_fno:
+                    chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
+                    is_put = "PE" in p_data.get("symbol", "").upper() or "PUT" in line.upper()
+                    target_key = "best_pe" if is_put else "best_ce"
+                    if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
+                        opt_suffix = "PE" if is_put else "CE"
+                        contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
+
                 row = [""] * len(sheet_headers)
                 def set_v(col_name, val):
-                    if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
+                    if col_name in sheet_headers: row[sheet_headers.index(col_name)] = str(val)
                 
                 set_v("Trade Date", datetime.today().strftime("%Y-%m-%d"))
                 set_v("Idea Source (Chartink/Telegram/X/Self)", final_bulk_source)
-                set_v("Symbol / Asset", t_sym)
-                set_v("Trade Type (Eq/Option)", p_data['trade_type'])
-                set_v("Exchange", t_exch)
+                set_v("Symbol / Asset", contract_symbol)
+                set_v("Trade Type (Eq/Option)", auto_derived_type)
+                set_v("Exchange", final_exch)
                 set_v("Security ID", t_sec)
                 set_v("Status (Watch/Active/Closed)", "Watchlist")
                 set_v("Entry CMP / Range", p_data['entry'])
@@ -140,8 +170,11 @@ def trade_entry_modal(worksheet, sheet_headers):
                 set_v("Raw Tip Text", line)
                 
                 rows_to_insert.append(row)
+                existing_bases.append(base_to_check) # Prevent duplicates within the same batch upload!
                 
             if rows_to_insert:
                 worksheet.append_rows(rows_to_insert)
                 fetch_dataframe_safe.clear()
                 st.rerun()
+            else:
+                st.warning("All lines were either duplicates or invalid instruments. Nothing was added.")
