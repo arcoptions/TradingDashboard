@@ -98,7 +98,7 @@ def init_sheet_connection(secrets):
         raw_ws = sh.add_worksheet(title="Telegram_Raw_Logs", rows="5000", cols="5")
         raw_ws.append_row(["Timestamp", "Channel Source", "Raw Message Text", "Parsing Status"])
         
-    return watchlist_ws, study_ws, raw_ws, watchlist_ws.row_values(1)
+    return sh, watchlist_ws, study_ws, raw_ws, watchlist_ws.row_values(1)
 
 async def run_telegram_listener():
     secrets = get_secrets()
@@ -119,7 +119,7 @@ async def run_telegram_listener():
     ]
     
     try:
-        watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
+        sh, watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
         print("✅ Core Infrastructure Automated Routers Armed.")
     except Exception as e:
         print(f"⚠️ Initialization issue: {e}")
@@ -132,7 +132,7 @@ async def run_telegram_listener():
 
             @client.on(events.NewMessage(chats=TRACKED_CHANNELS))
             async def handler(event):
-                nonlocal watchlist_ws, study_ws, raw_ws, sheet_headers
+                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers
                 raw_text = event.message.message
                 if not raw_text: return
                     
@@ -146,7 +146,7 @@ async def run_telegram_listener():
                 timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 try:
-                    if not watchlist_ws: watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
+                    if not watchlist_ws: sh, watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
                     
                     if source_name == "Beat The Street":
                         # ─── ADVANCED NEWS NLP ENGINE ───
@@ -186,26 +186,60 @@ async def run_telegram_listener():
                         t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
                         
                         if t_sec:
-                            auto_derived_type = "Equity" if "EQ" in str(t_exch) else "Option"
-                            new_row = [""] * len(sheet_headers)
-                            def fill(col, val): 
-                                if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
-                            fill("Trade Date", datetime.date.today().strftime("%Y-%m-%d"))
-                            fill("Idea Source (Chartink/Telegram/X/Self)", source_name)
-                            fill("Symbol / Asset", t_sym)
-                            fill("Trade Type (Eq/Option)", auto_derived_type)
-                            fill("Exchange", t_exch)
-                            fill("Security ID", t_sec)
-                            fill("Status (Watch/Active/Closed)", "Watchlist")
-                            fill("Entry CMP / Range", pre_parsed.get('entry', ''))
-                            fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
-                            fill("Target 1", pre_parsed.get('t1', ''))
-                            fill("Raw Tip Text", raw_text)
+                            # 1. DEDUPLICATION CHECK
+                            existing_records = watchlist_ws.get_all_records()
+                            existing_symbols = [str(r.get('Symbol / Asset', '')).upper().strip() for r in existing_records]
+                            existing_bases = [s.split('-')[0].split(' ')[0].strip() for s in existing_symbols]
                             
-                            watchlist_ws.append_row(new_row)
-                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Watchlist"])
+                            base_to_check = t_sym.split('-')[0].split(' ')[0].strip()
+                            
+                            if base_to_check in existing_bases:
+                                raw_ws.append_row([timestamp_str, source_name, raw_text, f"Skipped -> Duplicate ({base_to_check})"])
+                            else:
+                                # 2. FNO VS EQUITY ROUTER
+                                try: from core_engines.nlp_router import FNO_SYMBOLS
+                                except: FNO_SYMBOLS = []
+                                
+                                is_fno = base_to_check in FNO_SYMBOLS or pre_parsed.get('trade_type') == 'Option'
+                                contract_symbol = t_sym
+                                auto_derived_type = "Option" if is_fno else "Equity"
+                                final_exch = "NSE_FNO" if is_fno else t_exch
+                                
+                                if is_fno:
+                                    try:
+                                        settings_ws = sh.worksheet("Settings")
+                                        daily_token = settings_ws.acell('B2').value or ""
+                                    except:
+                                        daily_token = secrets.get("dhan", {}).get("access_token", "") if secrets else ""
+                                        
+                                    chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
+                                    is_put = "PE" in pre_parsed.get("symbol", "").upper() or "PUT" in raw_text.upper()
+                                    target_key = "best_pe" if is_put else "best_ce"
+                                    
+                                    if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
+                                        opt_suffix = "PE" if is_put else "CE"
+                                        contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
+
+                                new_row = [""] * len(sheet_headers)
+                                def fill(col, val): 
+                                    if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
+                                fill("Trade Date", datetime.date.today().strftime("%Y-%m-%d"))
+                                fill("Idea Source (Chartink/Telegram/X/Self)", source_name)
+                                fill("Symbol / Asset", contract_symbol)
+                                fill("Trade Type (Eq/Option)", auto_derived_type)
+                                fill("Exchange", final_exch)
+                                fill("Security ID", t_sec)
+                                fill("Status (Watch/Active/Closed)", "Watchlist")
+                                fill("Entry CMP / Range", pre_parsed.get('entry', ''))
+                                fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
+                                fill("Target 1", pre_parsed.get('t1', ''))
+                                fill("Raw Tip Text", raw_text)
+                                
+                                watchlist_ws.append_row(new_row)
+                                raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Watchlist"])
                         else:
-                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Pending Review"])
+                            # If no valid stock was found in the text
+                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Discussion"])
                             
                 except Exception as log_err: print(f"⚠️ Router execution anomaly: {log_err}")
 
