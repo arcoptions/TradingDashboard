@@ -53,6 +53,7 @@ def search_instruments(query):
     if not query or scrip_df.empty: return pd.DataFrame()
     cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper().strip()
     
+    # FIX: Prioritize an absolute exact symbol match first to prevent leaky extraction anomalies
     exact_match = scrip_df[scrip_df['SEM_TRADING_SYMBOL'] == cleaned_query]
     if not exact_match.empty:
         return exact_match.head(1)
@@ -77,6 +78,7 @@ def resolve_instrument(parsed_sym):
     parsed_sym = str(parsed_sym).strip().upper()
     if not parsed_sym or scrip_df.empty: return parsed_sym, "", "NSE_EQ"
     
+    # Strict single-token extraction validator
     eq_match = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == parsed_sym) & (scrip_df['SEM_SEGMENT'] == 'E')]
     if not eq_match.empty:
         return str(eq_match.iloc[0]['SEM_TRADING_SYMBOL']), str(eq_match.iloc[0]['SEM_SMST_SECURITY_ID']), "NSE_EQ"
@@ -160,6 +162,7 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
     return {}
 
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None):
+    """Executes live price sync and heals rows that are missing metadata."""
     try:
         daily_token = robust_api_call(settings_sheet.acell, 'B2').value
         if not daily_token: return "Missing dynamic authorization token"
@@ -176,6 +179,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             df_opt = pd.DataFrame(opt_data)
             if not df_opt.empty:
                 df_opt['_Sheet_Row'] = range(2, len(df_opt) + 2)
+                
+                # Filter for active watchlist rows
                 active_rows = df_opt[df_opt["Status (Watch/Active/Closed)"].isin(["Active", "Watchlist"])]
                 
                 exch_idx = sheet_headers.index("Exchange") + 1
@@ -187,6 +192,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     exch = str(row.get("Exchange", "")).strip()
                     sec_id = str(row.get("Security ID", "")).strip()
                     
+                    # ─── FIX: AUTO-HEAL BLANK ROWS LACKING METADATA ───
                     if not exch or not sec_id or sec_id in ["", "-", "None"]:
                         t_sym, t_sec, t_exch = resolve_instrument(symbol)
                         if t_sec:
@@ -200,6 +206,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                         payload[exch].append(int(sec_id))
                         row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
 
+        # Process automated scanner sheets
         scan_data = robust_api_call(scanner_sheet.get_all_records)
         if scan_data:
             df_scan = pd.DataFrame(scan_data)
@@ -214,6 +221,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                             row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
     except Exception as e: return f"Staging exception: {e}"
 
+    # Push healing updates back to Google Sheets instantly
     if sheet1_heal_updates:
         try: robust_api_call(worksheet.batch_update, sheet1_heal_updates)
         except: pass
@@ -230,7 +238,6 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     if response.status_code == 200:
         data = response.json().get("data", {})
         opt_updates, scan_updates, settings_updates = [], [], []
-        
         opt_col_idx = sheet_headers.index("Live Price") + 1
         scan_col_idx = scanner_headers.index("Live Price") + 1
         price_chg_col_idx = sheet_headers.index("Price Chg %") + 1 if "Price Chg %" in sheet_headers else None
@@ -259,6 +266,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             if opt_updates: robust_api_call(worksheet.batch_update, opt_updates)
             if scan_updates: robust_api_call(scanner_sheet.batch_update, scan_updates)
             
+            # ─── BATCH HEATMAP PAYLOAD ENGINE (Fixes the API spam) ───
             idx_item = data.get("IDX_I", {}).get("13", {})
             lp_n50 = float(idx_item.get("last_price", 0.0))
             if lp_n50 > 0:
@@ -267,6 +275,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 pct_n50 = (diff_n50 / ohlc_close) * 100 if ohlc_close > 0 else 0.0
                 settings_updates.append({'range': 'B10', 'values': [[f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}"]]})
                 
+            # Process remaining sector indices
             heatmap_arr = []
             idx_master = data.get("IDX_I", {})
             for name, info in SECTOR_SYMBOLS.items():
@@ -284,12 +293,13 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 settings_updates.append({'range': 'B12', 'values': [[json.dumps(heatmap_arr)]]})
             
             # Format strictly to Indian Standard Time (UTC+5:30)
-            ist_time = (datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b-%Y %I:%M %p")
+            ist_time = (datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b %I:%M %p")
             settings_updates.append({'range': 'B9', 'values': [[ist_time]]})
             
+            # Push the combined payload to Google once
             if settings_updates:
                 robust_api_call(settings_sheet.batch_update, settings_updates)
-                
+
         except Exception as e: return f"Sheets transmission exception: {e}"
         return "Success"
     return f"API Status Failure Code: {response.status_code}"
@@ -299,13 +309,26 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
     while True:
         sleep_timer = 60 
         now = datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        if now.weekday() < 5 and (9, 15) <= (now.hour, now.minute) <= (15, 30):
+        
+        # ─── UPDATED: Market hours now safely cover 9:00 AM to 3:30 PM ───
+        if now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 30):
             try:
                 credentials = Credentials.from_service_account_info(gcp_creds_dict, scopes=scopes)
                 gc = gspread.authorize(credentials)
                 sh = gc.open("Comprehensive Trading Tracker 2026")
-                execute_core_sync(sh.sheet1, sh.worksheet("Scanners"), sh.worksheet("Settings"), sh.sheet1.row_values(1), sh.worksheet("Scanners").row_values(1), background_client_id=dhan_client_id)
+                settings_ws = sh.worksheet("Settings")
+                
+                # ─── FIXED: Dynamically fetches user's chosen speed from Google Sheets ───
+                try:
+                    user_speed = robust_api_call(settings_ws.acell, 'B8').value
+                    if user_speed and str(user_speed).isdigit():
+                        sleep_timer = int(user_speed)
+                except:
+                    pass
+                
+                execute_core_sync(sh.sheet1, sh.worksheet("Scanners"), settings_ws, sh.sheet1.row_values(1), sh.worksheet("Scanners").row_values(1), background_client_id=dhan_client_id)
             except: pass 
+            
         time.sleep(sleep_timer)
 
 @st.cache_resource
