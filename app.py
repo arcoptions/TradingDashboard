@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import streamlit.components.v1 as components
 import requests
 import inspect
@@ -297,9 +297,18 @@ def main():
     with f_col3: selected_date_range = st.date_input("Filter by Date Range", value=(datetime.today().date(), datetime.today().date()))
     with f_col4:
         st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+        
+        # ─── UPDATED SYNC LIVE PRICES TO IST TIMESTAMP ───
         if st.button("Sync Live Prices", use_container_width=True): 
-            api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scanner_ws.row_values(1) if scanner_ws else [])
-            st.session_state.last_sync_time = datetime.now().strftime("%I:%M %p")
+            try:
+                scan_headers = scanner_ws.row_values(1) if scanner_ws else []
+            except Exception:
+                scan_headers = []
+            
+            api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scan_headers)
+            
+            # Strictly convert server UTC to IST
+            st.session_state.last_sync_time = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b %I:%M %p")
             st.rerun()
             
         if "last_sync_time" in st.session_state:

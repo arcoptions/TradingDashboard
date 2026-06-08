@@ -22,6 +22,23 @@ SECTOR_SYMBOLS = {
     "Media": {"symbol": "NIFTY MEDIA", "weight": 0.5}
 }
 
+def robust_api_call(func, *args, **kwargs):
+    """Wraps individual API requests with an exponential backoff loop to bypass 429 Quota errors."""
+    delay = 1.5
+    for attempt in range(4):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if ("429" in str(e) or "Quota" in str(e)) and attempt < 3:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            if attempt < 3:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise e
+
 @st.cache_data(ttl=43200)
 def get_dhan_scrip_master():
     try:
@@ -147,7 +164,7 @@ def get_option_chain_metrics(asset_symbol, daily_token=None):
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None):
     """Executes live price sync and heals rows that are missing metadata."""
     try:
-        daily_token = settings_sheet.acell('B2').value
+        daily_token = robust_api_call(settings_sheet.acell, 'B2').value
         if not daily_token: return "Missing dynamic authorization token"
     except Exception as e: return f"Database connection error: {e}"
     
@@ -157,7 +174,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     sheet1_heal_updates = []
     
     try:
-        opt_data = worksheet.get_all_records()
+        opt_data = robust_api_call(worksheet.get_all_records)
         if opt_data:
             df_opt = pd.DataFrame(opt_data)
             if not df_opt.empty:
@@ -190,7 +207,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                         row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
 
         # Process automated scanner sheets
-        scan_data = scanner_sheet.get_all_records()
+        scan_data = robust_api_call(scanner_sheet.get_all_records)
         if scan_data:
             df_scan = pd.DataFrame(scan_data)
             if not df_scan.empty:
@@ -206,7 +223,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
 
     # Push healing updates back to Google Sheets instantly
     if sheet1_heal_updates:
-        try: worksheet.batch_update(sheet1_heal_updates)
+        try: robust_api_call(worksheet.batch_update, sheet1_heal_updates)
         except: pass
 
     payload = {k: list(set(v)) for k, v in payload.items() if v}
@@ -220,7 +237,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     
     if response.status_code == 200:
         data = response.json().get("data", {})
-        opt_updates, scan_updates = [], []
+        opt_updates, scan_updates, settings_updates = [], [], []
         opt_col_idx = sheet_headers.index("Live Price") + 1
         scan_col_idx = scanner_headers.index("Live Price") + 1
         price_chg_col_idx = sheet_headers.index("Price Chg %") + 1 if "Price Chg %" in sheet_headers else None
@@ -246,17 +263,17 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 elif item["type"] == "scan": 
                     scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
         try:
-            if opt_updates: worksheet.batch_update(opt_updates)
-            if scan_updates: scanner_sheet.batch_update(scan_updates)
+            if opt_updates: robust_api_call(worksheet.batch_update, opt_updates)
+            if scan_updates: robust_api_call(scanner_sheet.batch_update, scan_updates)
             
-            # Index Heatmap Processing Log
+            # ─── BATCH HEATMAP PAYLOAD ENGINE (Fixes the API spam) ───
             idx_item = data.get("IDX_I", {}).get("13", {})
             lp_n50 = float(idx_item.get("last_price", 0.0))
             if lp_n50 > 0:
                 ohlc_close = float(idx_item.get("ohlc", {}).get("close", lp_n50))
                 diff_n50 = lp_n50 - ohlc_close
                 pct_n50 = (diff_n50 / ohlc_close) * 100 if ohlc_close > 0 else 0.0
-                settings_sheet.update_acell('B10', f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}")
+                settings_updates.append({'range': 'B10', 'values': [[f"{lp_n50:.2f},{diff_n50:.2f},{pct_n50:.2f}"]]})
                 
             # Process remaining sector indices
             heatmap_arr = []
@@ -271,8 +288,18 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                         n_pc = float(node.get("ohlc", {}).get("close", n_lp))
                         n_pct = round(((n_lp - n_pc) / n_pc * 100), 2) if n_pc > 0 else 0.0
                         heatmap_arr.append({"sector": name, "change": n_pct, "weight": info["weight"]})
-            if heatmap_arr: settings_sheet.update_acell('B12', json.dumps(heatmap_arr))
-            settings_sheet.update_acell('B9', (datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b %I:%M %p"))
+            
+            if heatmap_arr: 
+                settings_updates.append({'range': 'B12', 'values': [[json.dumps(heatmap_arr)]]})
+            
+            # Format strictly to Indian Standard Time (UTC+5:30)
+            ist_time = (datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%d-%b %I:%M %p")
+            settings_updates.append({'range': 'B9', 'values': [[ist_time]]})
+            
+            # Push the combined payload to Google once
+            if settings_updates:
+                robust_api_call(settings_sheet.batch_update, settings_updates)
+
         except Exception as e: return f"Sheets transmission exception: {e}"
         return "Success"
     return f"API Status Failure Code: {response.status_code}"
