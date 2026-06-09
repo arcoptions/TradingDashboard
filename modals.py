@@ -4,11 +4,10 @@ import re
 from datetime import datetime
 import analytics
 import broker_api as api
-from integrations.google_sheets import fetch_dataframe_safe
+from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_dict
 
 @st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal(worksheet, sheet_headers):
-    # ─── FAILSAFE FRAGMENT STATE INITIALIZATION ───
     if "qp_key" not in st.session_state: 
         st.session_state.qp_key = 0
 
@@ -118,7 +117,6 @@ def trade_entry_modal(worksheet, sheet_headers):
             unique_lines = list(dict.fromkeys(raw_lines))
             rows_to_insert = []
             
-            # --- Duplicate Check Preparations ---
             try: existing_records = worksheet.get_all_records()
             except: existing_records = []
             existing_symbols = [str(r.get('Symbol / Asset', '')).upper().strip() for r in existing_records]
@@ -126,8 +124,8 @@ def trade_entry_modal(worksheet, sheet_headers):
             
             try: from core_engines.nlp_router import FNO_SYMBOLS
             except: FNO_SYMBOLS = []
-            from integrations.google_sheets import fetch_settings_cell
-            daily_token = fetch_settings_cell('B2') or ""
+            
+            daily_token = fetch_settings_dict().get("Dhan Access Token", "")
             
             for line in unique_lines:
                 p_data = analytics.parse_telegram_tip(line)
@@ -135,7 +133,6 @@ def trade_entry_modal(worksheet, sheet_headers):
                 t_sym, t_sec, t_exch = api.resolve_instrument(p_data['symbol'])
                 if not t_sec: continue
                 
-                # --- Duplicate Prevention Engine ---
                 base_to_check = t_sym.split('-')[0].split(' ')[0].strip()
                 if base_to_check in existing_bases: continue
                 
@@ -144,9 +141,7 @@ def trade_entry_modal(worksheet, sheet_headers):
                 auto_derived_type = "Option" if is_fno else "Equity"
                 final_exch = "NSE_FNO" if is_fno else t_exch
                 
-                # --- Auto-Options Assigner ---
                 if is_fno:
-                    # ─── FIXED: Only overwrite if no strike was identified by the parser ───
                     if " CE" not in p_data.get("symbol", "").upper() and " PE" not in p_data.get("symbol", "").upper():
                         chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
                         is_put = "PE" in p_data.get("symbol", "").upper() or "PUT" in line.upper()
@@ -157,7 +152,7 @@ def trade_entry_modal(worksheet, sheet_headers):
 
                 row = [""] * len(sheet_headers)
                 def set_v(col_name, val):
-                    if col_name in sheet_headers: row[sheet_headers.index(col_name)] = str(val)
+                    if col_name in sheet_headers: row[sheet_headers.index(col_name)] = val
                 
                 set_v("Trade Date", datetime.today().strftime("%Y-%m-%d"))
                 set_v("Idea Source (Chartink/Telegram/X/Self)", final_bulk_source)
@@ -176,7 +171,7 @@ def trade_entry_modal(worksheet, sheet_headers):
                 set_v("Raw Tip Text", line)
                 
                 rows_to_insert.append(row)
-                existing_bases.append(base_to_check) # Prevent duplicates within the same batch upload!
+                existing_bases.append(base_to_check)
                 
             if rows_to_insert:
                 worksheet.append_rows(rows_to_insert)
