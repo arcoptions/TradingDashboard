@@ -9,7 +9,8 @@ def parse_telegram_tip(text):
     clean_text = " ".join([line.strip() for line in text.split('\n') if line.strip()])
     
     # 1. Distinguish between Derivative Contracts vs Spot Equity
-    option_match = re.search(r'([A-Z\&]+)\s*(\d+)\s*(ce|pe|call|put)', clean_text, re.IGNORECASE)
+    # FIXED: Bulletproof regex to handle optional expiry months, hyphens, and inconsistent spaces!
+    option_match = re.search(r'([A-Z\&]+)[\s\-\_]*(?:(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z0-9]*[\s\-\_]*)?(\d+)[\s\-\_]*(ce|pe|call|put)', clean_text, re.IGNORECASE)
     if option_match:
         opt_type = option_match.group(3).upper()
         if opt_type == 'CALL': opt_type = 'CE'
