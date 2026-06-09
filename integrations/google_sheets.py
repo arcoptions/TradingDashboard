@@ -18,7 +18,7 @@ def get_secrets():
             with open(".streamlit/secrets.toml", "r") as f: return toml.load(f)
         return None
 
-@st.cache_resource(ttl=3000) # Re-authenticates every 50 minutes to avoid the strict 1-hour Google OAuth expiry
+@st.cache_resource(ttl=3000) 
 def get_gspread_client():
     secrets = get_secrets()
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -34,28 +34,25 @@ def get_gspread_client():
     return gspread.authorize(credentials)
 
 def execute_with_quota_retry(func, *args, **kwargs):
-    """Wraps core sheet transactions in an exponential backoff circuit breaker."""
     max_retries = 4
     delay = 1.5
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
         except APIError as e:
-            # Catch standard 429 quota blockades and pause the thread safely
             if ("429" in str(e) or "Quota" in str(e) or (hasattr(e, 'response') and e.response is not None and e.response.status_code == 429)) and attempt < max_retries - 1:
                 time.sleep(delay)
                 delay *= 2.0
                 continue
             raise e
         except Exception as e:
-            # If a generic network failure occurs, try again before collapsing
             if attempt < max_retries - 1:
                 time.sleep(delay)
                 delay *= 2.0
                 continue
             raise e
 
-@st.cache_resource(ttl=600) # Holds the spreadsheet metadata for 10 minutes to prevent 429 Quota errors
+@st.cache_resource(ttl=600) 
 def get_spreadsheet():
     gc = get_gspread_client()
     return execute_with_quota_retry(gc.open, "Comprehensive Trading Tracker 2026")
@@ -84,7 +81,6 @@ def init_sheet_connection():
         
     return sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws
 
-# CACHE HELD FOR 1 HOUR: Only resets when a CRUD operation triggers .clear()
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_dataframe_safe(sheet_title, is_sheet1=False):
     max_retries = 3
@@ -96,7 +92,6 @@ def fetch_dataframe_safe(sheet_title, is_sheet1=False):
             
             if len(vals) > 1:
                 df = pd.DataFrame(vals[1:], columns=vals[0])
-                # Filter out completely empty rows
                 return df[df[df.columns[0]].astype(str).str.strip() != ""]
             return pd.DataFrame()
         except Exception:
@@ -105,13 +100,15 @@ def fetch_dataframe_safe(sheet_title, is_sheet1=False):
                 continue
             return pd.DataFrame()
 
-# CACHE HELD FOR 1 HOUR: Protects the sidebar from constantly pinging the API
+# --- FIXED: Downloads the entire Settings page in 1 API Call instead of spamming 3 ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_settings_cell(cell_id):
+def fetch_settings_dict():
     try:
         sh = get_spreadsheet()
         settings_ws = execute_with_quota_retry(sh.worksheet, "Settings")
         if settings_ws:
-            return execute_with_quota_retry(settings_ws.acell, cell_id).value
+            vals = execute_with_quota_retry(settings_ws.get_all_values)
+            if len(vals) > 0:
+                return {str(row[0]).strip(): str(row[1]).strip() for row in vals if len(row) >= 2}
     except: pass
-    return None
+    return {}
