@@ -2,6 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import streamlit as st
 import broker_api as api
+from integrations.google_sheets import fetch_dataframe_safe
 
 @st.cache_resource
 def init_db():
@@ -65,6 +66,8 @@ def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
         edited_rows = editor_state.get("edited_rows", {})
+        made_changes = False
+        
         for idx, changes in list(edited_rows.items()):
             if "Journal" in changes and changes["Journal"] is True:
                 sym = df_filtered.iloc[idx]['Symbol / Asset']
@@ -79,6 +82,7 @@ def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
             rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
             for r in rows_to_delete: worksheet.delete_rows(r)
+            made_changes = True
             
         if editor_state.get("edited_rows"):
             for idx, changes in editor_state["edited_rows"].items():
@@ -93,15 +97,23 @@ def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
                         else:
                             col_idx = sheet_headers.index(col_name) + 1
                             worksheet.update_cell(sheet_row, col_idx, str(new_val))
+            made_changes = True
+            
+        # UI RESYNC HOOK - Forces streamit to grab the fresh edits from Google Sheets!
+        if made_changes:
+            fetch_dataframe_safe.clear()
 
 def run_scanner_sync(df_filtered, state_key, scanner_sheet, scanner_headers):
     if state_key in st.session_state and not df_filtered.empty:
         editor_state = st.session_state[state_key]
         deleted_indices = editor_state.get("deleted_rows", [])
+        made_changes = False
+        
         if deleted_indices:
             rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
             for r in rows_to_delete: scanner_sheet.delete_rows(r)
+            made_changes = True
             
         if editor_state.get("edited_rows"):
             for idx, changes in editor_state["edited_rows"].items():
@@ -110,3 +122,8 @@ def run_scanner_sync(df_filtered, state_key, scanner_sheet, scanner_headers):
                     if col_name in scanner_headers:
                         col_idx = scanner_headers.index(col_name) + 1
                         scanner_sheet.update_cell(sheet_row, col_idx, str(new_val))
+            made_changes = True
+            
+        # UI RESYNC HOOK
+        if made_changes:
+            fetch_dataframe_safe.clear()
