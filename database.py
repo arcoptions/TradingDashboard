@@ -2,50 +2,52 @@ import gspread
 from google.oauth2.service_account import Credentials
 import streamlit as st
 import broker_api as api
-from integrations.google_sheets import fetch_dataframe_safe
+from integrations.google_sheets import fetch_dataframe_safe, execute_with_quota_retry
 
 @st.cache_resource
 def init_db():
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     gc = gspread.authorize(credentials)
-    sh = gc.open("Comprehensive Trading Tracker 2026")
+    
+    # WRAPPED IN QUOTA RETRY: Safe connection opening
+    sh = execute_with_quota_retry(gc.open, "Comprehensive Trading Tracker 2026")
     
     worksheet = sh.sheet1
-    sheet_headers = worksheet.row_values(1)
+    sheet_headers = execute_with_quota_retry(worksheet.row_values, 1)
     
     # --- ADDED NEW OI TRACKING COLUMNS TO SCHEMA ---
     new_cols = ["Live Price", "Exit Price", "Notes", "Time Frame", "Setup Rating", "Raw Tip Text", "Price Chg %", "OI Chg %"]
     for col in new_cols:
         if col not in sheet_headers:
-            worksheet.update_cell(1, len(sheet_headers) + 1, col)
+            execute_with_quota_retry(worksheet.update_cell, 1, len(sheet_headers) + 1, col)
             sheet_headers.append(col)
             
     worksheet_list = [ws.title for ws in sh.worksheets()]
     if "Scanners" in worksheet_list:
-        scanner_sheet = sh.worksheet("Scanners")
+        scanner_sheet = execute_with_quota_retry(sh.worksheet, "Scanners")
     else:
-        scanner_sheet = sh.add_worksheet(title="Scanners", rows="1000", cols="10")
-        scanner_sheet.append_row(["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "Live Price"])
+        scanner_sheet = execute_with_quota_retry(sh.add_worksheet, title="Scanners", rows="1000", cols="10")
+        execute_with_quota_retry(scanner_sheet.append_row, ["Date Added", "Scanner", "Symbol", "Trigger Price", "Trigger Time", "Status", "Notes / Analysis", "Live Price"])
         
-    scanner_headers = scanner_sheet.row_values(1)
+    scanner_headers = execute_with_quota_retry(scanner_sheet.row_values, 1)
     if "Live Price" not in scanner_headers:
-        scanner_sheet.update_cell(1, len(scanner_headers) + 1, "Live Price")
+        execute_with_quota_retry(scanner_sheet.update_cell, 1, len(scanner_headers) + 1, "Live Price")
         scanner_headers.append("Live Price")
         
     if "Settings" in worksheet_list:
-        settings_sheet = sh.worksheet("Settings")
+        settings_sheet = execute_with_quota_retry(sh.worksheet, "Settings")
         
         if settings_sheet.row_count < 15:
-            settings_sheet.resize(rows=15)
+            execute_with_quota_retry(settings_sheet.resize, rows=15)
             
-        val_a12 = settings_sheet.acell('A12').value
+        val_a12 = execute_with_quota_retry(settings_sheet.acell, 'A12').value
         if not val_a12 or str(val_a12).strip() == "":
-            settings_sheet.update_acell('A12', "Sector Heatmap JSON")
-            settings_sheet.update_acell('B12', "-")
+            execute_with_quota_retry(settings_sheet.update_acell, 'A12', "Sector Heatmap JSON")
+            execute_with_quota_retry(settings_sheet.update_acell, 'B12', "-")
     else:
-        settings_sheet = sh.add_worksheet(title="Settings", rows="15", cols="2")
-        settings_sheet.update([
+        settings_sheet = execute_with_quota_retry(sh.add_worksheet, title="Settings", rows="15", cols="2")
+        execute_with_quota_retry(settings_sheet.update, [
             ["Key", "Value"], 
             ["Dhan Access Token", ""], 
             ["Last Synced (Old)", "-"], 
@@ -81,7 +83,8 @@ def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
         if deleted_indices:
             rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
-            for r in rows_to_delete: worksheet.delete_rows(r)
+            for r in rows_to_delete: 
+                execute_with_quota_retry(worksheet.delete_rows, r)
             made_changes = True
             
         if editor_state.get("edited_rows"):
@@ -91,12 +94,12 @@ def run_background_sync(df_filtered, state_key, worksheet, sheet_headers):
                     if col_name in sheet_headers:
                         if col_name == "Symbol / Asset":
                             t_sym, t_sec, t_exch = api.resolve_instrument(str(new_val))
-                            worksheet.update_cell(sheet_row, sheet_headers.index("Symbol / Asset") + 1, t_sym)
-                            worksheet.update_cell(sheet_row, sheet_headers.index("Security ID") + 1, t_sec)
-                            worksheet.update_cell(sheet_row, sheet_headers.index("Exchange") + 1, t_exch)
+                            execute_with_quota_retry(worksheet.update_cell, sheet_row, sheet_headers.index("Symbol / Asset") + 1, t_sym)
+                            execute_with_quota_retry(worksheet.update_cell, sheet_row, sheet_headers.index("Security ID") + 1, t_sec)
+                            execute_with_quota_retry(worksheet.update_cell, sheet_row, sheet_headers.index("Exchange") + 1, t_exch)
                         else:
                             col_idx = sheet_headers.index(col_name) + 1
-                            worksheet.update_cell(sheet_row, col_idx, str(new_val))
+                            execute_with_quota_retry(worksheet.update_cell, sheet_row, col_idx, str(new_val))
             made_changes = True
             
         # UI RESYNC HOOK - Forces streamit to grab the fresh edits from Google Sheets!
@@ -112,7 +115,8 @@ def run_scanner_sync(df_filtered, state_key, scanner_sheet, scanner_headers):
         if deleted_indices:
             rows_to_delete = df_filtered.iloc[deleted_indices]['_Sheet_Row'].tolist()
             rows_to_delete.sort(reverse=True)
-            for r in rows_to_delete: scanner_sheet.delete_rows(r)
+            for r in rows_to_delete: 
+                execute_with_quota_retry(scanner_sheet.delete_rows, r)
             made_changes = True
             
         if editor_state.get("edited_rows"):
@@ -121,7 +125,7 @@ def run_scanner_sync(df_filtered, state_key, scanner_sheet, scanner_headers):
                 for col_name, new_val in changes.items():
                     if col_name in scanner_headers:
                         col_idx = scanner_headers.index(col_name) + 1
-                        scanner_sheet.update_cell(sheet_row, col_idx, str(new_val))
+                        execute_with_quota_retry(scanner_sheet.update_cell, sheet_row, col_idx, str(new_val))
             made_changes = True
             
         # UI RESYNC HOOK
