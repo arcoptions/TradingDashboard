@@ -166,6 +166,12 @@ def render_top_ticker_tape():
 def main():
     try:
         sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
+        
+        # ─── FIXED: Daemon Trigger Reactivated! ───
+        sheet_headers = watchlist_ws.row_values(1) if watchlist_ws else []
+        scanner_headers = scanner_ws.row_values(1) if scanner_ws else []
+        api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scanner_headers)
+        
     except Exception as e:
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
         return
@@ -188,7 +194,6 @@ def main():
         st.divider()
         
         with st.expander("API & Sync Setup", expanded=False):
-            # FIXED QUOTA BUG: Fetch from cache instead of querying Google on every UI click
             try: 
                 saved_token = fetch_settings_cell('B2') or ""
                 current_sync = fetch_settings_cell('B8') or "60"
@@ -204,7 +209,7 @@ def main():
             if st.button("Save Settings", use_container_width=True):
                 settings_ws.update_acell('B2', new_token)
                 settings_ws.update_acell('B8', rev_mapping[selected_sync])
-                fetch_settings_cell.clear() # Invalidate cache to fetch new settings
+                fetch_settings_cell.clear() 
                 st.success("Settings Locked.")
                 st.rerun()
 
@@ -277,7 +282,6 @@ def main():
             full_mock_row["Entry CMP / Range"] = trade_data["Entry CMP / Range"]
             full_mock_row["_Sheet_Row"] = -1
             
-            # Rendering Inspector directly
             trade_inspector.render(full_mock_row, intel_pool, saved_token, watchlist_ws, sheet_headers)
         
         return
@@ -299,7 +303,6 @@ def main():
     with f_col4:
         st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
         
-        # ─── UPDATED MANUAL SYNC ROUTER ───
         if st.button("Sync Live Prices", use_container_width=True): 
             try:
                 scan_headers = scanner_ws.row_values(1) if scanner_ws else []
@@ -314,7 +317,6 @@ def main():
             else:
                 st.error(f"Sync issue: {res}")
             
-        # Extracts global IST Sync timestamp directly from Database Settings B9
         global_sync_time = fetch_settings_cell('B9')
         if global_sync_time:
             st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{global_sync_time}</b></div>", unsafe_allow_html=True)
