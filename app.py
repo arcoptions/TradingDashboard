@@ -9,7 +9,7 @@ import json
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_cell
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_dict
 from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
@@ -167,7 +167,6 @@ def main():
     try:
         sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
         
-        # ─── FIXED: Daemon Trigger Reactivated! ───
         sheet_headers = watchlist_ws.row_values(1) if watchlist_ws else []
         scanner_headers = scanner_ws.row_values(1) if scanner_ws else []
         api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scanner_headers)
@@ -195,8 +194,9 @@ def main():
         
         with st.expander("API & Sync Setup", expanded=False):
             try: 
-                saved_token = fetch_settings_cell('B2') or ""
-                current_sync = fetch_settings_cell('B8') or "60"
+                settings = fetch_settings_dict()
+                saved_token = settings.get("Dhan Access Token", "")
+                current_sync = settings.get("Sync Interval", "60")
             except: 
                 saved_token, current_sync = "", "60"
                 
@@ -209,7 +209,7 @@ def main():
             if st.button("Save Settings", use_container_width=True):
                 settings_ws.update_acell('B2', new_token)
                 settings_ws.update_acell('B8', rev_mapping[selected_sync])
-                fetch_settings_cell.clear() 
+                fetch_settings_dict.clear() 
                 st.success("Settings Locked.")
                 st.rerun()
 
@@ -257,7 +257,7 @@ def main():
     viewing_scanner = st.session_state.get("viewing_scanner_row_data")
 
     if viewing_trade or viewing_scanner:
-        try: saved_token = fetch_settings_cell('B2') or ""
+        try: saved_token = fetch_settings_dict().get("Dhan Access Token", "")
         except: saved_token = ""
         
         if viewing_trade:
@@ -312,13 +312,13 @@ def main():
             res = api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scan_headers)
             if res == "Success":
                 fetch_dataframe_safe.clear()
-                fetch_settings_cell.clear()
+                fetch_settings_dict.clear()
                 st.rerun()
             else:
                 st.error(f"Sync issue: {res}")
             
-        global_sync_time = fetch_settings_cell('B9')
-        if global_sync_time:
+        global_sync_time = fetch_settings_dict().get("New Timestamp", "-")
+        if global_sync_time and global_sync_time != "-":
             st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{global_sync_time}</b></div>", unsafe_allow_html=True)
 
     filtered_df = df_watchlist.copy()
