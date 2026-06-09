@@ -125,6 +125,10 @@ async def run_telegram_listener():
         print(f"⚠️ Initialization issue: {e}")
         return
 
+    # FIXED: Caching memory so Telegram Worker stops spamming API limit!
+    cached_bases = []
+    last_cache_time = 0
+
     while True:
         try:
             client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
@@ -132,7 +136,7 @@ async def run_telegram_listener():
 
             @client.on(events.NewMessage(chats=TRACKED_CHANNELS))
             async def handler(event):
-                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers
+                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers, cached_bases, last_cache_time
                 raw_text = event.message.message
                 if not raw_text: return
                     
@@ -154,7 +158,6 @@ async def run_telegram_listener():
                         text_norm = text_upper.replace(" ", "")
                         matched_symbol = ""
                         
-                        # 1. Search custom aliases (e.g. OIL INDIA)
                         for master_ticker, aliases in ASSET_ALIASES.items():
                             for alias in aliases:
                                 pattern = r'\b' + re.escape(alias.upper()) + r'\b'
@@ -163,7 +166,6 @@ async def run_telegram_listener():
                                     break
                             if matched_symbol: break
                                 
-                        # 2. Search index dictionary
                         if not matched_symbol:
                             for index_asset in SECTOR_MAP_KEYS:
                                 pattern = r'\b' + re.escape(index_asset.upper()) + r'\b'
@@ -186,17 +188,20 @@ async def run_telegram_listener():
                         t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
                         
                         if t_sec:
-                            # 1. DEDUPLICATION CHECK
-                            existing_records = watchlist_ws.get_all_records()
-                            existing_symbols = [str(r.get('Symbol / Asset', '')).upper().strip() for r in existing_records]
-                            existing_bases = [s.split('-')[0].split(' ')[0].strip() for s in existing_symbols]
-                            
+                            # MEMORY CACHE TO AVOID QUOTA SPAM
+                            current_time = time.time()
+                            if not cached_bases or current_time - last_cache_time > 3600:
+                                try:
+                                    existing_records = watchlist_ws.get_all_records()
+                                    cached_bases = [str(r.get('Symbol / Asset', '')).upper().split('-')[0].split(' ')[0].strip() for r in existing_records]
+                                    last_cache_time = current_time
+                                except: cached_bases = []
+
                             base_to_check = t_sym.split('-')[0].split(' ')[0].strip()
                             
-                            if base_to_check in existing_bases:
+                            if base_to_check in cached_bases:
                                 raw_ws.append_row([timestamp_str, source_name, raw_text, f"Skipped -> Duplicate ({base_to_check})"])
                             else:
-                                # 2. FNO VS EQUITY ROUTER
                                 try: from core_engines.nlp_router import FNO_SYMBOLS
                                 except: FNO_SYMBOLS = []
                                 
@@ -206,19 +211,28 @@ async def run_telegram_listener():
                                 final_exch = "NSE_FNO" if is_fno else t_exch
                                 
                                 if is_fno:
-                                    try:
-                                        settings_ws = sh.worksheet("Settings")
-                                        daily_token = settings_ws.acell('B2').value or ""
-                                    except:
-                                        daily_token = secrets.get("dhan", {}).get("access_token", "") if secrets else ""
+                                    if " CE" not in pre_parsed.get("symbol", "").upper() and " PE" not in pre_parsed.get("symbol", "").upper():
+                                        try:
+                                            settings_ws = sh.worksheet("Settings")
+                                            vals = settings_ws.get_all_values()
+                                            s_dict = {str(row[0]).strip(): str(row[1]).strip() for row in vals if len(row)>=2}
+                                            daily_token = s_dict.get("Dhan Access Token", "")
+                                        except:
+                                            daily_token = secrets.get("dhan", {}).get("access_token", "") if secrets else ""
+                                            
+                                        chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
+                                        is_put = "PE" in pre_parsed.get("symbol", "").upper() or "PUT" in raw_text.upper()
+                                        target_key = "best_pe" if is_put else "best_ce"
                                         
-                                    chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
-                                    is_put = "PE" in pre_parsed.get("symbol", "").upper() or "PUT" in raw_text.upper()
-                                    target_key = "best_pe" if is_put else "best_ce"
-                                    
-                                    if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
-                                        opt_suffix = "PE" if is_put else "CE"
-                                        contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
+                                        if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
+                                            opt_suffix = "PE" if is_put else "CE"
+                                            suggested_query = f"{base_to_check} {chain_data[target_key]} {opt_suffix}"
+                                            s_sym, s_sec, s_exch = api.resolve_instrument(suggested_query)
+                                            if s_sec:
+                                                contract_symbol = s_sym
+                                                t_sec = s_sec
+                                            else:
+                                                contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
 
                                 new_row = [""] * len(sheet_headers)
                                 def fill(col, val): 
@@ -236,9 +250,9 @@ async def run_telegram_listener():
                                 fill("Raw Tip Text", raw_text)
                                 
                                 watchlist_ws.append_row(new_row)
+                                cached_bases.append(base_to_check)
                                 raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Watchlist"])
                         else:
-                            # If no valid stock was found in the text
                             raw_ws.append_row([timestamp_str, source_name, raw_text, "Discussion"])
                             
                 except Exception as log_err: print(f"⚠️ Router execution anomaly: {log_err}")
