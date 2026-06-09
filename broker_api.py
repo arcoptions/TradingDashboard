@@ -206,19 +206,20 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                         payload[exch].append(int(sec_id))
                         row_map.append({"type": "opt", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
 
-        # Process automated scanner sheets
-        scan_data = robust_api_call(scanner_sheet.get_all_records)
-        if scan_data:
-            df_scan = pd.DataFrame(scan_data)
-            if not df_scan.empty:
-                df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
-                for _, row in df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])].iterrows():
-                    symbol = str(row.get("Symbol", "")).strip()
-                    if symbol:
-                        _, sec_id, exch = resolve_instrument(symbol)
-                        if exch in payload and str(sec_id).isdigit():
-                            payload[exch].append(int(sec_id))
-                            row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
+        # Process automated scanner sheets safely
+        if scanner_sheet:
+            scan_data = robust_api_call(scanner_sheet.get_all_records)
+            if scan_data:
+                df_scan = pd.DataFrame(scan_data)
+                if not df_scan.empty:
+                    df_scan['_Sheet_Row'] = range(2, len(df_scan) + 2)
+                    for _, row in df_scan[df_scan["Status"].isin(["Monitoring", "Moved to Watchlist"])].iterrows():
+                        symbol = str(row.get("Symbol", "")).strip()
+                        if symbol:
+                            _, sec_id, exch = resolve_instrument(symbol)
+                            if exch in payload and str(sec_id).isdigit():
+                                payload[exch].append(int(sec_id))
+                                row_map.append({"type": "scan", "sheet_row": row['_Sheet_Row'], "exch": exch, "sec_id": str(sec_id)})
     except Exception as e: return f"Staging exception: {e}"
 
     # Push healing updates back to Google Sheets instantly
@@ -239,7 +240,8 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
         data = response.json().get("data", {})
         opt_updates, scan_updates, settings_updates = [], [], []
         opt_col_idx = sheet_headers.index("Live Price") + 1
-        scan_col_idx = scanner_headers.index("Live Price") + 1
+        
+        scan_col_idx = scanner_headers.index("Live Price") + 1 if scanner_headers and "Live Price" in scanner_headers else None
         price_chg_col_idx = sheet_headers.index("Price Chg %") + 1 if "Price Chg %" in sheet_headers else None
         oi_chg_col_idx = sheet_headers.index("OI Chg %") + 1 if "OI Chg %" in sheet_headers else None
         
@@ -260,11 +262,11 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                     if price_chg_col_idx and oi_chg_col_idx:
                         opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], price_chg_col_idx), 'values': [[str(price_chg)]]})
                         opt_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], oi_chg_col_idx), 'values': [[str(oi_chg)]]})
-                elif item["type"] == "scan": 
+                elif item["type"] == "scan" and scan_col_idx: 
                     scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
         try:
             if opt_updates: robust_api_call(worksheet.batch_update, opt_updates)
-            if scan_updates: robust_api_call(scanner_sheet.batch_update, scan_updates)
+            if scan_updates and scanner_sheet: robust_api_call(scanner_sheet.batch_update, scan_updates)
             
             # ─── BATCH HEATMAP PAYLOAD ENGINE (Fixes the API spam) ───
             idx_item = data.get("IDX_I", {}).get("13", {})
@@ -326,8 +328,19 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                 except:
                     pass
                 
-                execute_core_sync(sh.sheet1, sh.worksheet("Scanners"), settings_ws, sh.sheet1.row_values(1), sh.worksheet("Scanners").row_values(1), background_client_id=dhan_client_id)
-            except: pass 
+                try: scanner_ws = sh.worksheet("Scanners")
+                except: scanner_ws = None
+                
+                try: sheet1_headers = sh.sheet1.row_values(1)
+                except: sheet1_headers = []
+                
+                try: scan_headers = scanner_ws.row_values(1) if scanner_ws else []
+                except: scan_headers = []
+
+                res = execute_core_sync(sh.sheet1, scanner_ws, settings_ws, sheet1_headers, scan_headers, background_client_id=dhan_client_id)
+                print(f"Background Sync Output: {res}")
+            except Exception as loop_err: 
+                print(f"Daemon Background Sync Aborted Safely: {loop_err}")
             
         time.sleep(sleep_timer)
 
