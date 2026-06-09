@@ -112,3 +112,14 @@ def fetch_settings_dict():
                 return {str(row[0]).strip(): str(row[1]).strip() for row in vals if len(row) >= 2}
     except: pass
     return {}
+
+# --- RESTORED: Backwards compatibility for older UI tabs (Cached to prevent Quota Limits) ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_settings_cell(cell_id):
+    try:
+        sh = get_spreadsheet()
+        settings_ws = execute_with_quota_retry(sh.worksheet, "Settings")
+        if settings_ws:
+            return execute_with_quota_retry(settings_ws.acell, cell_id).value
+    except: pass
+    return None
