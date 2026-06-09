@@ -9,6 +9,7 @@ import json
 import datetime
 from datetime import timezone, timedelta
 from streamlit.runtime.scriptrunner import add_script_run_ctx
+from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_cell
 
 SECTOR_SYMBOLS = {
     "Financial Services": {"symbol": "NIFTY FIN SERVICE", "weight": 35.0},
@@ -301,6 +302,10 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             # Push the combined payload to Google once
             if settings_updates:
                 robust_api_call(settings_sheet.batch_update, settings_updates)
+
+            # CLEAR CACHE SO UI UPDATES IMMEDIATELY WITH NEW PRICES
+            fetch_dataframe_safe.clear()
+            fetch_settings_cell.clear()
 
         except Exception as e: return f"Sheets transmission exception: {e}"
         return "Success"
