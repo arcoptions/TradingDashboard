@@ -33,8 +33,8 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     # 1. BACKGROUND ENGINE: AUTOMATED DATA ROUTING MATRIX
     daily_token = ""
     try:
-        from integrations.google_sheets import fetch_settings_cell
-        daily_token = fetch_settings_cell('B2') or ""
+        from integrations.google_sheets import fetch_settings_dict
+        daily_token = fetch_settings_dict().get("Dhan Access Token", "")
     except: pass
 
     # A. Process Pending Telegram Logs
@@ -193,7 +193,6 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     df_master = pd.DataFrame(normalized_list)
     df_date_filtered = df_master[df_master["Log_Date"] == selected_date]
     
-    # Render Source Filter dynamically based on matching date results
     with col_f2:
         available_sources = sorted(list(df_date_filtered["Source"].dropna().unique())) if not df_date_filtered.empty else []
         selected_sources = st.multiselect("Filter Logs by Source Handle", options=available_sources, default=[])
