@@ -26,7 +26,6 @@ def render_tv_chart(symbol):
     components.html(html, height=420)
 
 def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_headers):
-    # Default to -1 if missing, protecting scanner staging inspections
     sheet_row_id = int(trade_data.get('_Sheet_Row', -1))
     asset_symbol = trade_data.get('Symbol / Asset', 'Unknown Asset')
     base_ticker_raw = str(trade_data.get("Base Asset", str(asset_symbol).split('-')[0].strip())).upper()
@@ -38,7 +37,6 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
 
     head_c1, head_c2 = st.columns([2.5, 7.5], vertical_alignment="center")
     with head_c1:
-        # THE UNIFIED BACK BUTTON
         if st.button("⬅️ Back to Terminal", key="terminal_escape_btn", use_container_width=True): 
             st.session_state.viewing_trade = None
             st.session_state.viewing_trade_row = None
@@ -153,7 +151,6 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
             render_tv_chart(sym_key)
     
     with tab_psych_exec:
-        # Check if this is an unpromoted scanner row (-1)
         if sheet_row_id == -1:
             st.info("Scanner target staged for inspection. Promote this asset to your Watchlist to enable trade logging and position management.")
         else:
@@ -202,3 +199,9 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                             primary_watchlist_ws.update_cell(sheet_row_id, sheet_headers.index("Exchange") + 1, "NSE_EQ" if str(fix_row['SEM_EXM_EXCH_ID']) == "NSE" and str(fix_row['SEM_SEGMENT']) == "E" else "NSE_FNO")
                             fetch_dataframe_safe.clear()
                             st.rerun()
+
+    if st.button("Unlink Review Canvas", use_container_width=True):
+        st.session_state.viewing_trade = None
+        st.session_state.viewing_trade_row = None
+        st.session_state.viewing_scanner_row_data = None
+        st.rerun()
