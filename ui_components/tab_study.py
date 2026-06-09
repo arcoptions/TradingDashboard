@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime
-from integrations.google_sheets import fetch_dataframe_safe, init_sheet_connection, fetch_settings_cell
+from integrations.google_sheets import fetch_dataframe_safe, init_sheet_connection, fetch_settings_dict
 import broker_api as api
 from core_engines.nlp_router import FNO_SYMBOLS
 import time
@@ -82,7 +82,11 @@ def render(*args, **kwargs):
             sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
             main_headers = watchlist_ws.row_values(1)
             bulk_watchlist_rows = []
-            daily_token = fetch_settings_cell('B2') or ""
+            
+            try:
+                daily_token = fetch_settings_dict().get("Dhan Access Token", "")
+            except: 
+                daily_token = ""
             
             for _, row in selected_rows.iterrows():
                 sym = str(row['Asset Ticker']).upper()
