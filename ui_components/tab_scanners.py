@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import database as db
 import analytics
-from integrations.google_sheets import fetch_dataframe_safe, init_sheet_connection, fetch_settings_cell
+from integrations.google_sheets import fetch_dataframe_safe, init_sheet_connection, fetch_settings_dict
 import broker_api as api
 from core_engines.nlp_router import FNO_SYMBOLS
 from datetime import datetime
@@ -135,7 +135,8 @@ def render(scanner_sheet, scanner_headers):
             sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
             main_headers = watchlist_ws.row_values(1)
             bulk_watchlist_rows = []
-            daily_token = fetch_settings_cell('B2') or ""
+            
+            daily_token = fetch_settings_dict().get("Dhan Access Token", "")
             
             for _, row in all_selected_rows.iterrows():
                 sym = str(row['Symbol']).upper().strip()
