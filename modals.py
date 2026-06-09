@@ -8,6 +8,10 @@ from integrations.google_sheets import fetch_dataframe_safe
 
 @st.dialog("Log New Trade or Scan", width="large")
 def trade_entry_modal(worksheet, sheet_headers):
+    # ─── FAILSAFE FRAGMENT STATE INITIALIZATION ───
+    if "qp_key" not in st.session_state: 
+        st.session_state.qp_key = 0
+
     try:
         records = worksheet.get_all_records()
         if records:
