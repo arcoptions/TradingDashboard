@@ -9,7 +9,7 @@ import json
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_dict
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_dict, get_last_fetch_error
 from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
@@ -166,10 +166,9 @@ def render_top_ticker_tape():
 def main():
     try:
         sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
-        
-        sheet_headers = watchlist_ws.row_values(1) if watchlist_ws else []
-        scanner_headers = scanner_ws.row_values(1) if scanner_ws else []
-        api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scanner_headers)
+
+        # Daemon thread is cache-initialized once; avoid header reads on each rerun.
+        api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, [], [])
         
     except Exception as e:
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
@@ -207,8 +206,10 @@ def main():
             selected_sync = st.selectbox("Background Sync Speed:", list(sync_mapping.values()), index=list(sync_mapping.keys()).index(current_sync) if current_sync in sync_mapping else 1)
             
             if st.button("Save Settings", use_container_width=True):
-                settings_ws.update_acell('B2', new_token)
-                settings_ws.update_acell('B8', rev_mapping[selected_sync])
+                settings_ws.batch_update([
+                    {'range': 'B2', 'values': [[new_token]]},
+                    {'range': 'B8', 'values': [[rev_mapping[selected_sync]]]}
+                ])
                 fetch_settings_dict.clear() 
                 st.success("Settings Locked.")
                 st.rerun()
@@ -226,7 +227,14 @@ def main():
     sheet_headers = df_watchlist.columns.tolist() if not df_watchlist.empty else []
     
     if df_watchlist.empty:
-        st.info("Primary tracking database is empty.")
+        last_fetch_error = get_last_fetch_error("Sheet1")
+        if last_fetch_error:
+            st.warning("Could not read Google Sheets data right now (likely API quota/rate limit). Try again in 30-60 seconds or increase sync interval in API & Sync Setup.")
+            if st.button("Retry Loading Data", use_container_width=False):
+                fetch_dataframe_safe.clear()
+                st.rerun()
+        else:
+            st.info("Primary tracking database is empty.")
         return
 
     df_watchlist['_Sheet_Row'] = range(2, len(df_watchlist) + 2)

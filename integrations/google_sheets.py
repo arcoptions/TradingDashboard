@@ -2,11 +2,30 @@ import os
 import json
 import toml
 import time
+import random
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 import streamlit as st
 from gspread.exceptions import APIError
+
+_LAST_SUCCESS_DATAFRAMES = {}
+_LAST_FETCH_ERRORS = {}
+
+
+def _sheet_cache_key(sheet_title, is_sheet1=False):
+    return "Sheet1" if is_sheet1 else str(sheet_title)
+
+
+def _is_quota_error(err):
+    err_text = str(err).lower()
+    if "429" in err_text or "quota" in err_text or "rate" in err_text:
+        return True
+    if hasattr(err, "response") and err.response is not None:
+        code = getattr(err.response, "status_code", None)
+        if code in (429, 500, 502, 503, 504):
+            return True
+    return False
 
 def get_secrets():
     try:
@@ -40,14 +59,14 @@ def execute_with_quota_retry(func, *args, **kwargs):
         try:
             return func(*args, **kwargs)
         except APIError as e:
-            if ("429" in str(e) or "Quota" in str(e) or (hasattr(e, 'response') and e.response is not None and e.response.status_code == 429)) and attempt < max_retries - 1:
-                time.sleep(delay)
+            if _is_quota_error(e) and attempt < max_retries - 1:
+                time.sleep(delay + random.uniform(0, 0.6))
                 delay *= 2.0
                 continue
             raise e
         except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(delay)
+            if _is_quota_error(e) and attempt < max_retries - 1:
+                time.sleep(delay + random.uniform(0, 0.6))
                 delay *= 2.0
                 continue
             raise e
@@ -83,6 +102,7 @@ def init_sheet_connection():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_dataframe_safe(sheet_title, is_sheet1=False):
+    cache_key = _sheet_cache_key(sheet_title, is_sheet1=is_sheet1)
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -92,13 +112,29 @@ def fetch_dataframe_safe(sheet_title, is_sheet1=False):
             
             if len(vals) > 1:
                 df = pd.DataFrame(vals[1:], columns=vals[0])
-                return df[df[df.columns[0]].astype(str).str.strip() != ""]
-            return pd.DataFrame()
-        except Exception:
+                filtered = df[df[df.columns[0]].astype(str).str.strip() != ""]
+                _LAST_SUCCESS_DATAFRAMES[cache_key] = filtered.copy(deep=True)
+                _LAST_FETCH_ERRORS[cache_key] = ""
+                return filtered
+
+            empty_df = pd.DataFrame()
+            _LAST_SUCCESS_DATAFRAMES[cache_key] = empty_df
+            _LAST_FETCH_ERRORS[cache_key] = ""
+            return empty_df
+        except Exception as e:
+            _LAST_FETCH_ERRORS[cache_key] = str(e)
             if attempt < max_retries - 1:
                 time.sleep(1.5 ** attempt)
                 continue
+
+            cached_df = _LAST_SUCCESS_DATAFRAMES.get(cache_key)
+            if cached_df is not None:
+                return cached_df.copy(deep=True)
             return pd.DataFrame()
+
+
+def get_last_fetch_error(sheet_title="Sheet1"):
+    return _LAST_FETCH_ERRORS.get(str(sheet_title), "")
 
 # --- FIXED: Downloads the entire Settings page in 1 API Call instead of spamming 3 ---
 @st.cache_data(ttl=3600, show_spinner=False)

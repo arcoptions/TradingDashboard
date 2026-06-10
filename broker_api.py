@@ -312,6 +312,10 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
         sh = gc.open("Comprehensive Trading Tracker 2026")
     except Exception as e:
         sh = None
+
+    sheet1_headers_cache = []
+    scanner_headers_cache = []
+    last_headers_refresh = 0
         
     while True:
         sleep_timer = 60 
@@ -339,14 +343,30 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                 
                 try: scanner_ws = sh.worksheet("Scanners")
                 except: scanner_ws = None
-                
-                try: sheet1_headers = sh.sheet1.row_values(1)
-                except: sheet1_headers = []
-                
-                try: scan_headers = scanner_ws.row_values(1) if scanner_ws else []
-                except: scan_headers = []
 
-                res = execute_core_sync(sh.sheet1, scanner_ws, settings_ws, sheet1_headers, scan_headers, background_client_id=dhan_client_id, daily_token=daily_token)
+                # Refresh headers at most once in 15 minutes unless cache is empty.
+                if (not sheet1_headers_cache) or (time.time() - last_headers_refresh > 900):
+                    try:
+                        sheet1_headers_cache = sh.sheet1.row_values(1)
+                    except:
+                        sheet1_headers_cache = []
+
+                    try:
+                        scanner_headers_cache = scanner_ws.row_values(1) if scanner_ws else []
+                    except:
+                        scanner_headers_cache = []
+
+                    last_headers_refresh = time.time()
+
+                res = execute_core_sync(
+                    sh.sheet1,
+                    scanner_ws,
+                    settings_ws,
+                    sheet1_headers_cache,
+                    scanner_headers_cache,
+                    background_client_id=dhan_client_id,
+                    daily_token=daily_token
+                )
                 print(f"Background Sync Output: {res}")
             except Exception as loop_err: 
                 print(f"Daemon Background Sync Aborted Safely: {loop_err}")
