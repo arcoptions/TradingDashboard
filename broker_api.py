@@ -343,6 +343,10 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
         time_since_sync = time.time() - last_sync_time
         should_sync = is_market_hours and time_since_sync >= (cached_sync_interval + quota_backoff)
         
+        if not is_market_hours and last_sync_time == 0:
+            # First iteration - log that we're waiting for market hours
+            print(f"🔄 Auto-sync daemon active but waiting for market hours (9:00-15:30 IST, Mon-Fri). Current time: {now.strftime('%A %H:%M IST')}")
+        
         if should_sync:
             try:
                 # Re-auth safely if disconnected
@@ -428,8 +432,14 @@ def start_cron_daemon_v12(_worksheet, _scanner_sheet, _settings_sheet, _sheet_he
     gcp_creds = dict(st.secrets["gcp_service_account"])
     dhan_id = st.secrets["dhan"]["dhan_client_id"]
     cron_worker = threading.Thread(target=background_sync_loop, args=(gcp_creds, dhan_id), daemon=True)
-    add_script_run_ctx(cron_worker)
+    
+    try:
+        add_script_run_ctx(cron_worker)
+    except Exception as ctx_err:
+        print(f"⚠️ Could not add Streamlit context to daemon: {ctx_err}. Daemon will still run.")
+    
     cron_worker.start()
+    print("✅ Background sync daemon started successfully")
     return True
 
 def fetch_live_prices(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers):
