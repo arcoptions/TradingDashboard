@@ -12,6 +12,35 @@ TIP_CHANNELS = [
     "INVESTOLOGY", "ELEPHANT PRO", "CHARTIST", "CHIKOUTRADER", "SUNIL V TINANI"
 ]
 
+
+def _extract_channel_digits(value):
+    text = str(value or "")
+    return "".join(ch for ch in text if ch.isdigit())
+
+
+def _is_tip_source(source_value):
+    source_text = str(source_value or "")
+    source_upper = source_text.upper()
+
+    # Name-based matching (e.g., ELEPHANT PRO)
+    if any(tip in source_upper for tip in TIP_CHANNELS):
+        return True
+
+    # Numeric channel matching: treat -3858490010 and -1003858490010 as equivalent.
+    src_digits = _extract_channel_digits(source_text)
+    if not src_digits:
+        return False
+
+    src_tail = src_digits[-10:] if len(src_digits) >= 10 else src_digits
+    for tip in TIP_CHANNELS:
+        tip_digits = _extract_channel_digits(tip)
+        if not tip_digits:
+            continue
+        tip_tail = tip_digits[-10:] if len(tip_digits) >= 10 else tip_digits
+        if src_digits == tip_digits or src_tail == tip_tail:
+            return True
+    return False
+
 def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
     
@@ -54,7 +83,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 source_upper = source.upper()
                 
                 is_news_channel = any(kw in source.lower() for kw in ["beat the street", "news"])
-                is_tip_channel = any(tip in source_upper for tip in TIP_CHANNELS) or "TEST" == source_upper
+                is_tip_channel = _is_tip_source(source) or "TEST" == source_upper
                 
                 if is_news_channel:
                     tele_updates.append({'range': f"D{row['_Row_ID']}", 'values': [["News Logged"]]})
@@ -218,7 +247,8 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     df_display = df_date_filtered.sort_values(by="Timestamp", ascending=False).head(200)
     
     def check_news(row): return "BEAT THE STREET" in str(row["Source"]).upper() or "NEWS" in str(row["Source"]).upper()
-    def check_tip(row): return any(t in str(row["Source"]).upper() for t in TIP_CHANNELS) or "X" == str(row["Network"]) or "TEST" == str(row["Source"]).upper()
+    def check_tip(row):
+        return _is_tip_source(str(row["Source"])) or "X" == str(row["Network"]) or "TEST" == str(row["Source"]).upper()
 
     df_news = df_display[df_display.apply(check_news, axis=1)]
     df_tips = df_display[df_display.apply(check_tip, axis=1) & ~df_display.apply(check_news, axis=1)]
