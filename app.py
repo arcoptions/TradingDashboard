@@ -338,7 +338,6 @@ def main():
                 st.error(f"Sync issue: {res}")
         
         now_epoch = time.time()
-        current_time_str = datetime.now().strftime("%d-%b %I:%M:%S %p")
         last_manual_sync_str = "-"
         if st.session_state.last_manual_sync_time > 0:
             last_manual_sync_str = datetime.fromtimestamp(st.session_state.last_manual_sync_time).strftime("%d-%b %I:%M:%S %p")
@@ -356,7 +355,6 @@ def main():
             """, height=0)
             
         global_sync_time = fetch_settings_dict().get("New Timestamp", "-")
-        st.caption(f"Current Time: {current_time_str} | Last Manual Sync: {last_manual_sync_str}")
         if global_sync_time and global_sync_time != "-":
             st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{global_sync_time}</b></div>", unsafe_allow_html=True)
 
