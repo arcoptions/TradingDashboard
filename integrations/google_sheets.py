@@ -11,6 +11,7 @@ from gspread.exceptions import APIError
 
 _LAST_SUCCESS_DATAFRAMES = {}
 _LAST_FETCH_ERRORS = {}
+_LAST_SUCCESS_HEADERS = {}
 
 
 def _sheet_cache_key(sheet_title, is_sheet1=False):
@@ -135,6 +136,29 @@ def fetch_dataframe_safe(sheet_title, is_sheet1=False):
 
 def get_last_fetch_error(sheet_title="Sheet1"):
     return _LAST_FETCH_ERRORS.get(str(sheet_title), "")
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_sheet_headers_safe(sheet_title=None, is_sheet1=False):
+    cache_key = _sheet_cache_key(sheet_title or "Sheet1", is_sheet1=is_sheet1)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            sh = get_spreadsheet()
+            worksheet = sh.sheet1 if is_sheet1 else execute_with_quota_retry(sh.worksheet, sheet_title)
+            headers = execute_with_quota_retry(worksheet.row_values, 1)
+            _LAST_SUCCESS_HEADERS[cache_key] = list(headers)
+            return headers
+        except Exception as e:
+            _LAST_FETCH_ERRORS[cache_key] = str(e)
+            if attempt < max_retries - 1:
+                time.sleep(1.5 ** attempt)
+                continue
+
+            cached_headers = _LAST_SUCCESS_HEADERS.get(cache_key)
+            if cached_headers is not None:
+                return list(cached_headers)
+            return []
 
 # --- FIXED: Downloads the entire Settings page in 1 API Call instead of spamming 3 ---
 @st.cache_data(ttl=3600, show_spinner=False)

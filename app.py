@@ -10,7 +10,7 @@ import time
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
-from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_dict, get_last_fetch_error
+from integrations.google_sheets import init_sheet_connection, fetch_dataframe_safe, fetch_settings_dict, get_last_fetch_error, fetch_sheet_headers_safe
 from core_engines.nlp_router import SECTOR_MAP, INDEX_CONSTITUENTS
 import broker_api as api
 import analytics
@@ -186,7 +186,7 @@ def main():
         
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("Log New Trade", type="primary", use_container_width=True): 
-            try: modals.trade_entry_modal(watchlist_ws, watchlist_ws.row_values(1))
+            try: modals.trade_entry_modal(watchlist_ws, fetch_sheet_headers_safe(is_sheet1=True))
             except Exception as modal_err: st.error(f"Logging module unavailable. {modal_err}")
             
         st.markdown("<br>", unsafe_allow_html=True)
@@ -323,7 +323,7 @@ def main():
         
         if st.button("Sync Live Prices", use_container_width=True, disabled=sync_button_disabled): 
             try:
-                scan_headers = scanner_ws.row_values(1) if scanner_ws else []
+                scan_headers = fetch_sheet_headers_safe("Scanners") if scanner_ws else []
             except Exception:
                 scan_headers = []
             
@@ -452,7 +452,7 @@ def main():
 
     with t_scan:
         if scanner_ws: 
-            scan_headers = scanner_ws.row_values(1) if scanner_ws else []
+            scan_headers = fetch_sheet_headers_safe("Scanners") if scanner_ws else []
             tab_scanners.render(scanner_ws, scan_headers)
 
     with t_study: tab_study.render()

@@ -16,9 +16,13 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
     
     # Dual Axis Filters
-    col_f1, col_f2 = st.columns(2)
+    col_f1, col_f2, col_f3 = st.columns([1.2, 1.2, 1.6])
     with col_f1:
         selected_date = st.date_input("Filter Logs by Date", datetime.today().date(), key="social_log_date")
+    with col_f2:
+        use_all_dates = st.checkbox("Show All Dates", value=False, key="social_log_all_dates")
+    with col_f3:
+        stock_query = st.text_input("Find Stock / Keyword", value="", placeholder="e.g. ASHOKLEY, NTPC", key="social_log_stock_query")
     
     df_tele_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
     df_x_logs = fetch_dataframe_safe("X_Raw_Logs")
@@ -191,7 +195,10 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
         return
         
     df_master = pd.DataFrame(normalized_list)
-    df_date_filtered = df_master[df_master["Log_Date"] == selected_date]
+    if use_all_dates:
+        df_date_filtered = df_master.copy()
+    else:
+        df_date_filtered = df_master[df_master["Log_Date"] == selected_date]
     
     with col_f2:
         available_sources = sorted(list(df_date_filtered["Source"].dropna().unique())) if not df_date_filtered.empty else []
@@ -199,6 +206,14 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
         
     if selected_sources:
         df_date_filtered = df_date_filtered[df_date_filtered["Source"].isin(selected_sources)]
+
+    if stock_query.strip():
+        q = stock_query.strip()
+        mask = (
+            df_date_filtered["Content"].astype(str).str.contains(q, case=False, na=False)
+            | df_date_filtered["Source"].astype(str).str.contains(q, case=False, na=False)
+        )
+        df_date_filtered = df_date_filtered[mask]
         
     df_display = df_date_filtered.sort_values(by="Timestamp", ascending=False).head(200)
     
