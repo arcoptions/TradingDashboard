@@ -262,8 +262,19 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
                 elif item["type"] == "scan" and scan_col_idx: 
                     scan_updates.append({'range': gspread.utils.rowcol_to_a1(item["sheet_row"], scan_col_idx), 'values': [[str(last_price)]]})
         try:
-            if opt_updates: robust_api_call(worksheet.batch_update, opt_updates)
-            if scan_updates and scanner_sheet: robust_api_call(scanner_sheet.batch_update, scan_updates)
+            # Batch updates in chunks of 100 to avoid hitting quota limits
+            max_batch_size = 100
+            if opt_updates:
+                for i in range(0, len(opt_updates), max_batch_size):
+                    batch_chunk = opt_updates[i:i + max_batch_size]
+                    robust_api_call(worksheet.batch_update, batch_chunk)
+                    time.sleep(0.5)  # Small delay between batches
+            
+            if scan_updates and scanner_sheet:
+                for i in range(0, len(scan_updates), max_batch_size):
+                    batch_chunk = scan_updates[i:i + max_batch_size]
+                    robust_api_call(scanner_sheet.batch_update, batch_chunk)
+                    time.sleep(0.5)  # Small delay between batches
             
             idx_item = data.get("IDX_I", {}).get("13", {})
             lp_n50 = float(idx_item.get("last_price", 0.0))
@@ -316,12 +327,23 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
     sheet1_headers_cache = []
     scanner_headers_cache = []
     last_headers_refresh = 0
+    cached_sync_interval = 60
+    last_interval_check = 0
+    quota_backoff = 0  # Exponential backoff for quota errors
+    last_sync_time = 0
         
     while True:
-        sleep_timer = 60 
+        sleep_timer = cached_sync_interval
         now = datetime.datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         
-        if now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 30):
+        # Only sync during market hours: Mon-Fri, 9:00-15:30 IST
+        is_market_hours = now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 30)
+        
+        # Check if enough time has passed since last sync (respects user's interval + quota backoff)
+        time_since_sync = time.time() - last_sync_time
+        should_sync = is_market_hours and time_since_sync >= (cached_sync_interval + quota_backoff)
+        
+        if should_sync:
             try:
                 # Re-auth safely if disconnected
                 if sh is None:
@@ -331,15 +353,29 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     
                 settings_ws = sh.worksheet("Settings")
                 
-                # Fetch settings as one bulk request
-                settings_data = robust_api_call(settings_ws.get_all_values)
-                settings_dict = {str(row[0]).strip(): str(row[1]).strip() for row in settings_data if len(row) >= 2}
-                
-                user_speed = settings_dict.get("Sync Interval", "60")
-                daily_token = settings_dict.get("Dhan Access Token", "")
-                
-                if user_speed and str(user_speed).isdigit():
-                    sleep_timer = int(user_speed)
+                # Refresh sync interval setting at most once per 5 minutes
+                if time.time() - last_interval_check > 300:
+                    try:
+                        # Read only specific cells instead of all values to reduce API calls
+                        sync_interval_cell = robust_api_call(settings_ws.acell, "B8").value
+                        token_cell = robust_api_call(settings_ws.acell, "B2").value
+                        
+                        if sync_interval_cell and str(sync_interval_cell).isdigit():
+                            cached_sync_interval = int(sync_interval_cell)
+                            sleep_timer = cached_sync_interval
+                        daily_token = str(token_cell) if token_cell else ""
+                        last_interval_check = time.time()
+                    except Exception as e:
+                        print(f"Settings refresh failed: {e}, using cached interval: {cached_sync_interval}")
+                        # Fall back to cached value on error
+                        pass
+                else:
+                    # Use cached interval between refreshes
+                    sleep_timer = cached_sync_interval
+                    try:
+                        daily_token = robust_api_call(settings_ws.acell, "B2").value or ""
+                    except:
+                        daily_token = ""
                 
                 try: scanner_ws = sh.worksheet("Scanners")
                 except: scanner_ws = None
@@ -367,12 +403,25 @@ def background_sync_loop(gcp_creds_dict, dhan_client_id):
                     background_client_id=dhan_client_id,
                     daily_token=daily_token
                 )
-                print(f"Background Sync Output: {res}")
+                
+                # Reset quota backoff on success
+                if "Success" in str(res):
+                    quota_backoff = 0
+                    last_sync_time = time.time()
+                    print(f"Background Sync Success")
+                elif "429" in str(res) or "Quota" in str(res) or "rate" in str(res).lower():
+                    # Exponential backoff for quota errors (max 5 minutes)
+                    quota_backoff = min(quota_backoff * 2 + 30, 300)
+                    print(f"Quota limit hit, backing off {quota_backoff}s: {res}")
+                else:
+                    print(f"Background Sync Output: {res}")
+                    
             except Exception as loop_err: 
                 print(f"Daemon Background Sync Aborted Safely: {loop_err}")
                 sh = None  # Force reconnection next loop
-            
-        time.sleep(sleep_timer)
+                quota_backoff = min(quota_backoff * 2 + 10, 120)  # Shorter backoff for connection errors
+        
+        time.sleep(min(sleep_timer, 10))  # Sleep in smaller chunks to check market hours frequently
 
 @st.cache_resource
 def start_cron_daemon_v12(_worksheet, _scanner_sheet, _settings_sheet, _sheet_headers, _scanner_headers):

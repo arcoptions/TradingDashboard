@@ -6,6 +6,7 @@ import streamlit.components.v1 as components
 import requests
 import inspect
 import json
+import time
 import plotly.express as px
 
 # --- MODULE IMPORTS ---
@@ -207,7 +208,9 @@ def main():
             
             if st.button("Save Settings", use_container_width=True):
                 settings_ws.batch_update([
+                    {'range': 'A2', 'values': [["Dhan Access Token"]]},
                     {'range': 'B2', 'values': [[new_token]]},
+                    {'range': 'A8', 'values': [["Sync Interval"]]},
                     {'range': 'B8', 'values': [[rev_mapping[selected_sync]]]}
                 ])
                 fetch_settings_dict.clear() 
@@ -311,19 +314,32 @@ def main():
     with f_col4:
         st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
         
-        if st.button("Sync Live Prices", use_container_width=True): 
+        # Initialize sync throttle state
+        if "last_manual_sync_time" not in st.session_state:
+            st.session_state.last_manual_sync_time = 0
+        
+        can_sync = time.time() - st.session_state.last_manual_sync_time >= 30  # Min 30s between manual syncs
+        sync_button_disabled = not can_sync
+        
+        if st.button("Sync Live Prices", use_container_width=True, disabled=sync_button_disabled): 
             try:
                 scan_headers = scanner_ws.row_values(1) if scanner_ws else []
             except Exception:
                 scan_headers = []
             
             res = api.fetch_live_prices(watchlist_ws, scanner_ws, settings_ws, sheet_headers, scan_headers)
+            st.session_state.last_manual_sync_time = time.time()  # Record sync time
+            
             if res == "Success":
                 fetch_dataframe_safe.clear()
                 fetch_settings_dict.clear()
                 st.rerun()
             else:
                 st.error(f"Sync issue: {res}")
+        
+        if sync_button_disabled:
+            seconds_remaining = int(30 - (time.time() - st.session_state.last_manual_sync_time))
+            st.caption(f"⏱️ Available in {seconds_remaining}s")
             
         global_sync_time = fetch_settings_dict().get("New Timestamp", "-")
         if global_sync_time and global_sync_time != "-":
