@@ -46,7 +46,8 @@ def trade_entry_modal(worksheet, sheet_headers):
             if exch == "NSE" and seg == "E": auto_exch = "NSE_EQ"
             elif exch == "NSE" and seg == "D": auto_exch = "NSE_FNO"
         else:
-            if search_query: st.warning(f"⚠️ No active matching contracts found. Editing field manually.")
+            if search_query:
+                st.warning(f"⚠️ '{search_query}' not found in live Dhan scrip master. This could mean: (1) Contract expired, (2) Strike doesn't exist yet, (3) Data not synced. You can manually type the symbol below.")
             auto_symbol = search_query
 
         with st.form("entry_form", clear_on_submit=True):

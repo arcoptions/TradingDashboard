@@ -55,7 +55,7 @@ def search_instruments(query):
     
     exact_match = scrip_df[scrip_df['SEM_TRADING_SYMBOL'] == cleaned_query]
     if not exact_match.empty:
-        return exact_match.head(1)
+        return exact_match.head(10)
         
     terms = cleaned_query.split()
     if 'SEARCH_STRING' not in scrip_df.columns:
@@ -67,9 +67,13 @@ def search_instruments(query):
     for term in terms: mask = mask & scrip_df['SEARCH_STRING'].str.contains(term, regex=False)
     results = scrip_df[mask].copy()
     
+    # Sort by segment (Options first, then Equities) then by expiry
     if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
+        results['segment_order'] = results['SEM_SEGMENT'].apply(lambda x: 0 if x == 'D' else 1)  # D (Derivatives) first
         results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
-        results = results.sort_values(by=['Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True])
+        results = results.sort_values(by=['segment_order', 'Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True, True])
+        results = results.drop(columns=['segment_order', 'Parsed_Expiry'])
+    
     return results.head(200)
 
 def resolve_instrument(parsed_sym):
