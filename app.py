@@ -337,11 +337,26 @@ def main():
             else:
                 st.error(f"Sync issue: {res}")
         
+        now_epoch = time.time()
+        current_time_str = datetime.now().strftime("%d-%b %I:%M:%S %p")
+        last_manual_sync_str = "-"
+        if st.session_state.last_manual_sync_time > 0:
+            last_manual_sync_str = datetime.fromtimestamp(st.session_state.last_manual_sync_time).strftime("%d-%b %I:%M:%S %p")
+
         if sync_button_disabled:
-            seconds_remaining = int(30 - (time.time() - st.session_state.last_manual_sync_time))
+            seconds_remaining = max(0, int(30 - (now_epoch - st.session_state.last_manual_sync_time)))
             st.caption(f"⏱️ Available in {seconds_remaining}s")
+            # Force a lightweight browser refresh so cooldown countdown and button state keep updating.
+            components.html("""
+                <script>
+                    setTimeout(function () {
+                        window.parent.location.reload();
+                    }, 1000);
+                </script>
+            """, height=0)
             
         global_sync_time = fetch_settings_dict().get("New Timestamp", "-")
+        st.caption(f"Current Time: {current_time_str} | Last Manual Sync: {last_manual_sync_str}")
         if global_sync_time and global_sync_time != "-":
             st.markdown(f"<div style='text-align: right; font-size: 11px; color: #64748B; margin-top: -10px;'>Latest Sync: <b>{global_sync_time}</b></div>", unsafe_allow_html=True)
 
@@ -349,9 +364,27 @@ def main():
     if selected_sources: filtered_df = filtered_df[filtered_df["Idea Source (Chartink/Telegram/X/Self)"].isin(selected_sources)]
     if selected_decisions: filtered_df = filtered_df[filtered_df["Decision"].isin(selected_decisions)]
 
+    # Calculate percentage difference between entry and live price
+    def calc_entry_live_pct(row):
+        try:
+            entry_str = str(row.get('Entry CMP / Range', '')).strip()
+            live_str = str(row.get('Live Price', '')).strip()
+            if not entry_str or not live_str or entry_str == '-' or live_str == '-':
+                return '-'
+            entry = float(entry_str)
+            live = float(live_str)
+            if entry == 0:
+                return '-'
+            pct = ((live - entry) / entry) * 100
+            return f"{pct:+.2f}%"
+        except:
+            return '-'
+    
+    filtered_df['Entry vs Live %'] = filtered_df.apply(calc_entry_live_pct, axis=1)
+
     view_cols = [
         "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
-        "Live Price", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
+        "Live Price", "Entry vs Live %", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
         "Target Status", "Target 1", "Target 2", "Exit Price", 
         "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
     ]
@@ -363,6 +396,7 @@ def main():
         "Vs Entry": st.column_config.TextColumn("Vs Entry"),
         "Entry CMP / Range": st.column_config.TextColumn("Entry Range"),
         "Live Price": st.column_config.TextColumn("Live Price"),
+        "Entry vs Live %": st.column_config.TextColumn("Entry vs Live %"),
         "Score": st.column_config.NumberColumn("Score", format="%d"),
         "Decision": st.column_config.TextColumn("Decision"),
         "Add-On / Dip Levels": st.column_config.TextColumn("Add-On / Dip Levels"),
@@ -377,7 +411,7 @@ def main():
         "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         "_Sheet_Row": None
     }
-    disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status"]
+    disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
 
     t_opt, t_stk, t_htmap, t_scan, t_study, t_tel = st.tabs([
         "Options", "Stocks", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
