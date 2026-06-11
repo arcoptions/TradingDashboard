@@ -39,42 +39,70 @@ def robust_api_call(func, *args, **kwargs):
                 continue
             raise e
 
-@st.cache_data(ttl=43200)
+def _download_dhan_scrip_master():
+    url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+    df = pd.read_csv(url, low_memory=False)
+    if df.empty:
+        return df
+    return df[df['SEM_EXM_EXCH_ID'].isin(['NSE', 'IDX'])]
+
+
+@st.cache_data(ttl=1800)
 def get_dhan_scrip_master():
     try:
-        url = "https://images.dhan.co/api-data/api-scrip-master.csv"
-        df = pd.read_csv(url, low_memory=False)
-        if df.empty: return df
-        return df[df['SEM_EXM_EXCH_ID'].isin(['NSE', 'IDX'])]
+        return _download_dhan_scrip_master()
     except: return pd.DataFrame()
+
+
+def get_dhan_scrip_master_fresh():
+    try:
+        return _download_dhan_scrip_master()
+    except:
+        return pd.DataFrame()
+
+
+def _search_in_scrip_df(scrip_df, cleaned_query):
+    if scrip_df.empty:
+        return pd.DataFrame()
+
+    exact_match = scrip_df[scrip_df['SEM_TRADING_SYMBOL'] == cleaned_query]
+    if not exact_match.empty:
+        return exact_match.head(10)
+
+    terms = cleaned_query.split()
+    working_df = scrip_df.copy()
+    if 'SEARCH_STRING' not in working_df.columns:
+        normalized_trading_sym = working_df['SEM_TRADING_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
+        normalized_custom_sym = working_df['SEM_CUSTOM_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
+        working_df['SEARCH_STRING'] = normalized_trading_sym.str.upper() + " " + normalized_custom_sym.str.upper()
+
+    mask = pd.Series([True] * len(working_df))
+    for term in terms:
+        mask = mask & working_df['SEARCH_STRING'].str.contains(term, regex=False)
+    results = working_df[mask].copy()
+
+    if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
+        results['segment_order'] = results['SEM_SEGMENT'].apply(lambda x: 0 if x == 'D' else 1)
+        results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
+        results = results.sort_values(by=['segment_order', 'Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True, True])
+        results = results.drop(columns=['segment_order', 'Parsed_Expiry'])
+
+    return results.head(200)
 
 def search_instruments(query):
     scrip_df = get_dhan_scrip_master()
     if not query or scrip_df.empty: return pd.DataFrame()
     cleaned_query = str(query).replace('-', ' ').replace('_', ' ').upper().strip()
-    
-    exact_match = scrip_df[scrip_df['SEM_TRADING_SYMBOL'] == cleaned_query]
-    if not exact_match.empty:
-        return exact_match.head(10)
-        
-    terms = cleaned_query.split()
-    if 'SEARCH_STRING' not in scrip_df.columns:
-        normalized_trading_sym = scrip_df['SEM_TRADING_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
-        normalized_custom_sym = scrip_df['SEM_CUSTOM_SYMBOL'].fillna('').str.replace('-', ' ', regex=False).str.replace('_', ' ', regex=False)
-        scrip_df['SEARCH_STRING'] = normalized_trading_sym.str.upper() + " " + normalized_custom_sym.str.upper()
-        
-    mask = pd.Series([True] * len(scrip_df))
-    for term in terms: mask = mask & scrip_df['SEARCH_STRING'].str.contains(term, regex=False)
-    results = scrip_df[mask].copy()
-    
-    # Sort by segment (Options first, then Equities) then by expiry
-    if not results.empty and 'SEM_EXPIRY_DATE' in results.columns:
-        results['segment_order'] = results['SEM_SEGMENT'].apply(lambda x: 0 if x == 'D' else 1)  # D (Derivatives) first
-        results['Parsed_Expiry'] = pd.to_datetime(results['SEM_EXPIRY_DATE'], errors='coerce')
-        results = results.sort_values(by=['segment_order', 'Parsed_Expiry', 'SEM_TRADING_SYMBOL'], ascending=[True, True, True])
-        results = results.drop(columns=['segment_order', 'Parsed_Expiry'])
-    
-    return results.head(200)
+
+    results = _search_in_scrip_df(scrip_df, cleaned_query)
+    # If option-like query is missing in cached snapshot, retry once with fresh CSV.
+    is_option_like = any(t in cleaned_query for t in [" CE", " PE", " CALL", " PUT"]) or any(ch.isdigit() for ch in cleaned_query)
+    if results.empty and is_option_like:
+        fresh_df = get_dhan_scrip_master_fresh()
+        if not fresh_df.empty:
+            results = _search_in_scrip_df(fresh_df, cleaned_query)
+
+    return results
 
 def resolve_instrument(parsed_sym):
     scrip_df = get_dhan_scrip_master()
