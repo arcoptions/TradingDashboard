@@ -7,7 +7,7 @@ from core_engines.nlp_router import extract_asset_from_text, parse_trade_metrics
 from integrations.google_sheets import fetch_dataframe_safe
 
 TIP_CHANNELS = [
-    "-1003141350480", "-1003858490010", "1005281196022", "-5281196022", 
+    "-1003141350480", "-1003858490010", "-3858490010", "1005281196022", "-5281196022", 
     "-1003800707569", "-1003770951544", "-1003148687413", "-1003121140019", "-1003770810999",
     "INVESTOLOGY", "ELEPHANT PRO", "CHARTIST", "CHIKOUTRADER", "SUNIL V TINANI"
 ]
