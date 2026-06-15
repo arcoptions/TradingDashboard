@@ -43,6 +43,13 @@ def _is_tip_source(source_value):
 
 def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
+
+    # Reset filter state before widgets are instantiated on rerun.
+    if st.session_state.pop("telegram_clear_filters_requested", False):
+        st.session_state["social_log_all_dates"] = True
+        st.session_state["social_log_stock_query"] = ""
+        st.session_state["social_log_date"] = datetime.today().date()
+        st.session_state.pop("social_log_selected_sources", None)
     
     # Dual Axis Filters
     col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([1.2, 1.2, 1.4, 1.0, 0.8])
@@ -73,9 +80,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 st.error(f"⚠️ Error triggering backfill: {e}")
     with col_f5:
         if st.button("Clear Filters", key="telegram_clear_filters"):
-            st.session_state["social_log_all_dates"] = True
-            st.session_state["social_log_stock_query"] = ""
-            st.session_state["social_log_selected_sources"] = []
+            st.session_state["telegram_clear_filters_requested"] = True
             st.rerun()
     
     df_tele_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
