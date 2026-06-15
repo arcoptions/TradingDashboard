@@ -1,9 +1,11 @@
 import pandas as pd
 import streamlit as st
 import requests
+import sqlite3
+import gspread
 
 import broker_api as api
-from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_dict
+from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_dict, init_sheet_connection
 
 
 ACTIVE_ORDER_STATUSES = ["TRANSIT", "PENDING", "PART_TRADED"]
@@ -96,11 +98,101 @@ def render(intel_pool=None):
             except Exception:
                 return {}
 
+        def _is_blank(v):
+            s = str(v).strip().lower()
+            return s in ["", "-", "none", "nan"]
+
         # Fetch watchlist to get score, recommendation, and targets
         try:
             df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
         except Exception:
             df_watchlist = pd.DataFrame()
+
+        def _fetch_localdb_watchlist_map():
+            out = {}
+            try:
+                conn = sqlite3.connect("arc_trading.db")
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT symbol, base_asset, score, recommendation, stop_loss, target_1, target_2
+                    FROM watchlist_items
+                    WHERE status IN ('Watchlist', 'Active')
+                    """
+                )
+                rows = cur.fetchall()
+                conn.close()
+                for row in rows:
+                    entry = {
+                        "Score": row["score"] if row["score"] is not None else "-",
+                        "Recommendation": row["recommendation"] if row["recommendation"] is not None else "-",
+                        "SL": row["stop_loss"] if row["stop_loss"] is not None else "-",
+                        "T1": row["target_1"] if row["target_1"] is not None else "-",
+                        "T2": row["target_2"] if row["target_2"] is not None else "-",
+                    }
+                    sym = str(row["symbol"] or "").strip().upper()
+                    base = str(row["base_asset"] or "").strip().upper()
+                    if sym:
+                        out[sym] = entry
+                    if base:
+                        out[base] = entry
+            except Exception:
+                return {}
+            return out
+
+        localdb_map = _fetch_localdb_watchlist_map()
+
+        def _fetch_underlying_stock_ltp_map(base_symbols):
+            resolved = []
+            for b in base_symbols:
+                b_sym = str(b).strip().upper()
+                if not b_sym:
+                    continue
+                _, sec_id, exch = api.resolve_instrument(b_sym)
+                if sec_id and str(sec_id).isdigit() and exch:
+                    resolved.append((b_sym, str(sec_id), str(exch).upper()))
+
+            if not resolved:
+                return {}
+
+            payload = {}
+            for _, sec_id, exch in resolved:
+                payload.setdefault(exch, set()).add(int(sec_id))
+            payload = {k: sorted(list(v)) for k, v in payload.items() if v}
+            if not payload:
+                return {}
+
+            try:
+                settings = fetch_settings_dict()
+                token = settings.get("Dhan Access Token", "")
+                client_id = st.secrets["dhan"].get("dhan_client_id", "")
+                if not token or not client_id:
+                    return {}
+                headers = {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "access-token": token,
+                    "client-id": client_id,
+                }
+                resp = requests.post(
+                    "https://api.dhan.co/v2/marketfeed/quote",
+                    headers=headers,
+                    json=payload,
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    return {}
+                data = resp.json().get("data", {})
+                ltp_by_key = {}
+                for b_sym, sec_id, exch in resolved:
+                    node = data.get(exch, {}).get(sec_id, {})
+                    lp = node.get("last_price", "")
+                    if lp not in ["", None, "None"]:
+                        ltp_by_key[b_sym] = lp
+                return ltp_by_key
+            except Exception:
+                return {}
 
         # Prepare positions data
         df_positions_custom = df_positions.copy()
@@ -111,11 +203,15 @@ def render(intel_pool=None):
         
         # Join with watchlist data
         if not df_watchlist.empty:
-            # Create lookup from watchlist (match by Symbol or Base Asset)
+            # Create lookup from watchlist (match by contract symbol and base symbol)
             watchlist_lookup = {}
-            for _, row in df_watchlist.iterrows():
+            for idx, row in df_watchlist.iterrows():
                 sym = str(row.get("Symbol / Asset", "")).strip().upper()
                 base = str(row.get("Base Asset", "")).strip().upper()
+                if _is_blank(base) and sym:
+                    base = sym.split('-')[0].strip().upper()
+                if _is_blank(base) and sym:
+                    base = sym.split(' ')[0].strip().upper()
                 
                 score = row.get("Score", "-")
                 recommendation = row.get("Recommendation", "-")
@@ -131,32 +227,34 @@ def render(intel_pool=None):
                     "T1": t1,
                     "T2": t2,
                     "Stock LTP": stock_ltp,
+                    "_wl_row": idx + 2,
                 }
-                
+
+                keys = []
                 if sym:
-                    watchlist_lookup[sym] = entry
+                    keys.extend([sym, sym.split('-')[0].strip().upper(), sym.split(' ')[0].strip().upper()])
                 if base:
-                    watchlist_lookup[base] = entry
+                    keys.append(base)
+
+                for key in [k for k in keys if k and not _is_blank(k)]:
+                    prev = watchlist_lookup.get(key, {})
+                    # Prefer entries that have score/recommendation present
+                    if not prev or (_is_blank(prev.get("Score", "-")) and not _is_blank(score)):
+                        watchlist_lookup[key] = entry
+
+            def _get_watchlist_entry(pos_row):
+                s_key = str(pos_row.get("Symbol", "")).strip().upper()
+                b_key = str(pos_row.get("BaseSymbol", "")).strip().upper()
+                return watchlist_lookup.get(s_key) or watchlist_lookup.get(b_key) or {}
             
             # Match positions with watchlist
-            df_positions_custom["Score"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("Score", "-")
-            )
-            df_positions_custom["Recommendation"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("Recommendation", "-")
-            )
-            df_positions_custom["SL"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("SL", "-")
-            )
-            df_positions_custom["T1"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("T1", "-")
-            )
-            df_positions_custom["T2"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("T2", "-")
-            )
-            df_positions_custom["Stock LTP"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("Stock LTP", "-")
-            )
+            df_positions_custom["Score"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("Score", "-"), axis=1)
+            df_positions_custom["Recommendation"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("Recommendation", "-"), axis=1)
+            df_positions_custom["SL"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("SL", "-"), axis=1)
+            df_positions_custom["T1"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("T1", "-"), axis=1)
+            df_positions_custom["T2"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("T2", "-"), axis=1)
+            df_positions_custom["Stock LTP"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("Stock LTP", "-"), axis=1)
+            df_positions_custom["_wl_row"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("_wl_row", None), axis=1)
         
         # Fallback to intel_pool for stock LTP if not in watchlist (from TradingView)
         def get_stock_ltp_from_pool(row):
@@ -171,6 +269,19 @@ def render(intel_pool=None):
             pool_data = intel_pool.get(base_sym, {})
             ltp = pool_data.get("t", {}).get("ltp", "-")
             return str(ltp) if ltp != "-" else "-"
+
+        # Fallback to local DB for score/recommendation/targets
+        def fill_from_localdb(row, field_name):
+            cur_val = row.get(field_name, "-")
+            if not _is_blank(cur_val):
+                return cur_val
+            sym = str(row.get("Symbol", "")).strip().upper()
+            base = str(row.get("BaseSymbol", "")).strip().upper()
+            if sym in localdb_map and not _is_blank(localdb_map[sym].get(field_name, "-")):
+                return localdb_map[sym].get(field_name, "-")
+            if base in localdb_map and not _is_blank(localdb_map[base].get(field_name, "-")):
+                return localdb_map[base].get(field_name, "-")
+            return cur_val
 
         # Option contract LTP from Dhan quote API (securityId + exchangeSegment)
         quote_ltp_map = _fetch_option_ltp_map(df_positions_custom)
@@ -193,8 +304,25 @@ def render(intel_pool=None):
             df_positions_custom["SL"] = "-"
             df_positions_custom["T1"] = "-"
             df_positions_custom["T2"] = "-"
+            df_positions_custom["_wl_row"] = None
             # Still try to fetch stock LTP from intel_pool even if watchlist is unavailable
             df_positions_custom["Stock LTP"] = df_positions_custom.apply(get_stock_ltp_from_pool, axis=1)
+
+        # Fill missing score/recommendation/targets from local DB snapshot
+        df_positions_custom["Score"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "Score"), axis=1)
+        df_positions_custom["Recommendation"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "Recommendation"), axis=1)
+        df_positions_custom["SL"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "SL"), axis=1)
+        df_positions_custom["T1"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "T1"), axis=1)
+        df_positions_custom["T2"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "T2"), axis=1)
+
+        # Extra fallback for stock LTP from Dhan underlying quotes (helps symbols like LT, M&M)
+        missing_stock_ltp_mask = df_positions_custom["Stock LTP"].apply(_is_blank)
+        missing_bases = df_positions_custom.loc[missing_stock_ltp_mask, "BaseSymbol"].dropna().astype(str).str.upper().unique().tolist()
+        underlying_ltp_map = _fetch_underlying_stock_ltp_map(missing_bases)
+        if underlying_ltp_map:
+            df_positions_custom.loc[missing_stock_ltp_mask, "Stock LTP"] = df_positions_custom.loc[missing_stock_ltp_mask, "BaseSymbol"].apply(
+                lambda x: str(underlying_ltp_map.get(str(x).strip().upper(), "-"))
+            )
 
         df_positions_custom["Option LTP"] = df_positions_custom.apply(get_option_ltp, axis=1)
         
@@ -257,24 +385,78 @@ def render(intel_pool=None):
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width="medium"),
-                "Score": st.column_config.NumberColumn("Score", format="%d"),
-                "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
-                "Avg Qty": st.column_config.NumberColumn("Avg Qty", format="%d"),
-                "Avg Price": st.column_config.NumberColumn("Avg Price", format="%.2f"),
-                "Stock LTP": st.column_config.NumberColumn("Stock LTP", format="%.2f"),
-                "Option LTP": st.column_config.NumberColumn("Option LTP", format="%.2f"),
-                "SL": st.column_config.NumberColumn("SL", format="%.2f"),
-                "T1": st.column_config.NumberColumn("T1", format="%.2f"),
-                "T2": st.column_config.NumberColumn("T2", format="%.2f"),
-                "Target Reached": st.column_config.TextColumn("Target Reached", width="small"),
-            },
-        )
+        column_cfg = {
+            "Symbol": st.column_config.TextColumn("Symbol", width="medium"),
+            "Score": st.column_config.NumberColumn("Score", format="%d"),
+            "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
+            "Avg Qty": st.column_config.NumberColumn("Avg Qty", format="%d"),
+            "Avg Price": st.column_config.NumberColumn("Avg Price", format="%.2f"),
+            "Stock LTP": st.column_config.NumberColumn("Stock LTP", format="%.2f"),
+            "Option LTP": st.column_config.NumberColumn("Option LTP", format="%.2f"),
+            "SL": st.column_config.NumberColumn("SL", format="%.2f"),
+            "T1": st.column_config.NumberColumn("T1", format="%.2f"),
+            "T2": st.column_config.NumberColumn("T2", format="%.2f"),
+            "Target Reached": st.column_config.TextColumn("Target Reached", width="small"),
+        }
+
+        edit_enabled = st.checkbox("Enable SL/T1/T2 editing", key="dhan_positions_edit_targets")
+        if edit_enabled:
+            edited_df = st.data_editor(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                key="dhan_positions_editor",
+                column_config=column_cfg,
+                disabled=["Symbol", "Score", "Recommendation", "Avg Qty", "Avg Price", "Stock LTP", "Option LTP", "Target Reached"],
+            )
+
+            if st.button("Save SL/Targets to Watchlist", key="save_dhan_targets"):
+                try:
+                    if df_watchlist.empty:
+                        st.warning("Watchlist data is unavailable right now. Please retry after sync.")
+                    else:
+                        sheet_headers = df_watchlist.columns.tolist()
+                        if "Stop Loss (SL)" not in sheet_headers or "Target 1" not in sheet_headers or "Target 2" not in sheet_headers:
+                            st.error("Watchlist headers missing SL/T1/T2 columns.")
+                        else:
+                            sl_col = sheet_headers.index("Stop Loss (SL)") + 1
+                            t1_col = sheet_headers.index("Target 1") + 1
+                            t2_col = sheet_headers.index("Target 2") + 1
+
+                            updates = []
+                            for idx, new_row in edited_df.iterrows():
+                                old_row = display_df.iloc[idx]
+                                wl_row = df_positions_custom.iloc[idx].get("_wl_row")
+                                if pd.isna(wl_row):
+                                    continue
+
+                                wl_row = int(wl_row)
+                                for col_name, col_idx in [("SL", sl_col), ("T1", t1_col), ("T2", t2_col)]:
+                                    old_val = str(old_row.get(col_name, "")).strip()
+                                    new_val = str(new_row.get(col_name, "")).strip()
+                                    if old_val != new_val:
+                                        updates.append({
+                                            "range": gspread.utils.rowcol_to_a1(wl_row, col_idx),
+                                            "values": [[new_val]],
+                                        })
+
+                            if not updates:
+                                st.info("No SL/T1/T2 changes detected.")
+                            else:
+                                sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
+                                watchlist_ws.batch_update(updates)
+                                st.success(f"Saved {len(updates)} updates to Watchlist.")
+                                fetch_dataframe_safe.clear()
+                                st.rerun()
+                except Exception as save_err:
+                    st.error(f"Could not save updates: {save_err}")
+        else:
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config=column_cfg,
+            )
 
     with st.expander("Today\'s Dhan Orders"):
         df_orders, order_error = api.fetch_dhan_orders()
