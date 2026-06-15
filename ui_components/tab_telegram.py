@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import broker_api as api
 from core_engines.nlp_router import extract_asset_from_text, parse_trade_metrics, FNO_SYMBOLS
 from integrations.google_sheets import fetch_dataframe_safe
@@ -63,7 +63,7 @@ def _run_async(coro):
             loop.close()
 
 
-async def _manual_backfill_recent_telegram(raw_ws, existing_df, lookback_limit=60):
+async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=250, lookback_days=7):
     try:
         tg_cfg = st.secrets.get("telegram", {})
         api_id = int(tg_cfg.get("api_id", 0) or 0)
@@ -85,6 +85,7 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, lookback_limit=6
 
     rows_to_add = []
     today = datetime.today().date()
+    earliest_date = today - timedelta(days=max(1, int(lookback_days)) - 1)
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
     await client.start()
@@ -107,8 +108,14 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, lookback_limit=6
                     msg_dt = getattr(msg, "date", None)
                     if msg_dt is None:
                         continue
-                    if msg_dt.date() != today:
-                        continue
+                    msg_date = msg_dt.date()
+                    if use_all_dates:
+                        if msg_date < earliest_date:
+                            continue
+                    else:
+                        effective_target_date = target_date or today
+                        if msg_date != effective_target_date:
+                            continue
 
                     key = (str(source_name).strip().lower(), raw_text.lower())
                     if key in existing_keys:
@@ -157,12 +164,25 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 tele_ws = wb_obj.worksheet("Telegram_Raw_Logs")
                 current_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
 
-                added_count, err_msg = _run_async(_manual_backfill_recent_telegram(tele_ws, current_logs))
+                added_count, err_msg = _run_async(
+                    _manual_backfill_recent_telegram(
+                        tele_ws,
+                        current_logs,
+                        target_date=selected_date,
+                        use_all_dates=use_all_dates,
+                        lookback_limit=250,
+                        lookback_days=7,
+                    )
+                )
                 if err_msg:
                     st.warning(f"⚠️ {err_msg}")
                 else:
-                    st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages for today.")
-                st.session_state["telegram_refresh_jump_today_requested"] = True
+                    if use_all_dates:
+                        st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages from the last 7 days.")
+                    else:
+                        st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages for {selected_date}.")
+                if not use_all_dates:
+                    st.session_state["telegram_refresh_jump_today_requested"] = True
                 fetch_dataframe_safe.clear()
                 st.rerun()
             except Exception as e:
