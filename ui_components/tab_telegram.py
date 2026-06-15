@@ -139,6 +139,9 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
         st.session_state["social_log_stock_query"] = ""
         st.session_state["social_log_date"] = datetime.today().date()
         st.session_state.pop("social_log_selected_sources", None)
+    if st.session_state.pop("telegram_refresh_jump_today_requested", False):
+        st.session_state["social_log_date"] = datetime.today().date()
+        st.session_state["social_log_all_dates"] = False
     
     # Dual Axis Filters
     col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([1.2, 1.2, 1.4, 1.0, 0.8])
@@ -159,6 +162,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                     st.warning(f"⚠️ {err_msg}")
                 else:
                     st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages for today.")
+                st.session_state["telegram_refresh_jump_today_requested"] = True
                 fetch_dataframe_safe.clear()
                 st.rerun()
             except Exception as e:
@@ -369,6 +373,11 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
         st.warning(
             f"Active source filter: {', '.join(selected_sources)}. "
             "Only these sources are shown. Use Clear Filters to view all channels."
+        )
+    elif not use_all_dates and selected_date != datetime.today().date():
+        st.warning(
+            f"You are viewing {selected_date}. Messages sent today ({datetime.today().date()}) will not appear. "
+            "Click Refresh Today's Feeds or enable Show All Dates."
         )
     elif not use_all_dates:
         st.caption(
