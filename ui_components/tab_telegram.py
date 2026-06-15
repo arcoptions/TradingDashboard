@@ -70,6 +70,61 @@ def _channel_matches_selected_sources(channel_label, selected_sources):
     return False
 
 
+def _is_likely_tracked_channel(channel_label):
+    label = str(channel_label or "")
+    if not label.strip():
+        return False
+    if _is_tip_source(label):
+        return True
+    low = label.lower()
+    if "beat the street" in low or "news" in low:
+        return True
+    if low.strip() == "test":
+        return True
+    return False
+
+
+async def _resolve_refresh_entities(client, selected_sources=None):
+    resolved = {}
+
+    # Explicit tracked channels first.
+    for ch in TRACKED_CHANNELS:
+        try:
+            ent = await client.get_entity(ch)
+            label = getattr(ent, "title", "") or getattr(ent, "username", "") or str(ch)
+            if not _channel_matches_selected_sources(label, selected_sources):
+                continue
+            ent_id = str(getattr(ent, "id", ch))
+            resolved[ent_id] = (ent, label)
+        except Exception:
+            continue
+
+    # Fallback: discover from joined dialogs by title/username.
+    try:
+        async for dialog in client.iter_dialogs(limit=120):
+            ent = dialog.entity
+            title = str(getattr(dialog, "title", "") or "")
+            uname = str(getattr(ent, "username", "") or "")
+            label = title if title else uname
+            if not label:
+                continue
+
+            if selected_sources:
+                if not _channel_matches_selected_sources(label, selected_sources):
+                    continue
+            else:
+                if not _is_likely_tracked_channel(label):
+                    continue
+
+            ent_id = str(getattr(ent, "id", label))
+            if ent_id not in resolved:
+                resolved[ent_id] = (ent, label)
+    except Exception:
+        pass
+
+    return list(resolved.values())
+
+
 def _run_async(coro):
     try:
         return asyncio.run(coro)
@@ -130,19 +185,34 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
     await client.start()
     try:
-        for channel in TRACKED_CHANNELS:
+        entities = await _resolve_refresh_entities(client, selected_sources=selected_sources)
+        if not entities:
+            diagnostics.append({
+                "Channel": "-",
+                "Source": "-",
+                "Status": "error",
+                "Scanned": 0,
+                "Matched Window": 0,
+                "Added": 0,
+                "Latest Seen": "",
+                "Earliest Seen": "",
+                "Error": "No matching Telegram entities found for refresh",
+            })
+
+        for entity, resolved_label in entities:
             try:
-                entity = await client.get_entity(channel)
                 title_token = getattr(entity, 'title', '')
                 username_token = getattr(entity, 'username', '')
                 if "BeatTheStreet" in str(username_token) or "Beat The Street" in str(title_token):
                     source_name = "Beat The Street"
                 else:
-                    source_name = title_token if title_token else (username_token if username_token else str(channel))
+                    source_name = title_token if title_token else (username_token if username_token else str(resolved_label))
+
+                ch_key = str(getattr(entity, 'id', resolved_label))
 
                 if not _channel_matches_selected_sources(source_name, selected_sources):
                     diagnostics.append({
-                        "Channel": str(channel),
+                        "Channel": ch_key,
                         "Source": source_name,
                         "Status": "skipped",
                         "Scanned": 0,
@@ -205,7 +275,7 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                     added_for_channel += 1
 
                 diagnostics.append({
-                    "Channel": str(channel),
+                    "Channel": ch_key,
                     "Source": source_name,
                     "Status": "ok",
                     "Scanned": scanned_count,
@@ -217,8 +287,8 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                 })
             except Exception as channel_err:
                 diagnostics.append({
-                    "Channel": str(channel),
-                    "Source": str(channel),
+                    "Channel": str(getattr(entity, 'id', resolved_label)),
+                    "Source": str(resolved_label),
                     "Status": "error",
                     "Scanned": 0,
                     "Matched Window": 0,
