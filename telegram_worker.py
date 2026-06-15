@@ -290,10 +290,6 @@ async def run_telegram_listener():
         print(f"⚠️ Initialization issue: {e}")
         return
 
-    # FIXED: Caching memory so Telegram Worker stops spamming API limit!
-    cached_bases = []
-    last_cache_time = 0
-
     while True:
         try:
             client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
@@ -306,7 +302,7 @@ async def run_telegram_listener():
 
             @client.on(events.NewMessage(chats=TRACKED_CHANNELS))
             async def handler(event):
-                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers, cached_bases, last_cache_time
+                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers
                 raw_text = event.message.message
                 if not raw_text: return
                     
@@ -314,118 +310,22 @@ async def run_telegram_listener():
                 title_token = getattr(chat_from, 'title', '')
                 username_token = getattr(chat_from, 'username', '')
                 
-                if "BeatTheStreet" in username_token or "Beat The Street" in title_token: source_name = "Beat The Street"
-                else: source_name = title_token if title_token else (username_token if username_token else str(event.chat_id))
+                if "BeatTheStreet" in username_token or "Beat The Street" in title_token: 
+                    source_name = "Beat The Street"
+                else: 
+                    source_name = title_token if title_token else (username_token if username_token else str(event.chat_id))
                     
                 timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 try:
-                    if not watchlist_ws: sh, watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
+                    if not watchlist_ws: 
+                        sh, watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
                     
-                    if source_name == "Beat The Street":
-                        # ─── ADVANCED NEWS NLP ENGINE ───
-                        text_upper = raw_text.upper()
-                        text_norm = text_upper.replace(" ", "")
-                        matched_symbol = ""
-                        
-                        for master_ticker, aliases in ASSET_ALIASES.items():
-                            for alias in aliases:
-                                pattern = r'\b' + re.escape(alias.upper()) + r'\b'
-                                if re.search(pattern, text_upper) or alias.replace(" ", "") in text_norm:
-                                    matched_symbol = master_ticker
-                                    break
-                            if matched_symbol: break
-                                
-                        if not matched_symbol:
-                            for index_asset in SECTOR_MAP_KEYS:
-                                pattern = r'\b' + re.escape(index_asset.upper()) + r'\b'
-                                if re.search(pattern, text_upper):
-                                    matched_symbol = index_asset
-                                    break
-                        
-                        if matched_symbol:
-                            t_sym, t_sec, _ = api.resolve_instrument(matched_symbol)
-                            if t_sec:
-                                study_ws.append_row([timestamp_str, source_name, t_sym, raw_text, datetime.date.today().strftime("%Y-%m-%d")])
-                                raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Stocks to Study"])
-                            else: raw_ws.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
-                        else: raw_ws.append_row([timestamp_str, source_name, raw_text, "News Ingested"])
+                    # Simply log the raw message with pending status - let UI process it
+                    raw_ws.append_row([timestamp_str, source_name, raw_text, "pending review"])
                             
-                    else:
-                        # ─── ADVISORY NLP ENGINE ───
-                        pre_parsed = analytics.parse_telegram_tip(raw_text)
-                        t_symbol = str(pre_parsed.get("symbol", "UNKNOWN")).upper().strip()
-                        t_sym, t_sec, t_exch = api.resolve_instrument(t_symbol) if t_symbol != "UNKNOWN" else ("", "", "")
-                        
-                        if t_sec:
-                            # MEMORY CACHE TO AVOID QUOTA SPAM
-                            current_time = time.time()
-                            if not cached_bases or current_time - last_cache_time > 3600:
-                                try:
-                                    existing_records = watchlist_ws.get_all_records()
-                                    cached_bases = [str(r.get('Symbol / Asset', '')).upper().split('-')[0].split(' ')[0].strip() for r in existing_records]
-                                    last_cache_time = current_time
-                                except: cached_bases = []
-
-                            base_to_check = t_sym.split('-')[0].split(' ')[0].strip()
-                            
-                            if base_to_check in cached_bases:
-                                raw_ws.append_row([timestamp_str, source_name, raw_text, f"Skipped -> Duplicate ({base_to_check})"])
-                            else:
-                                try: from core_engines.nlp_router import FNO_SYMBOLS
-                                except: FNO_SYMBOLS = []
-                                
-                                is_fno = base_to_check in FNO_SYMBOLS or pre_parsed.get('trade_type') == 'Option'
-                                contract_symbol = t_sym
-                                auto_derived_type = "Option" if is_fno else "Equity"
-                                final_exch = "NSE_FNO" if is_fno else t_exch
-                                
-                                if is_fno:
-                                    if " CE" not in pre_parsed.get("symbol", "").upper() and " PE" not in pre_parsed.get("symbol", "").upper():
-                                        try:
-                                            settings_ws = sh.worksheet("Settings")
-                                            vals = settings_ws.get_all_values()
-                                            s_dict = {str(row[0]).strip(): str(row[1]).strip() for row in vals if len(row)>=2}
-                                            daily_token = s_dict.get("Dhan Access Token", "")
-                                        except:
-                                            daily_token = secrets.get("dhan", {}).get("access_token", "") if secrets else ""
-                                            
-                                        chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
-                                        is_put = "PE" in pre_parsed.get("symbol", "").upper() or "PUT" in raw_text.upper()
-                                        target_key = "best_pe" if is_put else "best_ce"
-                                        
-                                        if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
-                                            opt_suffix = "PE" if is_put else "CE"
-                                            suggested_query = f"{base_to_check} {chain_data[target_key]} {opt_suffix}"
-                                            s_sym, s_sec, s_exch = api.resolve_instrument(suggested_query)
-                                            if s_sec:
-                                                contract_symbol = s_sym
-                                                t_sec = s_sec
-                                            else:
-                                                contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
-
-                                new_row = [""] * len(sheet_headers)
-                                def fill(col, val): 
-                                    if col in sheet_headers: new_row[sheet_headers.index(col)] = str(val)
-                                fill("Trade Date", datetime.date.today().strftime("%Y-%m-%d"))
-                                fill("Idea Source (Chartink/Telegram/X/Self)", source_name)
-                                fill("Symbol / Asset", contract_symbol)
-                                fill("Trade Type (Eq/Option)", auto_derived_type)
-                                fill("Exchange", final_exch)
-                                fill("Security ID", t_sec)
-                                fill("Status (Watch/Active/Closed)", "Watchlist")
-                                fill("Entry CMP / Range", pre_parsed.get('entry', ''))
-                                fill("Stop Loss (SL)", pre_parsed.get('sl', ''))
-                                fill("Target 1", pre_parsed.get('t1', ''))
-                                fill("Raw Tip Text", raw_text)
-                                
-                                watchlist_ws.append_row(new_row)
-                                cached_bases.append(base_to_check)
-                                raw_ws.append_row([timestamp_str, source_name, raw_text, "Automatically Staged -> Watchlist"])
-                        else:
-                            raw_ws.append_row([timestamp_str, source_name, raw_text, "Discussion"])
-                            
-                except Exception as log_err: print(f"⚠️ Router execution anomaly: {log_err}")
+                except Exception as log_err: 
+                    print(f"⚠️ Message logging error: {log_err}")
 
             await client.run_until_disconnected()
         except Exception as loop_err:
