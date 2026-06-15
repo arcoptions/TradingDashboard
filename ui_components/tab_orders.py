@@ -11,6 +11,8 @@ ACTIVE_POSITION_TYPES = ["LONG", "SHORT"]
 
 def render():
     st.markdown("#### Dhan Live Positions")
+def render(intel_pool=None):
+    st.markdown("#### Dhan Live Positions")
 
     top_left, top_mid, top_right = st.columns([1.1, 1.2, 3.2])
     with top_left:
@@ -98,13 +100,31 @@ def render():
             df_positions_custom["LTP"] = df_positions_custom["BaseSymbol"].apply(
                 lambda x: watchlist_lookup.get(x.upper(), {}).get("LTP", "-")
             )
+        
+        # Fallback to intel_pool for LTP if not in watchlist (from TradingView)
+        def get_ltp_from_pool(row):
+            ltp_from_wl = row.get("LTP", "-")
+            if ltp_from_wl and ltp_from_wl != "-":
+                return ltp_from_wl
+            
+            if intel_pool is None:
+                return "-"
+            
+            base_sym = str(row.get("BaseSymbol", "")).strip().upper().replace("&", "_")
+            pool_data = intel_pool.get(base_sym, {})
+            ltp = pool_data.get("t", {}).get("ltp", "-")
+            return str(ltp) if ltp != "-" else "-"
+        
+        if not df_watchlist.empty:
+            df_positions_custom["LTP"] = df_positions_custom.apply(get_ltp_from_pool, axis=1)
         else:
             df_positions_custom["Score"] = "-"
             df_positions_custom["Recommendation"] = "-"
             df_positions_custom["SL"] = "-"
             df_positions_custom["T1"] = "-"
             df_positions_custom["T2"] = "-"
-            df_positions_custom["LTP"] = "-"
+            # Still try to fetch LTP from intel_pool even if watchlist is unavailable
+            df_positions_custom["LTP"] = df_positions_custom.apply(get_ltp_from_pool, axis=1)
         
         # Calculate Avg Qty and Avg Price
         df_positions_custom["Avg Qty"] = pd.to_numeric(df_positions_custom.get("netQty", 0), errors="coerce").fillna(0).astype(int)

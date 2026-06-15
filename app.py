@@ -444,7 +444,7 @@ def main():
 
     with t_opt: tab_options.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
-    with t_ord: tab_orders.render()
+    with t_ord: tab_orders.render(intel_pool=intel_pool)
     with t_recs: tab_recommendations.render(filtered_df, intel_pool)
     
     with t_htmap: 
