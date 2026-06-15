@@ -121,75 +121,173 @@ def resolve_instrument(parsed_sym):
         return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), ret_exch
     return parsed_sym, "", "NSE_EQ"
 
-def get_option_chain_metrics(asset_symbol, daily_token=None):
+def _build_dhan_headers(daily_token=None):
+    token_to_use = daily_token or st.secrets["dhan"].get("access_token", "")
+    return {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'access-token': token_to_use,
+        'client-id': st.secrets["dhan"]["dhan_client_id"],
+    }
+
+
+def _parse_option_chain_symbol(asset_symbol):
     import derivatives_engine as de
+
     contract_meta = de.parse_option_contract(asset_symbol)
-    if not contract_meta: return {}
-    
+    if contract_meta:
+        return contract_meta
+
+    clean_symbol = re.sub(r'\(.*?\)', '', str(asset_symbol or '').upper()).strip()
+    compact_match = re.search(r'([A-Z&]+)\s+(\d{2,6})\s+(CE|PE|CALL|PUT)', clean_symbol)
+    if not compact_match:
+        return None
+
+    option_type = compact_match.group(3)
+    if option_type == 'CALL':
+        option_type = 'CE'
+    if option_type == 'PUT':
+        option_type = 'PE'
+
+    return {
+        "underlying": compact_match.group(1).strip(),
+        "strike": float(compact_match.group(2)),
+        "type": option_type,
+        "expiry_date": "",
+    }
+
+
+def _fetch_option_chain_payload(asset_symbol, daily_token=None):
+    contract_meta = _parse_option_chain_symbol(asset_symbol)
+    if not contract_meta:
+        return None, None
+
     underlying = contract_meta["underlying"]
-    strike = float(contract_meta["strike"])
-    opt_type = contract_meta["type"].lower()
-    fallback_expiry = contract_meta["expiry_date"]
-    
+    fallback_expiry = contract_meta.get("expiry_date", "")
     scrip_df = get_dhan_scrip_master()
-    if scrip_df.empty: return {}
-    
+    if scrip_df.empty:
+        return contract_meta, None
+
     underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_SEGMENT'] == 'E')]
     if underlying_df.empty:
         underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_EXM_EXCH_ID'] == 'IDX')]
-    if underlying_df.empty: return {}
-    
+    if underlying_df.empty:
+        return contract_meta, None
+
     underlying_id = int(underlying_df.iloc[0]['SEM_SMST_SECURITY_ID'])
     exch = underlying_df.iloc[0]['SEM_EXM_EXCH_ID']
     underlying_seg = "IDX_I" if exch == 'IDX' else "NSE_EQ"
-    
-    if not daily_token: daily_token = st.secrets["dhan"].get("access_token", "")
-    headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': st.secrets["dhan"]["dhan_client_id"]}
+    headers = _build_dhan_headers(daily_token=daily_token)
 
     valid_expiry = fallback_expiry
     try:
         exp_res = requests.post("https://api.dhan.co/v2/optionchain/expirylist", headers=headers, json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg}, timeout=5)
         if exp_res.status_code == 200 and exp_res.json().get("data"):
             exp_list = exp_res.json()["data"]
-            parsed_dt = datetime.datetime.strptime(fallback_expiry, "%Y-%m-%d")
-            matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == parsed_dt.year and datetime.datetime.strptime(e, "%Y-%m-%d").month == parsed_dt.month]
-            if matching_expiries: valid_expiry = max(matching_expiries)
-    except: pass
-    
+            if fallback_expiry:
+                parsed_dt = datetime.datetime.strptime(fallback_expiry, "%Y-%m-%d")
+                matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == parsed_dt.year and datetime.datetime.strptime(e, "%Y-%m-%d").month == parsed_dt.month]
+                if matching_expiries:
+                    valid_expiry = max(matching_expiries)
+            if not valid_expiry and exp_list:
+                valid_expiry = exp_list[0]
+    except Exception:
+        pass
+
+    if not valid_expiry:
+        return contract_meta, None
+
     try:
         res = requests.post("https://api.dhan.co/v2/optionchain", headers=headers, json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg, "Expiry": valid_expiry}, timeout=10)
         if res.status_code == 200 and res.json().get("data"):
-            data_obj = res.json()["data"]
-            oc_dict = data_obj.get("oc", {})
-            total_call_oi, total_put_oi = 0.0, 0.0
-            metrics_map = {"implied_volatility": 0.0, "delta": 0.0, "theta": 0.0, "strike_pcr": 0.0, "overall_pcr": 1.0, "best_ce": "-", "best_pe": "-"}
-            ce_pool, pe_pool = [], []
-            
-            for strike_str, strike_data in oc_dict.items():
-                node_strike = float(strike_str)
-                ce_node, pe_node = strike_data.get("ce", {}), strike_data.get("pe", {})
-                c_oi = float(ce_node.get("oi", 0) if ce_node else 0)
-                p_oi = float(pe_node.get("oi", 0) if pe_node else 0)
-                total_call_oi += c_oi; total_put_oi += p_oi
-                
-                if c_oi > 0: ce_pool.append({"strike": node_strike, "oi": c_oi})
-                if p_oi > 0: pe_pool.append({"strike": node_strike, "oi": p_oi})
-                
-                if abs(node_strike - strike) < 0.1:
-                    target_node = strike_data.get(opt_type)
-                    if target_node:
-                        metrics_map.update({
-                            "implied_volatility": float(target_node.get("implied_volatility", 0.0)),
-                            "delta": float(target_node.get("greeks", {}).get("delta", 0)),
-                            "theta": float(target_node.get("greeks", {}).get("theta", 0)),
-                            "strike_pcr": round(p_oi / c_oi, 2) if c_oi > 0 else 0.0
-                        })
-            metrics_map["overall_pcr"] = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
-            if ce_pool: metrics_map["best_ce"] = sorted(ce_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
-            if pe_pool: metrics_map["best_pe"] = sorted(pe_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
-            return metrics_map
-    except: pass
-    return {}
+            contract_meta["expiry_date"] = valid_expiry
+            return contract_meta, res.json()["data"]
+    except Exception:
+        pass
+    return contract_meta, None
+
+
+def get_option_chain_metrics(asset_symbol, daily_token=None):
+    contract_meta, data_obj = _fetch_option_chain_payload(asset_symbol, daily_token=daily_token)
+    if not contract_meta or not data_obj:
+        return {}
+
+    strike = float(contract_meta["strike"])
+    opt_type = contract_meta["type"].lower()
+    oc_dict = data_obj.get("oc", {})
+    total_call_oi, total_put_oi = 0.0, 0.0
+    metrics_map = {"implied_volatility": 0.0, "delta": 0.0, "theta": 0.0, "strike_pcr": 0.0, "overall_pcr": 1.0, "best_ce": "-", "best_pe": "-"}
+    ce_pool, pe_pool = [], []
+
+    for strike_str, strike_data in oc_dict.items():
+        node_strike = float(strike_str)
+        ce_node, pe_node = strike_data.get("ce", {}), strike_data.get("pe", {})
+        c_oi = float(ce_node.get("oi", 0) if ce_node else 0)
+        p_oi = float(pe_node.get("oi", 0) if pe_node else 0)
+        total_call_oi += c_oi
+        total_put_oi += p_oi
+
+        if c_oi > 0:
+            ce_pool.append({"strike": node_strike, "oi": c_oi})
+        if p_oi > 0:
+            pe_pool.append({"strike": node_strike, "oi": p_oi})
+
+        if abs(node_strike - strike) < 0.1:
+            target_node = strike_data.get(opt_type)
+            if target_node:
+                metrics_map.update({
+                    "implied_volatility": float(target_node.get("implied_volatility", 0.0)),
+                    "delta": float(target_node.get("greeks", {}).get("delta", 0)),
+                    "theta": float(target_node.get("greeks", {}).get("theta", 0)),
+                    "strike_pcr": round(p_oi / c_oi, 2) if c_oi > 0 else 0.0
+                })
+    metrics_map["overall_pcr"] = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
+    if ce_pool:
+        metrics_map["best_ce"] = sorted(ce_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
+    if pe_pool:
+        metrics_map["best_pe"] = sorted(pe_pool, key=lambda x: x["oi"], reverse=True)[0]["strike"]
+    return metrics_map
+
+
+def get_option_chain_snapshot(asset_symbol, daily_token=None):
+    contract_meta, data_obj = _fetch_option_chain_payload(asset_symbol, daily_token=daily_token)
+    if not contract_meta or not data_obj:
+        return pd.DataFrame(), {}
+
+    rows = []
+    oc_dict = data_obj.get("oc", {})
+    for strike_str, strike_data in oc_dict.items():
+        ce_node = strike_data.get("ce", {}) or {}
+        pe_node = strike_data.get("pe", {}) or {}
+        rows.append({
+            "strike": float(strike_str),
+            "call_oi": float(ce_node.get("oi", 0) or 0),
+            "put_oi": float(pe_node.get("oi", 0) or 0),
+            "call_oi_change": float(ce_node.get("oi_change", ce_node.get("change_in_oi", ce_node.get("previous_oi", 0))) or 0),
+            "put_oi_change": float(pe_node.get("oi_change", pe_node.get("change_in_oi", pe_node.get("previous_oi", 0))) or 0),
+        })
+
+    df_chain = pd.DataFrame(rows)
+    if df_chain.empty:
+        return df_chain, {}
+
+    df_chain = df_chain.sort_values(by="strike").reset_index(drop=True)
+    spot_price = float(data_obj.get("last_price", 0) or 0)
+    target_strike = float(contract_meta.get("strike", 0) or 0)
+    if target_strike > 0:
+        df_chain["distance"] = (df_chain["strike"] - target_strike).abs()
+        df_chain = df_chain.sort_values(by=["distance", "strike"]).head(11).sort_values(by="strike").reset_index(drop=True)
+        df_chain = df_chain.drop(columns=["distance"])
+
+    meta = {
+        "underlying": contract_meta.get("underlying", ""),
+        "expiry": contract_meta.get("expiry_date", ""),
+        "spot_price": spot_price,
+        "target_strike": target_strike,
+        "max_call_oi_strike": float(df_chain.loc[df_chain["call_oi"].idxmax(), "strike"]) if not df_chain.empty else 0.0,
+        "max_put_oi_strike": float(df_chain.loc[df_chain["put_oi"].idxmax(), "strike"]) if not df_chain.empty else 0.0,
+    }
+    return df_chain, meta
 
 
 def fetch_dhan_orders(daily_token=None):

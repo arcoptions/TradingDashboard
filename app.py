@@ -16,6 +16,8 @@ import broker_api as api
 import analytics
 import scoring_engine as se
 import derivatives_engine as de
+import local_db
+import recommendation_engine as re
 
 # UI COMPONENTS
 from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, tab_orders, trade_inspector
@@ -165,6 +167,7 @@ def render_top_ticker_tape():
         st.markdown(f"<div class='index-tape'>{html}</div>", unsafe_allow_html=True)
 
 def main():
+    local_db.init_local_db()
     try:
         sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
 
@@ -248,8 +251,9 @@ def main():
 
     batch_tickers = df_watchlist['Symbol / Asset'].tolist()
     intel_pool = batch_fetch_intelligence(batch_tickers)
+    sector_strength_map = re.build_sector_heatmap_map(fetch_all_sectors_data())
     
-    scores_col, decisions_col = [], []
+    scores_col, decisions_col, recommendations_col, sector_strengths, oi_labels = [], [], [], [], []
     for idx, row in df_watchlist.iterrows():
         sym_key = str(row['Symbol / Asset']).split('-')[0].strip().upper().replace("&", "_")
         pool_data = intel_pool.get(sym_key, {"f": {"stock_pe": "-", "forward_pe": "-", "sector_pe": 20.0, "roe": "-", "debt_to_equity": "-", "ebitda_margin": "-", "pat_margin": "-", "roce": "-", "inst_own": "-"}, "t": {"ltp": "-", "rsi": "-", "vol_spike": "-", "ema20_prox": "-", "ema50_prox": "-", "ema200_prox": "-"}})
@@ -258,10 +262,21 @@ def main():
         lbl, _ = de.compute_oi_buildup(p_chg, o_chg)
         t_type = row.get("Trade Type (Eq/Option)", "Equity")
         scr, dec, _ = se.generate_conviction_score(pool_data["f"], pool_data["t"], lbl, trade_type=t_type)
-        scores_col.append(scr); decisions_col.append(dec)
+        sector_strength, _ = re.get_sector_strength(row.get("Sector/Industry", "General / Mixed"), sector_strength_map)
+        recommendation = re.generate_trade_recommendation(scr, dec, t_type, lbl, sector_strength, pool_data["t"])
+        scores_col.append(scr)
+        decisions_col.append(dec)
+        recommendations_col.append(recommendation)
+        sector_strengths.append(sector_strength)
+        oi_labels.append(lbl)
         
     df_watchlist["Score"] = scores_col
     df_watchlist["Decision"] = decisions_col
+    df_watchlist["Recommendation"] = recommendations_col
+    df_watchlist["Sector Strength %"] = sector_strengths
+    df_watchlist["OI Buildup Label"] = oi_labels
+    local_db.sync_watchlist_snapshot(df_watchlist)
+    local_db.save_recommendation_snapshot(df_watchlist)
 
     # --- INSPECTION ROUTING ENGINE ---
     viewing_trade = st.session_state.get("viewing_trade_row")
@@ -382,7 +397,7 @@ def main():
 
     view_cols = [
         "Journal", "Base Asset", "Symbol / Asset", "Vs Entry", "Entry CMP / Range", 
-        "Live Price", "Entry vs Live %", "Score", "Decision", "Add-On / Dip Levels", "Stop Loss (SL)", 
+        "Live Price", "Entry vs Live %", "Score", "Decision", "Recommendation", "Sector Strength %", "Add-On / Dip Levels", "Stop Loss (SL)", 
         "Target Status", "Target 1", "Target 2", "Exit Price", 
         "Idea Source (Chartink/Telegram/X/Self)", "Sector/Industry", "Trade Type (Eq/Option)", "Status (Watch/Active/Closed)", "_Sheet_Row"
     ]
@@ -397,6 +412,8 @@ def main():
         "Entry vs Live %": st.column_config.TextColumn("Entry vs Live %"),
         "Score": st.column_config.NumberColumn("Score", format="%d"),
         "Decision": st.column_config.TextColumn("Decision"),
+        "Recommendation": st.column_config.TextColumn("Recommendation"),
+        "Sector Strength %": st.column_config.NumberColumn("Sector Heat %", format="%.2f"),
         "Add-On / Dip Levels": st.column_config.TextColumn("Add-On / Dip Levels"),
         "Stop Loss (SL)": st.column_config.TextColumn("Stop Loss (SL)"),
         "Target Status": st.column_config.TextColumn("Target Status"),
@@ -409,7 +426,7 @@ def main():
         "Status (Watch/Active/Closed)": st.column_config.SelectboxColumn("Status", options=["Watchlist", "Active", "Closed"], required=True),
         "_Sheet_Row": None
     }
-    disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
+    disabled_cols = ["Decision", "Score", "Recommendation", "Sector Strength %", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
 
     t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_tel = st.tabs([
         "Options", "Stocks", "Dhan Positions", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"

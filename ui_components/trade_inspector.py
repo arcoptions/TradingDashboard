@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import plotly.graph_objects as go
 import re
 import broker_api as api
 import derivatives_engine as de
@@ -24,6 +25,38 @@ def render_tv_chart(symbol):
     </div>
     """
     components.html(html, height=420)
+
+
+def render_oi_chart(df_chain, meta):
+    fig = go.Figure()
+    fig.add_bar(name="Call OI", x=df_chain["strike"], y=df_chain["call_oi"], marker_color="#F23645")
+    fig.add_bar(name="Put OI", x=df_chain["strike"], y=df_chain["put_oi"], marker_color="#089981")
+    fig.update_layout(
+        barmode="group",
+        height=320,
+        margin=dict(t=30, l=10, r=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        title=f"Expiry: {meta.get('expiry', '-')} | Spot: {meta.get('spot_price', 0):.2f}",
+    )
+    fig.add_vline(x=meta.get("target_strike", 0), line_dash="dash", line_color="#64748B")
+    st.plotly_chart(fig, use_container_width=True)
+
+    if (df_chain["call_oi_change"].abs().sum() + df_chain["put_oi_change"].abs().sum()) > 0:
+        fig_change = go.Figure()
+        fig_change.add_bar(name="Call OI Change", x=df_chain["strike"], y=df_chain["call_oi_change"], marker_color="#F23645")
+        fig_change.add_bar(name="Put OI Change", x=df_chain["strike"], y=df_chain["put_oi_change"], marker_color="#089981")
+        fig_change.update_layout(
+            barmode="group",
+            height=280,
+            margin=dict(t=20, l=10, r=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            title="OI Change by Strike",
+        )
+        st.plotly_chart(fig_change, use_container_width=True)
 
 def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_headers):
     sheet_row_id = int(trade_data.get('_Sheet_Row', -1))
@@ -138,6 +171,16 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                         st.markdown(f"<ul style='padding-left:14px; margin:0;'>{''.join(match_bullet_items[:3])}</ul>", unsafe_allow_html=True)
                     else:
                         st.markdown("<div style='font-size:11px; color:#64748B; padding-top:4px;'>No macro news updates found for this asset index.</div>", unsafe_allow_html=True)
+
+                df_chain, chain_meta = api.get_option_chain_snapshot(asset_symbol, daily_token=daily_token)
+                if not df_chain.empty:
+                    st.markdown("---")
+                    st.markdown("**Strike-wise Open Interest View**")
+                    mc1, mc2, mc3 = st.columns(3)
+                    mc1.metric("Call OI Wall", f"{chain_meta.get('max_call_oi_strike', 0):.0f}")
+                    mc2.metric("Put OI Wall", f"{chain_meta.get('max_put_oi_strike', 0):.0f}")
+                    mc3.metric("Tracked Strikes", len(df_chain))
+                    render_oi_chart(df_chain, chain_meta)
         
         with st.container(border=True):
             st.markdown("**Market Intelligence**")
