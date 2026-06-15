@@ -2,6 +2,7 @@ import json
 import sqlite3
 import threading
 from datetime import datetime
+from datetime import datetime as dt_module
 
 _DB_PATH = "arc_trading.db"
 _DB_LOCK = threading.Lock()
@@ -87,6 +88,35 @@ def init_local_db():
                     live_price TEXT,
                     metadata_json TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS oi_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    underlying TEXT NOT NULL,
+                    expiry TEXT NOT NULL,
+                    strike REAL NOT NULL,
+                    call_oi REAL,
+                    put_oi REAL,
+                    call_oi_change REAL,
+                    put_oi_change REAL,
+                    timestamp TEXT NOT NULL,
+                    bucket_5m TEXT,
+                    bucket_15m TEXT,
+                    bucket_30m TEXT,
+                    bucket_1h TEXT,
+                    bucket_day TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_oi_snapshots_underlying_expiry 
+                    ON oi_snapshots(underlying, expiry);
+                CREATE INDEX IF NOT EXISTS idx_oi_snapshots_timestamp 
+                    ON oi_snapshots(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_oi_snapshots_bucket_5m 
+                    ON oi_snapshots(bucket_5m);
+                CREATE INDEX IF NOT EXISTS idx_oi_snapshots_bucket_15m 
+                    ON oi_snapshots(bucket_15m);
+                CREATE INDEX IF NOT EXISTS idx_oi_snapshots_bucket_1h 
+                    ON oi_snapshots(bucket_1h);
                 """
             )
             conn.commit()
@@ -229,5 +259,150 @@ def save_recommendation_snapshot(df):
                 rows,
             )
             conn.commit()
+        finally:
+            conn.close()
+
+
+def _get_time_bucket(timestamp_str, bucket_type):
+    from datetime import datetime as dt
+    dt_obj = dt.fromisoformat(timestamp_str)
+    
+    if bucket_type == "5m":
+        minutes = (dt_obj.minute // 5) * 5
+        bucketed = dt_obj.replace(minute=minutes, second=0, microsecond=0)
+    elif bucket_type == "15m":
+        minutes = (dt_obj.minute // 15) * 15
+        bucketed = dt_obj.replace(minute=minutes, second=0, microsecond=0)
+    elif bucket_type == "30m":
+        minutes = (dt_obj.minute // 30) * 30
+        bucketed = dt_obj.replace(minute=minutes, second=0, microsecond=0)
+    elif bucket_type == "1h":
+        bucketed = dt_obj.replace(minute=0, second=0, microsecond=0)
+    elif bucket_type == "day":
+        bucketed = dt_obj.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        bucketed = dt_obj
+    
+    return bucketed.isoformat(timespec="seconds")
+
+
+def save_oi_snapshot(underlying, expiry, strikes_data, timestamp_str=None):
+    if not strikes_data:
+        return
+    
+    if timestamp_str is None:
+        timestamp_str = datetime.utcnow().isoformat(timespec="seconds")
+    
+    bucket_5m = _get_time_bucket(timestamp_str, "5m")
+    bucket_15m = _get_time_bucket(timestamp_str, "15m")
+    bucket_30m = _get_time_bucket(timestamp_str, "30m")
+    bucket_1h = _get_time_bucket(timestamp_str, "1h")
+    bucket_day = _get_time_bucket(timestamp_str, "day")
+    
+    rows = []
+    for strike_data in strikes_data:
+        rows.append((
+            underlying,
+            expiry,
+            float(strike_data.get("strike", 0)),
+            float(strike_data.get("call_oi", 0)),
+            float(strike_data.get("put_oi", 0)),
+            float(strike_data.get("call_oi_change", 0)),
+            float(strike_data.get("put_oi_change", 0)),
+            timestamp_str,
+            bucket_5m,
+            bucket_15m,
+            bucket_30m,
+            bucket_1h,
+            bucket_day,
+            datetime.utcnow().isoformat(timespec="seconds"),
+        ))
+    
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.executemany(
+                """
+                INSERT INTO oi_snapshots(
+                    underlying, expiry, strike, call_oi, put_oi,
+                    call_oi_change, put_oi_change, timestamp,
+                    bucket_5m, bucket_15m, bucket_30m, bucket_1h, bucket_day, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def query_oi_changes(underlying, expiry, strike, time_window="1h"):
+    bucket_col = {
+        "5m": "bucket_5m",
+        "15m": "bucket_15m",
+        "30m": "bucket_30m",
+        "1h": "bucket_1h",
+        "day": "bucket_day",
+    }.get(time_window, "bucket_1h")
+    
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT {bucket_col} as time_bucket, 
+                       call_oi, put_oi, call_oi_change, put_oi_change, 
+                       timestamp
+                FROM oi_snapshots
+                WHERE underlying = ? AND expiry = ? AND strike = ?
+                GROUP BY {bucket_col}
+                ORDER BY timestamp DESC
+                """,
+                (underlying, expiry, strike),
+            )
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def save_signal_event(source_type, source_name, raw_text, parsed_symbol, parsed_trade_type, source_sl="", source_target_1="", source_target_2="", metadata=None):
+    if metadata is None:
+        metadata = {}
+    
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO signal_events(
+                    source_type, source_name, raw_text, parsed_symbol,
+                    parsed_trade_type, source_sl, source_target_1, source_target_2,
+                    event_time, metadata_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_type,
+                    source_name,
+                    raw_text,
+                    parsed_symbol,
+                    parsed_trade_type,
+                    source_sl,
+                    source_target_1,
+                    source_target_2,
+                    now,
+                    json.dumps(metadata),
+                    now,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
         finally:
             conn.close()

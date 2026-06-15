@@ -18,6 +18,8 @@ import scoring_engine as se
 import derivatives_engine as de
 import local_db
 import recommendation_engine as re
+import oi_collector
+from ui_components import tab_recommendations
 
 # UI COMPONENTS
 from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, tab_orders, trade_inspector
@@ -171,8 +173,16 @@ def main():
     try:
         sh, watchlist_ws, study_ws, raw_ws, scanner_ws, settings_ws = init_sheet_connection()
 
-        # Daemon thread is cache-initialized once; avoid header reads on each rerun.
+        # Daemon threads are cache-initialized once; avoid header reads on each rerun.
         api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, [], [])
+        
+        # Start OI collector daemon (5-minute interval)
+        try:
+            gcp_creds = dict(st.secrets["gcp_service_account"])
+            dhan_id = st.secrets["dhan"]["dhan_client_id"]
+            oi_collector.start_oi_collector_daemon(gcp_creds, dhan_id, sync_interval=300)
+        except Exception as oi_err:
+            print(f"OI Collector startup warning: {oi_err}")
         
     except Exception as e:
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
@@ -428,13 +438,14 @@ def main():
     }
     disabled_cols = ["Decision", "Score", "Recommendation", "Sector Strength %", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
 
-    t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_tel = st.tabs([
-        "Options", "Stocks", "Dhan Positions", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
+    t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_recs, t_tel = st.tabs([
+        "Options", "Stocks", "Dhan Positions", "Sector Heatmap", "Scanners", "Stocks to Study", "📊 Recommendations", "Telegram Data"
     ])
 
     with t_opt: tab_options.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     with t_ord: tab_orders.render()
+    with t_recs: tab_recommendations.render(filtered_df, intel_pool)
     
     with t_htmap: 
         if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None

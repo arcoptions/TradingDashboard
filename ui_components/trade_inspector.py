@@ -6,6 +6,7 @@ import re
 import broker_api as api
 import derivatives_engine as de
 import scoring_engine as se
+import local_db
 from integrations.google_sheets import fetch_dataframe_safe
 
 def prox_color(val):
@@ -27,7 +28,11 @@ def render_tv_chart(symbol):
     components.html(html, height=420)
 
 
-def render_oi_chart(df_chain, meta):
+def render_oi_chart(df_chain, meta, underlying=None, expiry=None):
+    """
+    Render OI chart with optional time-window aggregation from historical snapshots.
+    If underlying and expiry are provided, can show OI changes over time periods.
+    """
     fig = go.Figure()
     fig.add_bar(name="Call OI", x=df_chain["strike"], y=df_chain["call_oi"], marker_color="#F23645")
     fig.add_bar(name="Put OI", x=df_chain["strike"], y=df_chain["put_oi"], marker_color="#089981")
@@ -57,6 +62,47 @@ def render_oi_chart(df_chain, meta):
             title="OI Change by Strike",
         )
         st.plotly_chart(fig_change, use_container_width=True)
+    
+    # OI Change Analysis from Historical Snapshots
+    if underlying and expiry:
+        st.markdown("**OI Change Trend Analysis**")
+        tw_col1, tw_col2, tw_col3, tw_col4 = st.columns(4)
+        selected_timeframe = None
+        with tw_col1:
+            if st.button("📊 5m Change", key=f"tw_5m_{underlying}_{expiry}", use_container_width=True):
+                selected_timeframe = "5m"
+        with tw_col2:
+            if st.button("📊 15m Change", key=f"tw_15m_{underlying}_{expiry}", use_container_width=True):
+                selected_timeframe = "15m"
+        with tw_col3:
+            if st.button("📊 1h Change", key=f"tw_1h_{underlying}_{expiry}", use_container_width=True):
+                selected_timeframe = "1h"
+        with tw_col4:
+            if st.button("📊 Full Day Change", key=f"tw_day_{underlying}_{expiry}", use_container_width=True):
+                selected_timeframe = "day"
+        
+        # Store and retrieve selected timeframe from session state
+        key = f"oi_timeframe_{underlying}_{expiry}"
+        if selected_timeframe:
+            st.session_state[key] = selected_timeframe
+        
+        selected_tw = st.session_state.get(key, "1h")
+        
+        # Query historical snapshots
+        try:
+            max_strike = df_chain["strike"].max()
+            snapshots = local_db.query_oi_changes(underlying, expiry, max_strike, time_window=selected_tw)
+            if snapshots:
+                snapshot_df = pd.DataFrame(snapshots)
+                st.dataframe(
+                    snapshot_df[["time_bucket", "call_oi", "put_oi"]].tail(10),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info(f"No OI history available for {selected_tw} timeframe yet.")
+        except Exception as e:
+            st.warning(f"Could not load OI history: {e}")
 
 def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_headers):
     sheet_row_id = int(trade_data.get('_Sheet_Row', -1))
@@ -180,7 +226,7 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                     mc1.metric("Call OI Wall", f"{chain_meta.get('max_call_oi_strike', 0):.0f}")
                     mc2.metric("Put OI Wall", f"{chain_meta.get('max_put_oi_strike', 0):.0f}")
                     mc3.metric("Tracked Strikes", len(df_chain))
-                    render_oi_chart(df_chain, chain_meta)
+                    render_oi_chart(df_chain, chain_meta, underlying=chain_meta.get('underlying'), expiry=chain_meta.get('expiry'))
         
         with st.container(border=True):
             st.markdown("**Market Intelligence**")
