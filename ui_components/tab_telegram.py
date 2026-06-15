@@ -1,15 +1,25 @@
 import streamlit as st
 import pandas as pd
 import time
+import asyncio
 from datetime import datetime
 import broker_api as api
 from core_engines.nlp_router import extract_asset_from_text, parse_trade_metrics, FNO_SYMBOLS
 from integrations.google_sheets import fetch_dataframe_safe
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 TIP_CHANNELS = [
     "-1003141350480", "-1003858490010", "-3858490010", "1005281196022", "-5281196022", 
     "-1003800707569", "-1003770951544", "-1003148687413", "-1003121140019", "-1003770810999",
     "INVESTOLOGY", "ELEPHANT PRO", "CHARTIST", "CHIKOUTRADER", "SUNIL V TINANI"
+]
+
+TRACKED_CHANNELS = [
+    -1003141350480, -1003858490010, -3858490010, -1001320942683, -1005281196022, -5281196022,
+    -1003800707569, -1003770951544, 'Shortterm01', -1003148687413, -1003121140019,
+    'The_ChartWizard', -1003770810999, -1003109328674, 'SwingWisely', -1003101198634,
+    'BeatTheStreetNews'
 ]
 
 
@@ -41,6 +51,85 @@ def _is_tip_source(source_value):
             return True
     return False
 
+
+def _run_async(coro):
+    try:
+        return asyncio.run(coro)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+
+async def _manual_backfill_recent_telegram(raw_ws, existing_df, lookback_limit=60):
+    try:
+        tg_cfg = st.secrets.get("telegram", {})
+        api_id = int(tg_cfg.get("api_id", 0) or 0)
+        api_hash = str(tg_cfg.get("api_hash", "") or "")
+        session_string = str(tg_cfg.get("session_string", "") or "")
+    except Exception:
+        return 0, "Telegram secrets not configured in app settings"
+
+    if not api_id or not api_hash or not session_string:
+        return 0, "Missing Telegram credentials (api_id/api_hash/session_string)"
+
+    existing_keys = set()
+    if existing_df is not None and not existing_df.empty:
+        for _, r in existing_df.iterrows():
+            src = str(r.get("Channel Source", "")).strip().lower()
+            txt = str(r.get("Raw Message Text", "")).strip().lower()
+            if src and txt:
+                existing_keys.add((src, txt))
+
+    rows_to_add = []
+    today = datetime.today().date()
+
+    client = TelegramClient(StringSession(session_string), api_id, api_hash)
+    await client.start()
+    try:
+        for channel in TRACKED_CHANNELS:
+            try:
+                entity = await client.get_entity(channel)
+                title_token = getattr(entity, 'title', '')
+                username_token = getattr(entity, 'username', '')
+                if "BeatTheStreet" in str(username_token) or "Beat The Street" in str(title_token):
+                    source_name = "Beat The Street"
+                else:
+                    source_name = title_token if title_token else (username_token if username_token else str(channel))
+
+                history = await client.get_messages(entity, limit=lookback_limit)
+                for msg in history:
+                    raw_text = str(getattr(msg, "message", "") or "").strip()
+                    if not raw_text:
+                        continue
+                    msg_dt = getattr(msg, "date", None)
+                    if msg_dt is None:
+                        continue
+                    if msg_dt.date() != today:
+                        continue
+
+                    key = (str(source_name).strip().lower(), raw_text.lower())
+                    if key in existing_keys:
+                        continue
+
+                    rows_to_add.append([
+                        msg_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        source_name,
+                        raw_text,
+                        "pending review",
+                    ])
+                    existing_keys.add(key)
+            except Exception:
+                continue
+    finally:
+        await client.disconnect()
+
+    if rows_to_add:
+        raw_ws.append_rows(rows_to_add)
+    return len(rows_to_add), ""
+
 def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
 
@@ -62,20 +151,16 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     with col_f4:
         if st.button("🔄 Refresh Today's Feeds", key="telegram_refresh_btn"):
             try:
-                settings_ws = wb_obj.worksheet("Settings")
-                # Find or create the backfill flag
-                all_settings = settings_ws.get_all_values()
-                flag_row = None
-                for idx, row in enumerate(all_settings, 1):
-                    if row and str(row[0]).strip() == "Force Telegram Backfill":
-                        flag_row = idx
-                        break
-                if flag_row:
-                    settings_ws.update_acell(f"B{flag_row}", "yes")
+                tele_ws = wb_obj.worksheet("Telegram_Raw_Logs")
+                current_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
+
+                added_count, err_msg = _run_async(_manual_backfill_recent_telegram(tele_ws, current_logs))
+                if err_msg:
+                    st.warning(f"⚠️ {err_msg}")
                 else:
-                    settings_ws.append_row(["Force Telegram Backfill", "yes"])
-                st.success("✅ Backfill triggered! Processing channels...")
-                st.info("Messages will appear in a few moments.")
+                    st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages for today.")
+                fetch_dataframe_safe.clear()
+                st.rerun()
             except Exception as e:
                 st.error(f"⚠️ Error triggering backfill: {e}")
     with col_f5:
