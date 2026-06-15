@@ -18,7 +18,7 @@ import scoring_engine as se
 import derivatives_engine as de
 
 # UI COMPONENTS
-from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, trade_inspector
+from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, tab_orders, trade_inspector
 try:
     import modals
 except ImportError:
@@ -411,12 +411,13 @@ def main():
     }
     disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
 
-    t_opt, t_stk, t_htmap, t_scan, t_study, t_tel = st.tabs([
-        "Options", "Stocks", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
+    t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_tel = st.tabs([
+        "Options", "Stocks", "Dhan Orders", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
     ])
 
     with t_opt: tab_options.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
     with t_stk: tab_stocks.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
+    with t_ord: tab_orders.render()
     
     with t_htmap: 
         if "active_heatmap_sector" not in st.session_state: st.session_state.active_heatmap_sector = None
