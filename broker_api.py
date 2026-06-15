@@ -234,6 +234,52 @@ def fetch_dhan_orders(daily_token=None):
     except Exception as e:
         return pd.DataFrame(), f"Unable to fetch Dhan orders: {e}"
 
+
+def fetch_dhan_positions(daily_token=None):
+    try:
+        settings = fetch_settings_dict()
+        token_to_use = daily_token or settings.get("Dhan Access Token", "")
+        client_id = st.secrets["dhan"].get("dhan_client_id", "")
+        if not token_to_use:
+            return pd.DataFrame(), "Missing Dhan access token"
+        if not client_id:
+            return pd.DataFrame(), "Missing Dhan client ID"
+
+        headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'access-token': token_to_use,
+            'client-id': client_id,
+        }
+        response = requests.get("https://api.dhan.co/v2/positions", headers=headers, timeout=15)
+        if response.status_code != 200:
+            return pd.DataFrame(), f"Dhan positions API returned {response.status_code}: {response.text[:200]}"
+
+        payload = response.json()
+        if isinstance(payload, dict):
+            if isinstance(payload.get("data"), list):
+                positions = payload.get("data", [])
+            else:
+                positions = [payload]
+        elif isinstance(payload, list):
+            positions = payload
+        else:
+            positions = []
+
+        if not positions:
+            return pd.DataFrame(), ""
+
+        df_positions = pd.DataFrame(positions)
+        if "netQty" in df_positions.columns:
+            df_positions["netQty"] = pd.to_numeric(df_positions["netQty"], errors="coerce")
+        if "unrealizedProfit" in df_positions.columns:
+            df_positions["unrealizedProfit"] = pd.to_numeric(df_positions["unrealizedProfit"], errors="coerce")
+        if "positionType" in df_positions.columns:
+            df_positions = df_positions.sort_values(by=["positionType"], ascending=True)
+        return df_positions, ""
+    except Exception as e:
+        return pd.DataFrame(), f"Unable to fetch Dhan positions: {e}"
+
 # --- FIXED: Stopped individual B2 Acell scraping ---
 def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, scanner_headers, background_client_id=None, daily_token=None):
     try:

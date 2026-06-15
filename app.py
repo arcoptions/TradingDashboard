@@ -412,7 +412,7 @@ def main():
     disabled_cols = ["Decision", "Score", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
 
     t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_tel = st.tabs([
-        "Options", "Stocks", "Dhan Orders", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
+        "Options", "Stocks", "Dhan Positions", "Sector Heatmap", "Scanners", "Stocks to Study", "Telegram Data"
     ])
 
     with t_opt: tab_options.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
