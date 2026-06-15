@@ -45,7 +45,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
     
     # Dual Axis Filters
-    col_f1, col_f2, col_f3, col_f4 = st.columns([1.2, 1.2, 1.4, 1.0])
+    col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([1.2, 1.2, 1.4, 1.0, 0.8])
     with col_f1:
         selected_date = st.date_input("Filter Logs by Date", datetime.today().date(), key="social_log_date")
     with col_f2:
@@ -71,6 +71,12 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 st.info("Messages will appear in a few moments.")
             except Exception as e:
                 st.error(f"⚠️ Error triggering backfill: {e}")
+    with col_f5:
+        if st.button("Clear Filters", key="telegram_clear_filters"):
+            st.session_state["social_log_all_dates"] = True
+            st.session_state["social_log_stock_query"] = ""
+            st.session_state["social_log_selected_sources"] = []
+            st.rerun()
     
     df_tele_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
     df_x_logs = fetch_dataframe_safe("X_Raw_Logs")
@@ -250,7 +256,13 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     
     with col_f2:
         available_sources = sorted(list(df_date_filtered["Source"].dropna().unique())) if not df_date_filtered.empty else []
-        selected_sources = st.multiselect("Filter Logs by Source Handle", options=available_sources, default=[])
+        selected_sources = st.multiselect(
+            "Filter Logs by Source Handle",
+            options=available_sources,
+            default=st.session_state.get("social_log_selected_sources", []),
+            key="social_log_selected_sources",
+            help="If you select one source (e.g., Beat The Street), all other channels are hidden.",
+        )
         
     if selected_sources:
         df_date_filtered = df_date_filtered[df_date_filtered["Source"].isin(selected_sources)]
@@ -262,6 +274,17 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
             | df_date_filtered["Source"].astype(str).str.contains(q, case=False, na=False)
         )
         df_date_filtered = df_date_filtered[mask]
+
+    if selected_sources:
+        st.warning(
+            f"Active source filter: {', '.join(selected_sources)}. "
+            "Only these sources are shown. Use Clear Filters to view all channels."
+        )
+    elif not use_all_dates:
+        st.caption(
+            f"Showing logs for {selected_date}. "
+            "If other channels look empty, enable Show All Dates or click Refresh Today's Feeds."
+        )
         
     df_display = df_date_filtered.sort_values(by="Timestamp", ascending=False).head(200)
     
