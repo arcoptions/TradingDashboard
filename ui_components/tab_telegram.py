@@ -386,7 +386,12 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     df_tips = df_display[df_display.apply(check_tip, axis=1) & ~df_display.apply(check_news, axis=1)]
     df_discussions = df_display[~df_display.apply(check_news, axis=1) & ~df_display.apply(check_tip, axis=1)]
 
-    sub_news, sub_mentions, sub_discussions = st.tabs(["Exclusive News Log", "Auto Routed Tips", "General Discussions"])
+    sub_news, sub_mentions, sub_discussions, sub_raw = st.tabs([
+        "Exclusive News Log",
+        "Auto Routed Tips",
+        "General Discussions",
+        "Raw Logs",
+    ])
     
     def render_log_table(df):
         if df.empty:
@@ -405,3 +410,74 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     with sub_news: render_log_table(df_news)
     with sub_mentions: render_log_table(df_tips)
     with sub_discussions: render_log_table(df_discussions)
+    with sub_raw:
+        st.caption("Direct raw ingestion view (Telegram + X) before routing filters.")
+
+        raw_blocks = []
+        if not df_tele_logs.empty:
+            tele_raw = df_tele_logs.copy()
+            tele_raw["Network"] = "Telegram"
+            tele_raw = tele_raw.rename(
+                columns={
+                    "Channel Source": "Source",
+                    "Raw Message Text": "Content",
+                    "Parsing Status": "Status",
+                }
+            )
+            for col in ["Timestamp", "Source", "Content", "Status", "Network"]:
+                if col not in tele_raw.columns:
+                    tele_raw[col] = ""
+            raw_blocks.append(tele_raw[["Timestamp", "Network", "Source", "Status", "Content"]])
+
+        if not df_x_logs.empty:
+            x_raw = df_x_logs.copy()
+            x_raw["Network"] = "X"
+            x_raw = x_raw.rename(
+                columns={
+                    "Account Handle": "Source",
+                    "Post Content": "Content",
+                    "Parsing Status": "Status",
+                }
+            )
+            for col in ["Timestamp", "Source", "Content", "Status", "Network"]:
+                if col not in x_raw.columns:
+                    x_raw[col] = ""
+            raw_blocks.append(x_raw[["Timestamp", "Network", "Source", "Status", "Content"]])
+
+        if not raw_blocks:
+            st.info("No raw log rows available yet.")
+        else:
+            raw_df = pd.concat(raw_blocks, ignore_index=True)
+            raw_df["Log_Date"] = pd.to_datetime(raw_df["Timestamp"], errors="coerce").dt.date
+
+            if not use_all_dates:
+                raw_df = raw_df[raw_df["Log_Date"] == selected_date]
+            if selected_sources:
+                raw_df = raw_df[raw_df["Source"].isin(selected_sources)]
+            if stock_query.strip():
+                q = stock_query.strip()
+                raw_df = raw_df[
+                    raw_df["Content"].astype(str).str.contains(q, case=False, na=False)
+                    | raw_df["Source"].astype(str).str.contains(q, case=False, na=False)
+                ]
+
+            raw_df = raw_df.sort_values(by="Timestamp", ascending=False).head(500)
+            if raw_df.empty:
+                st.info("No matching raw logs for current filters.")
+            else:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Raw Rows", len(raw_df))
+                c2.metric("Telegram", int((raw_df["Network"] == "Telegram").sum()))
+                c3.metric("X", int((raw_df["Network"] == "X").sum()))
+                st.dataframe(
+                    raw_df[["Timestamp", "Network", "Source", "Status", "Content"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Timestamp": st.column_config.TextColumn("Time", width="small"),
+                        "Network": st.column_config.TextColumn("Network", width="small"),
+                        "Source": st.column_config.TextColumn("Source", width="medium"),
+                        "Status": st.column_config.TextColumn("Raw Status", width="small"),
+                        "Content": st.column_config.TextColumn("Raw Message", width="large"),
+                    },
+                )
