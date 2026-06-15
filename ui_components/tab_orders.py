@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 import broker_api as api
+from integrations.google_sheets import fetch_dataframe_safe
 
 
 ACTIVE_ORDER_STATUSES = ["TRANSIT", "PENDING", "PART_TRADED"]
@@ -36,83 +37,146 @@ def render():
     if df_positions.empty:
         st.info("No active Dhan positions right now.")
     else:
-        rename_map = {
-        "tradingSymbol": "Symbol",
-        "positionType": "Position",
-        "exchangeSegment": "Segment",
-        "productType": "Product",
-        "netQty": "Net Qty",
-        "buyQty": "Buy Qty",
-        "sellQty": "Sell Qty",
-        "buyAvg": "Buy Avg",
-        "sellAvg": "Sell Avg",
-        "costPrice": "Cost Price",
-        "unrealizedProfit": "Unrealized P&L",
-        "realizedProfit": "Realized P&L",
-        "drvOptionType": "Option Type",
-        "drvStrikePrice": "Strike",
-        "drvExpiryDate": "Expiry",
-        "securityId": "Security ID",
-        }
-        df_positions = df_positions.rename(columns=rename_map)
+        # Fetch watchlist to get score, recommendation, and targets
+        try:
+            df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
+        except Exception:
+            df_watchlist = pd.DataFrame()
 
-        preferred_cols = [
-        "Symbol",
-        "Position",
-        "Segment",
-        "Product",
-        "Net Qty",
-        "Buy Qty",
-        "Sell Qty",
-        "Buy Avg",
-        "Sell Avg",
-        "Cost Price",
-        "Unrealized P&L",
-        "Realized P&L",
-        "Option Type",
-        "Strike",
-        "Expiry",
-        "Security ID",
+        # Prepare positions data
+        df_positions_custom = df_positions.copy()
+        df_positions_custom["Symbol"] = df_positions_custom.get("tradingSymbol", "")
+        
+        # Extract base symbol (remove expiry/strike info for options)
+        df_positions_custom["BaseSymbol"] = df_positions_custom["Symbol"].str.split('-').str[0].str.strip()
+        
+        # Join with watchlist data
+        if not df_watchlist.empty:
+            # Create lookup from watchlist (match by Symbol or Base Asset)
+            watchlist_lookup = {}
+            for _, row in df_watchlist.iterrows():
+                sym = str(row.get("Symbol / Asset", "")).strip().upper()
+                base = str(row.get("Base Asset", "")).strip().upper()
+                
+                score = row.get("Score", "-")
+                recommendation = row.get("Recommendation", "-")
+                sl = str(row.get("Stop Loss (SL)", "")).strip()
+                t1 = str(row.get("Target 1", "")).strip()
+                t2 = str(row.get("Target 2", "")).strip()
+                ltp = str(row.get("Live Price", "")).strip()
+                
+                entry = {
+                    "Score": score,
+                    "Recommendation": recommendation,
+                    "SL": sl,
+                    "T1": t1,
+                    "T2": t2,
+                    "LTP": ltp,
+                }
+                
+                if sym:
+                    watchlist_lookup[sym] = entry
+                if base:
+                    watchlist_lookup[base] = entry
+            
+            # Match positions with watchlist
+            df_positions_custom["Score"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("Score", "-")
+            )
+            df_positions_custom["Recommendation"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("Recommendation", "-")
+            )
+            df_positions_custom["SL"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("SL", "-")
+            )
+            df_positions_custom["T1"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("T1", "-")
+            )
+            df_positions_custom["T2"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("T2", "-")
+            )
+            df_positions_custom["LTP"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("LTP", "-")
+            )
+        else:
+            df_positions_custom["Score"] = "-"
+            df_positions_custom["Recommendation"] = "-"
+            df_positions_custom["SL"] = "-"
+            df_positions_custom["T1"] = "-"
+            df_positions_custom["T2"] = "-"
+            df_positions_custom["LTP"] = "-"
+        
+        # Calculate Avg Qty and Avg Price
+        df_positions_custom["Avg Qty"] = pd.to_numeric(df_positions_custom.get("netQty", 0), errors="coerce").fillna(0).astype(int)
+        df_positions_custom["Avg Price"] = pd.to_numeric(df_positions_custom.get("buyAvg", 0), errors="coerce").fillna(0)
+        
+        # Calculate if target is reached
+        def check_target_reached(row):
+            try:
+                ltp = pd.to_numeric(row["LTP"], errors="coerce")
+                t1 = pd.to_numeric(row["T1"], errors="coerce")
+                t2 = pd.to_numeric(row["T2"], errors="coerce")
+                position = str(row.get("positionType", "")).upper()
+                
+                if pd.isna(ltp):
+                    return "-"
+                
+                reached = []
+                if not pd.isna(t1) and t1 > 0:
+                    if position == "LONG" and ltp >= t1:
+                        reached.append("T1 ✓")
+                    elif position == "SHORT" and ltp <= t1:
+                        reached.append("T1 ✓")
+                
+                if not pd.isna(t2) and t2 > 0:
+                    if position == "LONG" and ltp >= t2:
+                        reached.append("T2 ✓")
+                    elif position == "SHORT" and ltp <= t2:
+                        reached.append("T2 ✓")
+                
+                return ", ".join(reached) if reached else "No"
+            except Exception:
+                return "-"
+        
+        df_positions_custom["Target Reached"] = df_positions_custom.apply(check_target_reached, axis=1)
+        
+        # Display columns in requested order
+        display_cols = [
+            "Symbol",
+            "Score",
+            "Recommendation",
+            "Avg Qty",
+            "Avg Price",
+            "LTP",
+            "SL",
+            "T1",
+            "T2",
+            "Target Reached",
         ]
-        display_cols = [col for col in preferred_cols if col in df_positions.columns]
-        display_df = df_positions[display_cols].copy()
-
-        numeric_cols = [
-            "Net Qty",
-            "Buy Qty",
-            "Sell Qty",
-            "Buy Avg",
-            "Sell Avg",
-            "Cost Price",
-            "Unrealized P&L",
-            "Realized P&L",
-            "Strike",
-        ]
+        
+        display_df = df_positions_custom[display_cols].copy()
+        
+        # Format numeric columns
+        numeric_cols = ["Avg Qty", "Avg Price", "LTP", "SL", "T1", "T2"]
         for col in numeric_cols:
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
-
-        total_unrealized = display_df["Unrealized P&L"].sum() if "Unrealized P&L" in display_df.columns else 0.0
-        total_realized = display_df["Realized P&L"].sum() if "Realized P&L" in display_df.columns else 0.0
-        metric_a, metric_b, metric_c = st.columns(3)
-        metric_a.metric("Open Positions", len(display_df))
-        metric_b.metric("Unrealized P&L", f"{total_unrealized:,.2f}")
-        metric_c.metric("Realized P&L", f"{total_realized:,.2f}")
 
         st.dataframe(
             display_df,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Net Qty": st.column_config.NumberColumn("Net Qty", format="%d"),
-                "Buy Qty": st.column_config.NumberColumn("Buy Qty", format="%d"),
-                "Sell Qty": st.column_config.NumberColumn("Sell Qty", format="%d"),
-                "Buy Avg": st.column_config.NumberColumn("Buy Avg", format="%.2f"),
-                "Sell Avg": st.column_config.NumberColumn("Sell Avg", format="%.2f"),
-                "Cost Price": st.column_config.NumberColumn("Cost Price", format="%.2f"),
-                "Unrealized P&L": st.column_config.NumberColumn("Unrealized P&L", format="%.2f"),
-                "Realized P&L": st.column_config.NumberColumn("Realized P&L", format="%.2f"),
-                "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
+                "Symbol": st.column_config.TextColumn("Symbol", width="medium"),
+                "Score": st.column_config.NumberColumn("Score", format="%d"),
+                "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
+                "Avg Qty": st.column_config.NumberColumn("Avg Qty", format="%d"),
+                "Avg Price": st.column_config.NumberColumn("Avg Price", format="%.2f"),
+                "LTP": st.column_config.NumberColumn("LTP", format="%.2f"),
+                "SL": st.column_config.NumberColumn("SL", format="%.2f"),
+                "T1": st.column_config.NumberColumn("T1", format="%.2f"),
+                "T2": st.column_config.NumberColumn("T2", format="%.2f"),
+                "Target Reached": st.column_config.TextColumn("Target Reached", width="small"),
             },
         )
 
