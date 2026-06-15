@@ -116,7 +116,7 @@ def render(intel_pool=None):
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT symbol, base_asset, score, recommendation, stop_loss, target_1, target_2
+                    SELECT symbol, base_asset, score, recommendation, entry_range, stop_loss, target_1, target_2
                     FROM watchlist_items
                     WHERE status IN ('Watchlist', 'Active')
                     """
@@ -127,6 +127,7 @@ def render(intel_pool=None):
                     entry = {
                         "Score": row["score"] if row["score"] is not None else "-",
                         "Recommendation": row["recommendation"] if row["recommendation"] is not None else "-",
+                        "Entry Range": row["entry_range"] if row["entry_range"] is not None else "-",
                         "SL": row["stop_loss"] if row["stop_loss"] is not None else "-",
                         "T1": row["target_1"] if row["target_1"] is not None else "-",
                         "T2": row["target_2"] if row["target_2"] is not None else "-",
@@ -215,6 +216,7 @@ def render(intel_pool=None):
                 
                 score = row.get("Score", "-")
                 recommendation = row.get("Recommendation", "-")
+                entry_range = str(row.get("Entry CMP / Range", "")).strip()
                 sl = str(row.get("Stop Loss (SL)", "")).strip()
                 t1 = str(row.get("Target 1", "")).strip()
                 t2 = str(row.get("Target 2", "")).strip()
@@ -223,6 +225,7 @@ def render(intel_pool=None):
                 entry = {
                     "Score": score,
                     "Recommendation": recommendation,
+                    "Entry Range": entry_range,
                     "SL": sl,
                     "T1": t1,
                     "T2": t2,
@@ -250,6 +253,7 @@ def render(intel_pool=None):
             # Match positions with watchlist
             df_positions_custom["Score"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("Score", "-"), axis=1)
             df_positions_custom["Recommendation"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("Recommendation", "-"), axis=1)
+            df_positions_custom["Entry Range"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("Entry Range", "-"), axis=1)
             df_positions_custom["SL"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("SL", "-"), axis=1)
             df_positions_custom["T1"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("T1", "-"), axis=1)
             df_positions_custom["T2"] = df_positions_custom.apply(lambda r: _get_watchlist_entry(r).get("T2", "-"), axis=1)
@@ -301,6 +305,7 @@ def render(intel_pool=None):
         else:
             df_positions_custom["Score"] = "-"
             df_positions_custom["Recommendation"] = "-"
+            df_positions_custom["Entry Range"] = "-"
             df_positions_custom["SL"] = "-"
             df_positions_custom["T1"] = "-"
             df_positions_custom["T2"] = "-"
@@ -311,6 +316,7 @@ def render(intel_pool=None):
         # Fill missing score/recommendation/targets from local DB snapshot
         df_positions_custom["Score"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "Score"), axis=1)
         df_positions_custom["Recommendation"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "Recommendation"), axis=1)
+        df_positions_custom["Entry Range"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "Entry Range"), axis=1)
         df_positions_custom["SL"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "SL"), axis=1)
         df_positions_custom["T1"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "T1"), axis=1)
         df_positions_custom["T2"] = df_positions_custom.apply(lambda r: fill_from_localdb(r, "T2"), axis=1)
@@ -325,6 +331,48 @@ def render(intel_pool=None):
             )
 
         df_positions_custom["Option LTP"] = df_positions_custom.apply(get_option_ltp, axis=1)
+
+        def _parse_entry(entry_text):
+            raw = str(entry_text or "").strip()
+            if _is_blank(raw):
+                return None, None, None
+            nums = pd.Series(raw.replace("/", "-").split("-")).str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0].dropna().tolist()
+            if not nums:
+                numeric = pd.Series([raw]).str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0].iloc[0]
+                if pd.isna(numeric):
+                    return None, None, None
+                val = float(numeric)
+                return val, val, val
+            values = [float(v) for v in nums]
+            low = min(values)
+            high = max(values)
+            ref = (low + high) / 2.0
+            return low, high, ref
+
+        def _vs_entry_and_pct(row):
+            opt_ltp = pd.to_numeric(row.get("Option LTP", "-"), errors="coerce")
+            stock_ltp = pd.to_numeric(row.get("Stock LTP", "-"), errors="coerce")
+            live = opt_ltp if not pd.isna(opt_ltp) else stock_ltp
+            if pd.isna(live):
+                return "-", "-"
+
+            low, high, ref = _parse_entry(row.get("Entry Range", "-"))
+            if low is None or high is None or ref is None or ref == 0:
+                return "-", "-"
+
+            if live > high:
+                vs_txt = "🟢 Above"
+            elif live < low:
+                vs_txt = "🔴 Below"
+            else:
+                vs_txt = "🟡 Within"
+
+            pct = ((live - ref) / ref) * 100.0
+            return vs_txt, f"{pct:+.2f}%"
+
+        vs_results = df_positions_custom.apply(_vs_entry_and_pct, axis=1, result_type="expand")
+        df_positions_custom["Vs Entry"] = vs_results[0]
+        df_positions_custom["Entry vs Live %"] = vs_results[1]
         
         # Calculate Avg Qty and Avg Price
         df_positions_custom["Avg Qty"] = pd.to_numeric(df_positions_custom.get("netQty", 0), errors="coerce").fillna(0).astype(int)
@@ -369,8 +417,11 @@ def render(intel_pool=None):
             "Recommendation",
             "Avg Qty",
             "Avg Price",
+            "Entry Range",
             "Stock LTP",
             "Option LTP",
+            "Vs Entry",
+            "Entry vs Live %",
             "SL",
             "T1",
             "T2",
@@ -391,8 +442,11 @@ def render(intel_pool=None):
             "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
             "Avg Qty": st.column_config.NumberColumn("Avg Qty", format="%d"),
             "Avg Price": st.column_config.NumberColumn("Avg Price", format="%.2f"),
+            "Entry Range": st.column_config.TextColumn("Entry Range", width="small"),
             "Stock LTP": st.column_config.NumberColumn("Stock LTP", format="%.2f"),
             "Option LTP": st.column_config.NumberColumn("Option LTP", format="%.2f"),
+            "Vs Entry": st.column_config.TextColumn("Vs Entry", width="small"),
+            "Entry vs Live %": st.column_config.TextColumn("Entry vs Live %", width="small"),
             "SL": st.column_config.NumberColumn("SL", format="%.2f"),
             "T1": st.column_config.NumberColumn("T1", format="%.2f"),
             "T2": st.column_config.NumberColumn("T2", format="%.2f"),
@@ -407,7 +461,7 @@ def render(intel_pool=None):
                 hide_index=True,
                 key="dhan_positions_editor",
                 column_config=column_cfg,
-                disabled=["Symbol", "Score", "Recommendation", "Avg Qty", "Avg Price", "Stock LTP", "Option LTP", "Target Reached"],
+                disabled=["Symbol", "Score", "Recommendation", "Avg Qty", "Avg Price", "Entry Range", "Stock LTP", "Option LTP", "Vs Entry", "Entry vs Live %", "Target Reached"],
             )
 
             if st.button("Save SL/Targets to Watchlist", key="save_dhan_targets"):
