@@ -45,13 +45,32 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
     
     # Dual Axis Filters
-    col_f1, col_f2, col_f3 = st.columns([1.2, 1.2, 1.6])
+    col_f1, col_f2, col_f3, col_f4 = st.columns([1.2, 1.2, 1.4, 1.0])
     with col_f1:
         selected_date = st.date_input("Filter Logs by Date", datetime.today().date(), key="social_log_date")
     with col_f2:
         use_all_dates = st.checkbox("Show All Dates", value=False, key="social_log_all_dates")
     with col_f3:
         stock_query = st.text_input("Find Stock / Keyword", value="", placeholder="e.g. ASHOKLEY, NTPC", key="social_log_stock_query")
+    with col_f4:
+        if st.button("🔄 Refresh Today's Feeds", key="telegram_refresh_btn"):
+            try:
+                settings_ws = wb_obj.worksheet("Settings")
+                # Find or create the backfill flag
+                all_settings = settings_ws.get_all_values()
+                flag_row = None
+                for idx, row in enumerate(all_settings, 1):
+                    if row and str(row[0]).strip() == "Force Telegram Backfill":
+                        flag_row = idx
+                        break
+                if flag_row:
+                    settings_ws.update_acell(f"B{flag_row}", "yes")
+                else:
+                    settings_ws.append_row(["Force Telegram Backfill", "yes"])
+                st.success("✅ Backfill triggered! Processing channels...")
+                st.info("Messages will appear in a few moments.")
+            except Exception as e:
+                st.error(f"⚠️ Error triggering backfill: {e}")
     
     df_tele_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
     df_x_logs = fetch_dataframe_safe("X_Raw_Logs")

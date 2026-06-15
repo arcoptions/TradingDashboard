@@ -286,9 +286,22 @@ async def run_telegram_listener():
     try:
         sh, watchlist_ws, study_ws, raw_ws, sheet_headers = init_sheet_connection(secrets)
         print("✅ Core Infrastructure Automated Routers Armed.")
+        
+        # Ensure Settings has backfill trigger flag
+        try:
+            settings_ws = sh.worksheet("Settings")
+            all_settings = settings_ws.get_all_values()
+            settings_keys = [str(row[0]).strip() for row in all_settings if row]
+            if "Force Telegram Backfill" not in settings_keys:
+                settings_ws.append_row(["Force Telegram Backfill", "no"])
+                print("📋 Added 'Force Telegram Backfill' setting to Settings sheet")
+        except:
+            pass
     except Exception as e:
         print(f"⚠️ Initialization issue: {e}")
         return
+
+    last_backfill_check = 0
 
     while True:
         try:
@@ -302,9 +315,29 @@ async def run_telegram_listener():
 
             @client.on(events.NewMessage(chats=TRACKED_CHANNELS))
             async def handler(event):
-                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers
+                nonlocal sh, watchlist_ws, study_ws, raw_ws, sheet_headers, last_backfill_check
                 raw_text = event.message.message
                 if not raw_text: return
+                
+                # Check backfill trigger flag every 60 seconds
+                current_time = time.time()
+                if current_time - last_backfill_check > 60:
+                    try:
+                        settings_ws = sh.worksheet("Settings")
+                        all_settings = settings_ws.get_all_values()
+                        for row_idx, row in enumerate(all_settings, 1):
+                            if row and str(row[0]).strip() == "Force Telegram Backfill":
+                                backfill_flag = row[1] if len(row) > 1 else "no"
+                                if str(backfill_flag).lower() in ["yes", "true", "1"]:
+                                    print("📲 Manual backfill triggered from UI...")
+                                    await run_backfill_routine(client, sh, watchlist_ws, study_ws, raw_ws, sheet_headers, TRACKED_CHANNELS)
+                                    settings_ws.update_acell(f"B{row_idx}", "no")
+                                    print("✅ Manual backfill complete. Reset trigger flag.")
+                                break
+                    except Exception as check_err:
+                        print(f"⚠️ Backfill flag check error: {check_err}")
+                    finally:
+                        last_backfill_check = current_time
                     
                 chat_from = await event.get_chat()
                 title_token = getattr(chat_from, 'title', '')
