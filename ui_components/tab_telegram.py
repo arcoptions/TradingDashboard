@@ -63,7 +63,7 @@ def _run_async(coro):
             loop.close()
 
 
-async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=250, lookback_days=7):
+async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=1000, lookback_days=7):
     try:
         tg_cfg = st.secrets.get("telegram", {})
         api_id = int(tg_cfg.get("api_id", 0) or 0)
@@ -84,6 +84,7 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                 existing_keys.add((src, txt))
 
     rows_to_add = []
+    diagnostics = []
     today = datetime.today().date()
     earliest_date = today - timedelta(days=max(1, int(lookback_days)) - 1)
 
@@ -100,15 +101,30 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                 else:
                     source_name = title_token if title_token else (username_token if username_token else str(channel))
 
-                history = await client.get_messages(entity, limit=lookback_limit)
-                for msg in history:
+                scanned_count = 0
+                added_for_channel = 0
+                latest_seen = ""
+                earliest_seen = ""
+                matched_window_count = 0
+
+                async for msg in client.iter_messages(entity, limit=lookback_limit):
                     raw_text = str(getattr(msg, "message", "") or "").strip()
-                    if not raw_text:
-                        continue
                     msg_dt = getattr(msg, "date", None)
                     if msg_dt is None:
                         continue
+                    scanned_count += 1
                     msg_date = msg_dt.date()
+                    if not latest_seen:
+                        latest_seen = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    earliest_seen = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+                    if use_all_dates and msg_date < earliest_date:
+                        break
+                    if not use_all_dates and target_date and msg_date < target_date:
+                        break
+
+                    if not raw_text:
+                        continue
                     if use_all_dates:
                         if msg_date < earliest_date:
                             continue
@@ -116,6 +132,7 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                         effective_target_date = target_date or today
                         if msg_date != effective_target_date:
                             continue
+                    matched_window_count += 1
 
                     key = (str(source_name).strip().lower(), raw_text.lower())
                     if key in existing_keys:
@@ -128,14 +145,38 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                         "pending review",
                     ])
                     existing_keys.add(key)
-            except Exception:
+                    added_for_channel += 1
+
+                diagnostics.append({
+                    "Channel": str(channel),
+                    "Source": source_name,
+                    "Status": "ok",
+                    "Scanned": scanned_count,
+                    "Matched Window": matched_window_count,
+                    "Added": added_for_channel,
+                    "Latest Seen": latest_seen,
+                    "Earliest Seen": earliest_seen,
+                    "Error": "",
+                })
+            except Exception as channel_err:
+                diagnostics.append({
+                    "Channel": str(channel),
+                    "Source": str(channel),
+                    "Status": "error",
+                    "Scanned": 0,
+                    "Matched Window": 0,
+                    "Added": 0,
+                    "Latest Seen": "",
+                    "Earliest Seen": "",
+                    "Error": str(channel_err)[:200],
+                })
                 continue
     finally:
         await client.disconnect()
 
     if rows_to_add:
         raw_ws.append_rows(rows_to_add)
-    return len(rows_to_add), ""
+    return len(rows_to_add), "", diagnostics
 
 def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
     st.markdown("#### Social Feeds and Media Hub")
@@ -164,16 +205,17 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 tele_ws = wb_obj.worksheet("Telegram_Raw_Logs")
                 current_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
 
-                added_count, err_msg = _run_async(
+                added_count, err_msg, refresh_diagnostics = _run_async(
                     _manual_backfill_recent_telegram(
                         tele_ws,
                         current_logs,
                         target_date=selected_date,
                         use_all_dates=use_all_dates,
-                        lookback_limit=250,
+                        lookback_limit=1000,
                         lookback_days=7,
                     )
                 )
+                st.session_state["telegram_refresh_diagnostics"] = refresh_diagnostics
                 if err_msg:
                     st.warning(f"⚠️ {err_msg}")
                 else:
@@ -201,6 +243,13 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
         
     tele_ws = wb_obj.worksheet("Telegram_Raw_Logs")
     x_ws = wb_obj.worksheet("X_Raw_Logs")
+
+    refresh_diag = st.session_state.get("telegram_refresh_diagnostics", [])
+    if refresh_diag:
+        with st.expander("Telegram Refresh Diagnostics", expanded=False):
+            diag_df = pd.DataFrame(refresh_diag)
+            if not diag_df.empty:
+                st.dataframe(diag_df, use_container_width=True, hide_index=True)
     
     # 1. BACKGROUND ENGINE: AUTOMATED DATA ROUTING MATRIX
     daily_token = ""
