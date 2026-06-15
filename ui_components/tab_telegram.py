@@ -81,16 +81,17 @@ def _run_async(coro):
 
 
 async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=250, lookback_days=3, selected_sources=None):
+    diagnostics = []
     try:
         tg_cfg = st.secrets.get("telegram", {})
         api_id = int(tg_cfg.get("api_id", 0) or 0)
         api_hash = str(tg_cfg.get("api_hash", "") or "")
         session_string = str(tg_cfg.get("session_string", "") or "")
     except Exception:
-        return 0, "Telegram secrets not configured in app settings"
+        return 0, "Telegram secrets not configured in app settings", diagnostics
 
     if not api_id or not api_hash or not session_string:
-        return 0, "Missing Telegram credentials (api_id/api_hash/session_string)"
+        return 0, "Missing Telegram credentials (api_id/api_hash/session_string)", diagnostics
 
     existing_keys = set()
     if existing_df is not None and not existing_df.empty:
@@ -101,7 +102,6 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                 existing_keys.add((src, txt))
 
     rows_to_add = []
-    diagnostics = []
     today = datetime.today().date()
     earliest_date = today - timedelta(days=max(1, int(lookback_days)) - 1)
 
