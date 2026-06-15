@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import asyncio
+import os
 from datetime import datetime, timedelta
 import broker_api as api
 from core_engines.nlp_router import extract_asset_from_text, parse_trade_metrics, FNO_SYMBOLS
@@ -83,10 +84,31 @@ def _run_async(coro):
 async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=250, lookback_days=3, selected_sources=None):
     diagnostics = []
     try:
-        tg_cfg = st.secrets.get("telegram", {})
-        api_id = int(tg_cfg.get("api_id", 0) or 0)
-        api_hash = str(tg_cfg.get("api_hash", "") or "")
-        session_string = str(tg_cfg.get("session_string", "") or "")
+        tg_cfg = st.secrets.get("telegram", {}) if hasattr(st, "secrets") else {}
+
+        # Support multiple credential layouts for Streamlit Cloud deployments:
+        # 1) [telegram] api_id/api_hash/session_string
+        # 2) top-level TELEGRAM_API_ID/TELEGRAM_API_HASH/TELEGRAM_SESSION_STRING
+        # 3) OS env vars TELEGRAM_API_ID/TELEGRAM_API_HASH/TELEGRAM_SESSION_STRING
+        api_id_val = (
+            tg_cfg.get("api_id")
+            or st.secrets.get("TELEGRAM_API_ID", "")
+            or os.environ.get("TELEGRAM_API_ID", "")
+        )
+        api_hash_val = (
+            tg_cfg.get("api_hash")
+            or st.secrets.get("TELEGRAM_API_HASH", "")
+            or os.environ.get("TELEGRAM_API_HASH", "")
+        )
+        session_string_val = (
+            tg_cfg.get("session_string")
+            or st.secrets.get("TELEGRAM_SESSION_STRING", "")
+            or os.environ.get("TELEGRAM_SESSION_STRING", "")
+        )
+
+        api_id = int(api_id_val or 0)
+        api_hash = str(api_hash_val or "")
+        session_string = str(session_string_val or "")
     except Exception:
         return 0, "Telegram secrets not configured in app settings", diagnostics
 
