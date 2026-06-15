@@ -52,6 +52,23 @@ def _is_tip_source(source_value):
     return False
 
 
+def _normalize_source_name(value):
+    text = str(value or "").strip().lower()
+    return " ".join(text.replace("_", " ").replace("-", " ").split())
+
+
+def _channel_matches_selected_sources(channel_label, selected_sources):
+    if not selected_sources:
+        return True
+
+    channel_norm = _normalize_source_name(channel_label)
+    for source in selected_sources:
+        src_norm = _normalize_source_name(source)
+        if src_norm and (src_norm in channel_norm or channel_norm in src_norm):
+            return True
+    return False
+
+
 def _run_async(coro):
     try:
         return asyncio.run(coro)
@@ -63,7 +80,7 @@ def _run_async(coro):
             loop.close()
 
 
-async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=1000, lookback_days=7):
+async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None, use_all_dates=False, lookback_limit=250, lookback_days=3, selected_sources=None):
     try:
         tg_cfg = st.secrets.get("telegram", {})
         api_id = int(tg_cfg.get("api_id", 0) or 0)
@@ -101,13 +118,31 @@ async def _manual_backfill_recent_telegram(raw_ws, existing_df, target_date=None
                 else:
                     source_name = title_token if title_token else (username_token if username_token else str(channel))
 
+                if not _channel_matches_selected_sources(source_name, selected_sources):
+                    diagnostics.append({
+                        "Channel": str(channel),
+                        "Source": source_name,
+                        "Status": "skipped",
+                        "Scanned": 0,
+                        "Matched Window": 0,
+                        "Added": 0,
+                        "Latest Seen": "",
+                        "Earliest Seen": "",
+                        "Error": "Skipped by active source filter",
+                    })
+                    continue
+
                 scanned_count = 0
                 added_for_channel = 0
                 latest_seen = ""
                 earliest_seen = ""
                 matched_window_count = 0
 
-                async for msg in client.iter_messages(entity, limit=lookback_limit):
+                offset_date = None
+                if not use_all_dates and target_date:
+                    offset_date = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+
+                async for msg in client.iter_messages(entity, limit=lookback_limit, offset_date=offset_date):
                     raw_text = str(getattr(msg, "message", "") or "").strip()
                     msg_dt = getattr(msg, "date", None)
                     if msg_dt is None:
@@ -205,14 +240,16 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                 tele_ws = wb_obj.worksheet("Telegram_Raw_Logs")
                 current_logs = fetch_dataframe_safe("Telegram_Raw_Logs")
 
+                active_sources_for_refresh = st.session_state.get("social_log_selected_sources", [])
                 added_count, err_msg, refresh_diagnostics = _run_async(
                     _manual_backfill_recent_telegram(
                         tele_ws,
                         current_logs,
                         target_date=selected_date,
                         use_all_dates=use_all_dates,
-                        lookback_limit=1000,
-                        lookback_days=7,
+                        lookback_limit=250,
+                        lookback_days=3,
+                        selected_sources=active_sources_for_refresh,
                     )
                 )
                 st.session_state["telegram_refresh_diagnostics"] = refresh_diagnostics
@@ -220,7 +257,7 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                     st.warning(f"⚠️ {err_msg}")
                 else:
                     if use_all_dates:
-                        st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages from the last 7 days.")
+                        st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages from the last 3 days.")
                     else:
                         st.success(f"✅ Refresh complete. Added {added_count} new Telegram messages for {selected_date}.")
                 if not use_all_dates:
