@@ -1,16 +1,15 @@
 import pandas as pd
 import streamlit as st
+import requests
 
 import broker_api as api
-from integrations.google_sheets import fetch_dataframe_safe
+from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_dict
 
 
 ACTIVE_ORDER_STATUSES = ["TRANSIT", "PENDING", "PART_TRADED"]
 ACTIVE_POSITION_TYPES = ["LONG", "SHORT"]
 
 
-def render():
-    st.markdown("#### Dhan Live Positions")
 def render(intel_pool=None):
     st.markdown("#### Dhan Live Positions")
 
@@ -39,6 +38,64 @@ def render(intel_pool=None):
     if df_positions.empty:
         st.info("No active Dhan positions right now.")
     else:
+        def _fetch_option_ltp_map(df_src):
+            exch_key_map = {
+                "NSE_FNO": "NSE_FNO",
+                "NSE_EQ": "NSE_EQ",
+                "BSE_EQ": "BSE_EQ",
+                "IDX_I": "IDX_I",
+                "MCX_COMM": "MCX_COMM",
+            }
+            payload = {}
+            for _, p_row in df_src.iterrows():
+                exch = str(p_row.get("exchangeSegment", "")).strip().upper()
+                sec_id = str(p_row.get("securityId", "")).strip()
+                if not exch or not sec_id.isdigit():
+                    continue
+                api_exch = exch_key_map.get(exch)
+                if not api_exch:
+                    continue
+                payload.setdefault(api_exch, set()).add(int(sec_id))
+
+            payload = {k: sorted(list(v)) for k, v in payload.items() if v}
+            if not payload:
+                return {}
+
+            try:
+                settings = fetch_settings_dict()
+                token = settings.get("Dhan Access Token", "")
+                client_id = st.secrets["dhan"].get("dhan_client_id", "")
+                if not token or not client_id:
+                    return {}
+
+                headers = {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "access-token": token,
+                    "client-id": client_id,
+                }
+                resp = requests.post(
+                    "https://api.dhan.co/v2/marketfeed/quote",
+                    headers=headers,
+                    json=payload,
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    return {}
+
+                q_data = resp.json().get("data", {})
+                out = {}
+                for exch, sec_nodes in q_data.items():
+                    if not isinstance(sec_nodes, dict):
+                        continue
+                    for sec_id, node in sec_nodes.items():
+                        last_price = node.get("last_price", "")
+                        key = (str(exch).upper(), str(sec_id))
+                        out[key] = last_price
+                return out
+            except Exception:
+                return {}
+
         # Fetch watchlist to get score, recommendation, and targets
         try:
             df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
@@ -65,7 +122,7 @@ def render(intel_pool=None):
                 sl = str(row.get("Stop Loss (SL)", "")).strip()
                 t1 = str(row.get("Target 1", "")).strip()
                 t2 = str(row.get("Target 2", "")).strip()
-                ltp = str(row.get("Live Price", "")).strip()
+                stock_ltp = str(row.get("Live Price", "")).strip()
                 
                 entry = {
                     "Score": score,
@@ -73,7 +130,7 @@ def render(intel_pool=None):
                     "SL": sl,
                     "T1": t1,
                     "T2": t2,
-                    "LTP": ltp,
+                    "Stock LTP": stock_ltp,
                 }
                 
                 if sym:
@@ -97,13 +154,13 @@ def render(intel_pool=None):
             df_positions_custom["T2"] = df_positions_custom["BaseSymbol"].apply(
                 lambda x: watchlist_lookup.get(x.upper(), {}).get("T2", "-")
             )
-            df_positions_custom["LTP"] = df_positions_custom["BaseSymbol"].apply(
-                lambda x: watchlist_lookup.get(x.upper(), {}).get("LTP", "-")
+            df_positions_custom["Stock LTP"] = df_positions_custom["BaseSymbol"].apply(
+                lambda x: watchlist_lookup.get(x.upper(), {}).get("Stock LTP", "-")
             )
         
-        # Fallback to intel_pool for LTP if not in watchlist (from TradingView)
-        def get_ltp_from_pool(row):
-            ltp_from_wl = row.get("LTP", "-")
+        # Fallback to intel_pool for stock LTP if not in watchlist (from TradingView)
+        def get_stock_ltp_from_pool(row):
+            ltp_from_wl = row.get("Stock LTP", "-")
             if ltp_from_wl and ltp_from_wl != "-":
                 return ltp_from_wl
             
@@ -114,17 +171,32 @@ def render(intel_pool=None):
             pool_data = intel_pool.get(base_sym, {})
             ltp = pool_data.get("t", {}).get("ltp", "-")
             return str(ltp) if ltp != "-" else "-"
+
+        # Option contract LTP from Dhan quote API (securityId + exchangeSegment)
+        quote_ltp_map = _fetch_option_ltp_map(df_positions_custom)
+
+        def get_option_ltp(row):
+            exch = str(row.get("exchangeSegment", "")).strip().upper()
+            sec_id = str(row.get("securityId", "")).strip()
+            if not exch or not sec_id:
+                return "-"
+            val = quote_ltp_map.get((exch, sec_id), "")
+            if val in [None, "", "None"]:
+                return "-"
+            return str(val)
         
         if not df_watchlist.empty:
-            df_positions_custom["LTP"] = df_positions_custom.apply(get_ltp_from_pool, axis=1)
+            df_positions_custom["Stock LTP"] = df_positions_custom.apply(get_stock_ltp_from_pool, axis=1)
         else:
             df_positions_custom["Score"] = "-"
             df_positions_custom["Recommendation"] = "-"
             df_positions_custom["SL"] = "-"
             df_positions_custom["T1"] = "-"
             df_positions_custom["T2"] = "-"
-            # Still try to fetch LTP from intel_pool even if watchlist is unavailable
-            df_positions_custom["LTP"] = df_positions_custom.apply(get_ltp_from_pool, axis=1)
+            # Still try to fetch stock LTP from intel_pool even if watchlist is unavailable
+            df_positions_custom["Stock LTP"] = df_positions_custom.apply(get_stock_ltp_from_pool, axis=1)
+
+        df_positions_custom["Option LTP"] = df_positions_custom.apply(get_option_ltp, axis=1)
         
         # Calculate Avg Qty and Avg Price
         df_positions_custom["Avg Qty"] = pd.to_numeric(df_positions_custom.get("netQty", 0), errors="coerce").fillna(0).astype(int)
@@ -133,7 +205,9 @@ def render(intel_pool=None):
         # Calculate if target is reached
         def check_target_reached(row):
             try:
-                ltp = pd.to_numeric(row["LTP"], errors="coerce")
+                opt_ltp = pd.to_numeric(row.get("Option LTP", "-"), errors="coerce")
+                stock_ltp = pd.to_numeric(row.get("Stock LTP", "-"), errors="coerce")
+                ltp = opt_ltp if not pd.isna(opt_ltp) else stock_ltp
                 t1 = pd.to_numeric(row["T1"], errors="coerce")
                 t2 = pd.to_numeric(row["T2"], errors="coerce")
                 position = str(row.get("positionType", "")).upper()
@@ -167,7 +241,8 @@ def render(intel_pool=None):
             "Recommendation",
             "Avg Qty",
             "Avg Price",
-            "LTP",
+            "Stock LTP",
+            "Option LTP",
             "SL",
             "T1",
             "T2",
@@ -177,7 +252,7 @@ def render(intel_pool=None):
         display_df = df_positions_custom[display_cols].copy()
         
         # Format numeric columns
-        numeric_cols = ["Avg Qty", "Avg Price", "LTP", "SL", "T1", "T2"]
+        numeric_cols = ["Avg Qty", "Avg Price", "Stock LTP", "Option LTP", "SL", "T1", "T2"]
         for col in numeric_cols:
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
@@ -192,7 +267,8 @@ def render(intel_pool=None):
                 "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
                 "Avg Qty": st.column_config.NumberColumn("Avg Qty", format="%d"),
                 "Avg Price": st.column_config.NumberColumn("Avg Price", format="%.2f"),
-                "LTP": st.column_config.NumberColumn("LTP", format="%.2f"),
+                "Stock LTP": st.column_config.NumberColumn("Stock LTP", format="%.2f"),
+                "Option LTP": st.column_config.NumberColumn("Option LTP", format="%.2f"),
                 "SL": st.column_config.NumberColumn("SL", format="%.2f"),
                 "T1": st.column_config.NumberColumn("T1", format="%.2f"),
                 "T2": st.column_config.NumberColumn("T2", format="%.2f"),
