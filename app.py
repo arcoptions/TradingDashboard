@@ -435,7 +435,7 @@ def main():
             
             df_sectors = pd.DataFrame(sector_data)
             fig = px.treemap(df_sectors, path=['Sector'], values='Weight', color='Change', custom_data=['Change'], color_continuous_scale=['#F23645', '#F8FAFC', '#089981'], color_continuous_midpoint=0)
-            fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:+.2f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
+            fig.update_traces(textinfo="label+text", texttemplate="%{label}<br><b>%{customdata[0]:+.1f}%</b>", textfont=dict(size=14), root_color="rgba(0,0,0,0)")
             fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=460, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             
             if "on_select" in inspect.signature(st.plotly_chart).parameters:
