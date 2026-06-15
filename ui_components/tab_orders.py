@@ -332,22 +332,9 @@ def render(intel_pool=None):
 
         df_positions_custom["Option LTP"] = df_positions_custom.apply(get_option_ltp, axis=1)
 
-        def _parse_entry(entry_text):
-            raw = str(entry_text or "").strip()
-            if _is_blank(raw):
-                return None, None, None
-            nums = pd.Series(raw.replace("/", "-").split("-")).str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0].dropna().tolist()
-            if not nums:
-                numeric = pd.Series([raw]).str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0].iloc[0]
-                if pd.isna(numeric):
-                    return None, None, None
-                val = float(numeric)
-                return val, val, val
-            values = [float(v) for v in nums]
-            low = min(values)
-            high = max(values)
-            ref = (low + high) / 2.0
-            return low, high, ref
+        # Calculate Avg Qty and Avg Price
+        df_positions_custom["Avg Qty"] = pd.to_numeric(df_positions_custom.get("netQty", 0), errors="coerce").fillna(0).astype(int)
+        df_positions_custom["Avg Price"] = pd.to_numeric(df_positions_custom.get("buyAvg", 0), errors="coerce").fillna(0)
 
         def _vs_entry_and_pct(row):
             opt_ltp = pd.to_numeric(row.get("Option LTP", "-"), errors="coerce")
@@ -356,27 +343,23 @@ def render(intel_pool=None):
             if pd.isna(live):
                 return "-", "-"
 
-            low, high, ref = _parse_entry(row.get("Entry Range", "-"))
-            if low is None or high is None or ref is None or ref == 0:
+            avg_price = pd.to_numeric(row.get("Avg Price", 0), errors="coerce")
+            if pd.isna(avg_price) or avg_price <= 0:
                 return "-", "-"
 
-            if live > high:
+            if live > avg_price:
                 vs_txt = "🟢 Above"
-            elif live < low:
+            elif live < avg_price:
                 vs_txt = "🔴 Below"
             else:
                 vs_txt = "🟡 Within"
 
-            pct = ((live - ref) / ref) * 100.0
+            pct = ((live - avg_price) / avg_price) * 100.0
             return vs_txt, f"{pct:+.2f}%"
 
         vs_results = df_positions_custom.apply(_vs_entry_and_pct, axis=1, result_type="expand")
         df_positions_custom["Vs Entry"] = vs_results[0]
         df_positions_custom["Entry vs Live %"] = vs_results[1]
-        
-        # Calculate Avg Qty and Avg Price
-        df_positions_custom["Avg Qty"] = pd.to_numeric(df_positions_custom.get("netQty", 0), errors="coerce").fillna(0).astype(int)
-        df_positions_custom["Avg Price"] = pd.to_numeric(df_positions_custom.get("buyAvg", 0), errors="coerce").fillna(0)
         
         # Calculate if target is reached
         def check_target_reached(row):
@@ -417,7 +400,6 @@ def render(intel_pool=None):
             "Recommendation",
             "Avg Qty",
             "Avg Price",
-            "Entry Range",
             "Stock LTP",
             "Option LTP",
             "Vs Entry",
@@ -442,7 +424,6 @@ def render(intel_pool=None):
             "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
             "Avg Qty": st.column_config.NumberColumn("Avg Qty", format="%d"),
             "Avg Price": st.column_config.NumberColumn("Avg Price", format="%.2f"),
-            "Entry Range": st.column_config.TextColumn("Entry Range", width="small"),
             "Stock LTP": st.column_config.NumberColumn("Stock LTP", format="%.2f"),
             "Option LTP": st.column_config.NumberColumn("Option LTP", format="%.2f"),
             "Vs Entry": st.column_config.TextColumn("Vs Entry", width="small"),
@@ -461,7 +442,7 @@ def render(intel_pool=None):
                 hide_index=True,
                 key="dhan_positions_editor",
                 column_config=column_cfg,
-                disabled=["Symbol", "Score", "Recommendation", "Avg Qty", "Avg Price", "Entry Range", "Stock LTP", "Option LTP", "Vs Entry", "Entry vs Live %", "Target Reached"],
+                disabled=["Symbol", "Score", "Recommendation", "Avg Qty", "Avg Price", "Stock LTP", "Option LTP", "Vs Entry", "Entry vs Live %", "Target Reached"],
             )
 
             if st.button("Save SL/Targets to Watchlist", key="save_dhan_targets"):
