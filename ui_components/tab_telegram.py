@@ -422,9 +422,13 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                     if metrics["strike"] and metrics["option_type"]:
                         contract_symbol = f"{raw_symbol} {metrics['strike']} {metrics['option_type']}"
                     else:
-                        chain_data = api.get_option_chain_metrics(raw_symbol, daily_token=daily_token)
-                        if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
-                            contract_symbol = f"{raw_symbol} {chain_data['best_ce']} (Auto)"
+                        try:
+                            chain_data = api.get_option_chain_metrics(raw_symbol, daily_token=daily_token)
+                            if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
+                                contract_symbol = f"{raw_symbol} {chain_data['best_ce']} (Auto)"
+                        except Exception as e:
+                            # Gracefully skip auto-finding best CE if option chain metrics fails
+                            pass
 
                 if is_tip_channel:
                     if contract_symbol in watchlist_symbols:
@@ -487,9 +491,13 @@ def render(wb_obj, watchlist_symbols, sheet_headers, *args, **kwargs):
                     if metrics["strike"] and metrics["option_type"]:
                         contract_symbol = f"{raw_symbol} {metrics['strike']} {metrics['option_type']}"
                     else:
-                        chain_data = api.get_option_chain_metrics(raw_symbol, daily_token=daily_token)
-                        if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
-                            contract_symbol = f"{raw_symbol} {chain_data['best_ce']} (Auto)"
+                        try:
+                            chain_data = api.get_option_chain_metrics(raw_symbol, daily_token=daily_token)
+                            if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
+                                contract_symbol = f"{raw_symbol} {chain_data['best_ce']} (Auto)"
+                        except Exception as e:
+                            # Gracefully skip auto-finding best CE if option chain metrics fails
+                            pass
 
                 if contract_symbol in watchlist_symbols:
                     x_updates.append({'range': f"D{row['_Row_ID']}", 'values': [["Duplicate Watchlist Item"]]})

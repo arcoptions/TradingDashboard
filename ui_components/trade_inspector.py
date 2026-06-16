@@ -147,7 +147,11 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
                 underlying_ltp_raw = t_metrics.get("ltp", "-")
                 underlying_px = float(underlying_ltp_raw) if underlying_ltp_raw != "-" else contract_meta['strike']
                 
-                dhan_chain_data = api.get_option_chain_metrics(asset_symbol, daily_token=daily_token)
+                try:
+                    dhan_chain_data = api.get_option_chain_metrics(asset_symbol, daily_token=daily_token)
+                except Exception as e:
+                    dhan_chain_data = {}
+                    
                 if isinstance(dhan_chain_data, dict) and dhan_chain_data:
                     live_iv = float(dhan_chain_data.get('implied_volatility', 0))
                     live_delta = float(dhan_chain_data.get('delta', 0))

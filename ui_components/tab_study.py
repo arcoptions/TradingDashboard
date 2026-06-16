@@ -94,9 +94,13 @@ def render(*args, **kwargs):
                 t_sym, t_sec, t_exch = api.resolve_instrument(sym)
                 contract_symbol = sym
                 if is_fno:
-                    chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
-                    if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
-                        contract_symbol = f"{sym} {chain_data['best_ce']} (Auto)"
+                    try:
+                        chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
+                        if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
+                            contract_symbol = f"{sym} {chain_data['best_ce']} (Auto)"
+                    except Exception as e:
+                        # Gracefully skip auto-finding best CE if option chain metrics fails
+                        pass
                         
                 new_row = [""] * len(main_headers)
                 def fill(col, val): 

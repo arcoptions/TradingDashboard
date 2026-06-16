@@ -144,12 +144,16 @@ def trade_entry_modal(worksheet, sheet_headers):
                 
                 if is_fno:
                     if " CE" not in p_data.get("symbol", "").upper() and " PE" not in p_data.get("symbol", "").upper():
-                        chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
-                        is_put = "PE" in p_data.get("symbol", "").upper() or "PUT" in line.upper()
-                        target_key = "best_pe" if is_put else "best_ce"
-                        if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
-                            opt_suffix = "PE" if is_put else "CE"
-                            contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
+                        try:
+                            chain_data = api.get_option_chain_metrics(base_to_check, daily_token=daily_token)
+                            is_put = "PE" in p_data.get("symbol", "").upper() or "PUT" in line.upper()
+                            target_key = "best_pe" if is_put else "best_ce"
+                            if chain_data and chain_data.get(target_key) and chain_data.get(target_key) != "-":
+                                opt_suffix = "PE" if is_put else "CE"
+                                contract_symbol = f"{base_to_check} {chain_data[target_key]} {opt_suffix} (Auto-Suggested)"
+                        except Exception as e:
+                            # Gracefully skip auto-suggesting option if chain metrics fails
+                            pass
 
                 row = [""] * len(sheet_headers)
                 def set_v(col_name, val):

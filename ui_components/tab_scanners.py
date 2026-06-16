@@ -152,9 +152,13 @@ def render(scanner_sheet, scanner_headers):
                 contract_symbol = sym
                 
                 if is_fno:
-                    chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
-                    if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
-                        contract_symbol = f"{sym} {chain_data['best_ce']} (Auto-Scanner)"
+                    try:
+                        chain_data = api.get_option_chain_metrics(sym, daily_token=daily_token)
+                        if chain_data and chain_data.get('best_ce') and chain_data.get('best_ce') != "-":
+                            contract_symbol = f"{sym} {chain_data['best_ce']} (Auto-Scanner)"
+                    except Exception as e:
+                        # Gracefully skip auto-finding best CE if option chain metrics fails
+                        pass
                         
                 new_row = [""] * len(main_headers)
                 def fill(col, val): 

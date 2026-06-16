@@ -73,9 +73,13 @@ def convert_event_to_watchlist_row(event_id, sheet_headers, daily_token=None):
 
     if is_fno and parsed_trade_type == "Option":
         if " CE" not in parsed_symbol.upper() and " PE" not in parsed_symbol.upper():
-            chain_data = api.get_option_chain_metrics(parsed_symbol, daily_token=daily_token)
-            if chain_data and chain_data.get("best_ce") and chain_data.get("best_ce") != "-":
-                contract_symbol = f"{parsed_symbol.split()[0]} {chain_data['best_ce']} CE"
+            try:
+                chain_data = api.get_option_chain_metrics(parsed_symbol, daily_token=daily_token)
+                if chain_data and chain_data.get("best_ce") and chain_data.get("best_ce") != "-":
+                    contract_symbol = f"{parsed_symbol.split()[0]} {chain_data['best_ce']} CE"
+            except Exception as e:
+                # Gracefully skip auto-finding best CE if option chain metrics fails
+                pass
 
     new_row = [""] * len(sheet_headers)
 
