@@ -253,6 +253,9 @@ def main():
             st.info("Primary tracking database is empty.")
         return
 
+    # Initialize watchlist_symbols early to avoid NameError in Telegram tab
+    watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + (df_watchlist["Base Asset"].astype(str).str.upper().tolist() if "Base Asset" in df_watchlist.columns else [])
+
     df_watchlist['_Sheet_Row'] = range(2, len(df_watchlist) + 2)
     df_watchlist["Journal"] = False
     df_watchlist = analytics.compute_signal_indicators(df_watchlist)
@@ -323,7 +326,6 @@ def main():
         return
 
     # --- MAIN TERMINAL RENDER ALGORITHMS ---
-    watchlist_symbols = df_watchlist["Symbol / Asset"].astype(str).str.upper().tolist() + df_watchlist["Base Asset"].astype(str).str.upper().tolist()
 
     try:
         col_target = "Idea Source (Chartink/Telegram/X/Self)"
