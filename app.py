@@ -474,8 +474,33 @@ def main():
             else: st.plotly_chart(fig, use_container_width=True)
         else:
             st.button("⬅️ Go back to Heat Map", type="primary", on_click=lambda: st.session_state.update({"active_heatmap_sector": None}))
-            rows = [{"Stock": s.replace('HINDUNILVR', 'HUL'), "Market Cap (Cr)": round(all_tv_data[s]["mcap"]/10000000, 2) if all_tv_data[s].get("mcap") else 0.0, "LTP (₹)": all_tv_data[s]["ltp"], "Change %": all_tv_data[s]["change_pct"]} for s in INDEX_CONSTITUENTS[st.session_state.active_heatmap_sector] if s in all_tv_data]
-            st.dataframe(pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False), use_container_width=True, hide_index=True)
+            sector_name = st.session_state.active_heatmap_sector
+            sector_stocks = INDEX_CONSTITUENTS.get(sector_name, [])
+            if not sector_stocks:
+                st.warning(f"No constituent mapping found for {sector_name}.")
+                st.session_state.active_heatmap_sector = None
+                st.rerun()
+
+            rows = []
+            for s in sector_stocks:
+                tv_row = all_tv_data.get(s)
+                if not tv_row:
+                    continue
+                rows.append({
+                    "Stock": s.replace('HINDUNILVR', 'HUL'),
+                    "Market Cap (Cr)": round(tv_row.get("mcap", 0) / 10000000, 2) if tv_row.get("mcap") else 0.0,
+                    "LTP (₹)": tv_row.get("ltp", 0),
+                    "Change %": tv_row.get("change_pct", 0),
+                })
+
+            if not rows:
+                st.info(f"No live TradingView rows available for {sector_name} yet.")
+            else:
+                st.dataframe(
+                    pd.DataFrame(rows).sort_values(by="Market Cap (Cr)", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     with t_scan:
         if scanner_ws: 
