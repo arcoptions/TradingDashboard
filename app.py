@@ -18,7 +18,6 @@ import scoring_engine as se
 import derivatives_engine as de
 import local_db
 import recommendation_engine as re
-import oi_collector
 from ui_components import tab_recommendations
 
 # UI COMPONENTS
@@ -175,14 +174,6 @@ def main():
 
         # Daemon threads are cache-initialized once; avoid header reads on each rerun.
         api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, [], [])
-        
-        # Start OI collector daemon (5-minute interval)
-        try:
-            gcp_creds = dict(st.secrets["gcp_service_account"])
-            dhan_id = st.secrets["dhan"]["dhan_client_id"]
-            oi_collector.start_oi_collector_daemon(gcp_creds, dhan_id, sync_interval=300)
-        except Exception as oi_err:
-            print(f"OI Collector startup warning: {oi_err}")
         
     except Exception as e:
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
