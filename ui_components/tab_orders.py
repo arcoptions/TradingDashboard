@@ -512,28 +512,42 @@ def render(intel_pool=None):
                             t1_col = sheet_headers.index("Target 1") + 1
                             t2_col = sheet_headers.index("Target 2") + 1
 
+                            def _clean_val(v):
+                                """Convert a cell value to a clean string; return '' for blank/NaN."""
+                                if v is None:
+                                    return ""
+                                s = str(v).strip()
+                                if s.lower() in ("nan", "none", "-", ""):
+                                    return ""
+                                # Drop trailing .0 for whole numbers written to sheet
+                                try:
+                                    f = float(s)
+                                    return str(int(f)) if f == int(f) else s
+                                except Exception:
+                                    return s
+
                             updates = []
                             rows_to_append = []
                             existing_symbol_keys, existing_base_keys = _collect_watchlist_keys(df_watchlist)
-                            for i, (idx, new_row) in enumerate(edited_df.iterrows()):
-                                old_row = display_df.iloc[i]
+                            for i in range(len(edited_df)):
+                                new_row = edited_df.iloc[i]
                                 pos_row = df_positions_custom.iloc[i]
                                 wl_row = pos_row.get("_wl_row")
+                                wl_row_valid = (wl_row is not None) and (not pd.isna(wl_row))
 
-                                for col_name, col_idx in [("SL", sl_col), ("T1", t1_col), ("T2", t2_col)]:
-                                    old_val = str(old_row.get(col_name, "")).strip()
-                                    new_val = str(new_row.get(col_name, "")).strip()
-                                    if (not pd.isna(wl_row)) and old_val != new_val:
-                                        updates.append({
-                                            "range": gspread.utils.rowcol_to_a1(int(wl_row), col_idx),
-                                            "values": [[new_val]],
-                                        })
-
-                                # Auto-add missing Dhan positions to watchlist so SL/T1/T2 can be persisted.
-                                if pd.isna(wl_row):
+                                if wl_row_valid:
+                                    # Update existing watchlist row — always write user-entered values
+                                    for col_name, col_idx in [("SL", sl_col), ("T1", t1_col), ("T2", t2_col)]:
+                                        new_val = _clean_val(new_row.get(col_name))
+                                        if new_val:  # only write non-blank values
+                                            updates.append({
+                                                "range": gspread.utils.rowcol_to_a1(int(wl_row), col_idx),
+                                                "values": [[new_val]],
+                                            })
+                                else:
+                                    # Auto-add missing Dhan positions to watchlist
                                     symbol_key = str(pos_row.get("Symbol", "")).strip().upper()
                                     base_key = str(pos_row.get("BaseSymbol", "")).strip().upper()
-                                    # Append if this exact contract symbol is missing; base symbol overlap is allowed.
                                     if symbol_key and symbol_key not in existing_symbol_keys:
                                         rows_to_append.append(_build_watchlist_row(pos_row, new_row, sheet_headers))
                                         existing_symbol_keys.add(symbol_key)
@@ -541,7 +555,7 @@ def render(intel_pool=None):
                                             existing_base_keys.add(base_key)
 
                             if not updates and not rows_to_append:
-                                st.info("No SL/T1/T2 changes detected.")
+                                st.info("No SL/T1/T2 values entered. Type values in SL, T1, or T2 columns then save.")
                             else:
                                 sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
                                 if rows_to_append:
@@ -553,8 +567,8 @@ def render(intel_pool=None):
                                 if updates:
                                     msg_parts.append(f"updated {len(updates)} cells")
                                 if rows_to_append:
-                                    msg_parts.append(f"added {len(rows_to_append)} missing positions")
-                                st.success(f"Watchlist sync complete: {', '.join(msg_parts)}.")
+                                    msg_parts.append(f"added {len(rows_to_append)} new positions to Watchlist")
+                                st.success(f"Saved: {', '.join(msg_parts)}.")
                                 fetch_dataframe_safe.clear()
                                 fetch_sheet_headers_safe.clear()
                                 st.rerun()
