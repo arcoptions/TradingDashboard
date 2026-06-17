@@ -515,9 +515,9 @@ def render(intel_pool=None):
                             updates = []
                             rows_to_append = []
                             existing_symbol_keys, existing_base_keys = _collect_watchlist_keys(df_watchlist)
-                            for idx, new_row in edited_df.iterrows():
-                                old_row = display_df.iloc[idx]
-                                pos_row = df_positions_custom.iloc[idx]
+                            for i, (idx, new_row) in enumerate(edited_df.iterrows()):
+                                old_row = display_df.iloc[i]
+                                pos_row = df_positions_custom.iloc[i]
                                 wl_row = pos_row.get("_wl_row")
 
                                 for col_name, col_idx in [("SL", sl_col), ("T1", t1_col), ("T2", t2_col)]:
