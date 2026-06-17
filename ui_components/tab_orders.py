@@ -5,7 +5,7 @@ import sqlite3
 import gspread
 
 import broker_api as api
-from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_dict, init_sheet_connection
+from integrations.google_sheets import fetch_dataframe_safe, fetch_settings_dict, init_sheet_connection, fetch_sheet_headers_safe
 
 
 ACTIVE_ORDER_STATUSES = ["TRANSIT", "PENDING", "PART_TRADED"]
@@ -445,12 +445,66 @@ def render(intel_pool=None):
                 disabled=["Symbol", "Score", "Recommendation", "Avg Qty", "Avg Price", "Stock LTP", "Option LTP", "Vs Entry", "Entry vs Live %", "Target Reached"],
             )
 
+            def _set_sheet_value(row_vals, headers, col_name, value):
+                if col_name in headers:
+                    row_vals[headers.index(col_name)] = "" if value is None else str(value)
+
+            def _build_watchlist_row(pos_row, edited_row, headers):
+                row_vals = [""] * len(headers)
+                symbol = str(pos_row.get("Symbol", "")).strip()
+                base_symbol = str(pos_row.get("BaseSymbol", "")).strip()
+                if not base_symbol and symbol:
+                    base_symbol = symbol.split("-")[0].strip().upper()
+
+                exch = str(pos_row.get("exchangeSegment", "")).strip().upper()
+                trade_type = "Option" if exch == "NSE_FNO" else "Equity"
+                opt_ltp = pd.to_numeric(edited_row.get("Option LTP", ""), errors="coerce")
+                stk_ltp = pd.to_numeric(edited_row.get("Stock LTP", ""), errors="coerce")
+                live_ltp = opt_ltp if not pd.isna(opt_ltp) else stk_ltp
+
+                _set_sheet_value(row_vals, headers, "Trade Date", pd.Timestamp.today().strftime("%Y-%m-%d"))
+                _set_sheet_value(row_vals, headers, "Idea Source (Chartink/Telegram/X/Self)", "Dhan Auto")
+                _set_sheet_value(row_vals, headers, "Base Asset", base_symbol)
+                _set_sheet_value(row_vals, headers, "Symbol / Asset", symbol)
+                _set_sheet_value(row_vals, headers, "Trade Type (Eq/Option)", trade_type)
+                _set_sheet_value(row_vals, headers, "Exchange", exch)
+                _set_sheet_value(row_vals, headers, "Security ID", pos_row.get("securityId", ""))
+                _set_sheet_value(row_vals, headers, "Status (Watch/Active/Closed)", "Active")
+                _set_sheet_value(row_vals, headers, "Entry CMP / Range", edited_row.get("Avg Price", ""))
+                _set_sheet_value(row_vals, headers, "Live Price", "" if pd.isna(live_ltp) else live_ltp)
+                _set_sheet_value(row_vals, headers, "Vs Entry", edited_row.get("Vs Entry", ""))
+                _set_sheet_value(row_vals, headers, "Entry vs Live %", edited_row.get("Entry vs Live %", ""))
+                _set_sheet_value(row_vals, headers, "Score", edited_row.get("Score", ""))
+                _set_sheet_value(row_vals, headers, "Recommendation", edited_row.get("Recommendation", ""))
+                _set_sheet_value(row_vals, headers, "Decision", str(pos_row.get("positionType", "")).upper())
+                _set_sheet_value(row_vals, headers, "Stop Loss (SL)", edited_row.get("SL", ""))
+                _set_sheet_value(row_vals, headers, "Target 1", edited_row.get("T1", ""))
+                _set_sheet_value(row_vals, headers, "Target 2", edited_row.get("T2", ""))
+                _set_sheet_value(row_vals, headers, "Target Status", edited_row.get("Target Reached", ""))
+                return row_vals
+
+            def _collect_watchlist_keys(df_src):
+                keys = set()
+                if df_src is None or df_src.empty:
+                    return keys
+                for _, wl_row in df_src.iterrows():
+                    sym = str(wl_row.get("Symbol / Asset", "")).strip().upper()
+                    base = str(wl_row.get("Base Asset", "")).strip().upper()
+                    if _is_blank(base) and sym:
+                        base = sym.split("-")[0].split(" ")[0].strip().upper()
+                    if sym and not _is_blank(sym):
+                        keys.add(sym)
+                        keys.add(sym.split("-")[0].split(" ")[0].strip().upper())
+                    if base and not _is_blank(base):
+                        keys.add(base)
+                return {k for k in keys if k and not _is_blank(k)}
+
             if st.button("Save SL/Targets to Watchlist", key="save_dhan_targets"):
                 try:
-                    if df_watchlist.empty:
-                        st.warning("Watchlist data is unavailable right now. Please retry after sync.")
+                    sheet_headers = df_watchlist.columns.tolist() if not df_watchlist.empty else fetch_sheet_headers_safe(is_sheet1=True)
+                    if not sheet_headers:
+                        st.error("Could not read Watchlist headers. Please retry after sync.")
                     else:
-                        sheet_headers = df_watchlist.columns.tolist()
                         if "Stop Loss (SL)" not in sheet_headers or "Target 1" not in sheet_headers or "Target 2" not in sheet_headers:
                             st.error("Watchlist headers missing SL/T1/T2 columns.")
                         else:
@@ -459,29 +513,50 @@ def render(intel_pool=None):
                             t2_col = sheet_headers.index("Target 2") + 1
 
                             updates = []
+                            rows_to_append = []
+                            existing_keys = _collect_watchlist_keys(df_watchlist)
                             for idx, new_row in edited_df.iterrows():
                                 old_row = display_df.iloc[idx]
-                                wl_row = df_positions_custom.iloc[idx].get("_wl_row")
-                                if pd.isna(wl_row):
-                                    continue
+                                pos_row = df_positions_custom.iloc[idx]
+                                wl_row = pos_row.get("_wl_row")
 
-                                wl_row = int(wl_row)
                                 for col_name, col_idx in [("SL", sl_col), ("T1", t1_col), ("T2", t2_col)]:
                                     old_val = str(old_row.get(col_name, "")).strip()
                                     new_val = str(new_row.get(col_name, "")).strip()
-                                    if old_val != new_val:
+                                    if (not pd.isna(wl_row)) and old_val != new_val:
                                         updates.append({
                                             "range": gspread.utils.rowcol_to_a1(wl_row, col_idx),
                                             "values": [[new_val]],
                                         })
 
-                            if not updates:
+                                # Auto-add missing Dhan positions to watchlist so SL/T1/T2 can be persisted.
+                                if pd.isna(wl_row):
+                                    symbol_key = str(pos_row.get("Symbol", "")).strip().upper()
+                                    base_key = str(pos_row.get("BaseSymbol", "")).strip().upper()
+                                    if symbol_key not in existing_keys and base_key not in existing_keys:
+                                        rows_to_append.append(_build_watchlist_row(pos_row, new_row, sheet_headers))
+                                        if symbol_key:
+                                            existing_keys.add(symbol_key)
+                                        if base_key:
+                                            existing_keys.add(base_key)
+
+                            if not updates and not rows_to_append:
                                 st.info("No SL/T1/T2 changes detected.")
                             else:
                                 sh, watchlist_ws, _, _, _, _ = init_sheet_connection()
-                                watchlist_ws.batch_update(updates)
-                                st.success(f"Saved {len(updates)} updates to Watchlist.")
+                                if rows_to_append:
+                                    watchlist_ws.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+                                if updates:
+                                    watchlist_ws.batch_update(updates)
+
+                                msg_parts = []
+                                if updates:
+                                    msg_parts.append(f"updated {len(updates)} cells")
+                                if rows_to_append:
+                                    msg_parts.append(f"added {len(rows_to_append)} missing positions")
+                                st.success(f"Watchlist sync complete: {', '.join(msg_parts)}.")
                                 fetch_dataframe_safe.clear()
+                                fetch_sheet_headers_safe.clear()
                                 st.rerun()
                 except Exception as save_err:
                     st.error(f"Could not save updates: {save_err}")

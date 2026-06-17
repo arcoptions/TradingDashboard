@@ -144,6 +144,24 @@ def render(watchlist_df, intel_pool):
             & (filtered_df["Recommendation"].astype(str).isin(["LONG CE", "LONG PE"]))
         ].copy().reset_index(drop=True)
 
+        option_filter = st.radio(
+            "Option Type",
+            options=["All", "CE Only", "PE Only"],
+            horizontal=True,
+            key="options_candidate_type_filter",
+        )
+
+        if option_filter == "CE Only":
+            options_candidates = options_candidates[
+                options_candidates["Recommendation"].astype(str).str.upper().eq("LONG CE")
+            ].copy()
+        elif option_filter == "PE Only":
+            options_candidates = options_candidates[
+                options_candidates["Recommendation"].astype(str).str.upper().eq("LONG PE")
+            ].copy()
+
+        options_candidates = options_candidates.reset_index(drop=True)
+
         if not options_candidates.empty:
             options_candidates = options_candidates.sort_values(
                 by=["Score", "Sector Strength %"],
