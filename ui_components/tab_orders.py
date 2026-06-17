@@ -525,7 +525,7 @@ def render(intel_pool=None):
                                     new_val = str(new_row.get(col_name, "")).strip()
                                     if (not pd.isna(wl_row)) and old_val != new_val:
                                         updates.append({
-                                            "range": gspread.utils.rowcol_to_a1(wl_row, col_idx),
+                                            "range": gspread.utils.rowcol_to_a1(int(wl_row), col_idx),
                                             "values": [[new_val]],
                                         })
 
