@@ -484,20 +484,20 @@ def render(intel_pool=None):
                 return row_vals
 
             def _collect_watchlist_keys(df_src):
-                keys = set()
+                symbol_keys = set()
+                base_keys = set()
                 if df_src is None or df_src.empty:
-                    return keys
+                    return symbol_keys, base_keys
                 for _, wl_row in df_src.iterrows():
                     sym = str(wl_row.get("Symbol / Asset", "")).strip().upper()
                     base = str(wl_row.get("Base Asset", "")).strip().upper()
                     if _is_blank(base) and sym:
                         base = sym.split("-")[0].split(" ")[0].strip().upper()
                     if sym and not _is_blank(sym):
-                        keys.add(sym)
-                        keys.add(sym.split("-")[0].split(" ")[0].strip().upper())
+                        symbol_keys.add(sym)
                     if base and not _is_blank(base):
-                        keys.add(base)
-                return {k for k in keys if k and not _is_blank(k)}
+                        base_keys.add(base)
+                return symbol_keys, base_keys
 
             if st.button("Save SL/Targets to Watchlist", key="save_dhan_targets"):
                 try:
@@ -514,7 +514,7 @@ def render(intel_pool=None):
 
                             updates = []
                             rows_to_append = []
-                            existing_keys = _collect_watchlist_keys(df_watchlist)
+                            existing_symbol_keys, existing_base_keys = _collect_watchlist_keys(df_watchlist)
                             for idx, new_row in edited_df.iterrows():
                                 old_row = display_df.iloc[idx]
                                 pos_row = df_positions_custom.iloc[idx]
@@ -533,12 +533,12 @@ def render(intel_pool=None):
                                 if pd.isna(wl_row):
                                     symbol_key = str(pos_row.get("Symbol", "")).strip().upper()
                                     base_key = str(pos_row.get("BaseSymbol", "")).strip().upper()
-                                    if symbol_key not in existing_keys and base_key not in existing_keys:
+                                    # Append if this exact contract symbol is missing; base symbol overlap is allowed.
+                                    if symbol_key and symbol_key not in existing_symbol_keys:
                                         rows_to_append.append(_build_watchlist_row(pos_row, new_row, sheet_headers))
-                                        if symbol_key:
-                                            existing_keys.add(symbol_key)
+                                        existing_symbol_keys.add(symbol_key)
                                         if base_key:
-                                            existing_keys.add(base_key)
+                                            existing_base_keys.add(base_key)
 
                             if not updates and not rows_to_append:
                                 st.info("No SL/T1/T2 changes detected.")
