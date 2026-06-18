@@ -411,6 +411,38 @@ def render(intel_pool=None):
         ]
         
         display_df = df_positions_custom[display_cols].copy()
+
+        def _safe_num(v):
+            return pd.to_numeric(v, errors="coerce")
+
+        # Portfolio lines from currently visible positions.
+        qty_abs = _safe_num(df_positions_custom.get("netQty", 0)).fillna(0).abs()
+        avg_px = _safe_num(df_positions_custom.get("Avg Price", 0)).fillna(0)
+        opt_px = _safe_num(df_positions_custom.get("Option LTP", ""))
+        stk_px = _safe_num(df_positions_custom.get("Stock LTP", ""))
+        live_px = opt_px.where(~opt_px.isna(), stk_px)
+        pos_side = df_positions_custom.get("positionType", "").astype(str).str.upper()
+
+        valid_mask = (qty_abs > 0) & (avg_px > 0) & (~live_px.isna())
+        invested_amount = float((avg_px[valid_mask] * qty_abs[valid_mask]).sum())
+        current_amount = float((live_px[valid_mask] * qty_abs[valid_mask]).sum())
+
+        pnl_components = pd.Series(0.0, index=df_positions_custom.index)
+        long_mask = valid_mask & pos_side.eq("LONG")
+        short_mask = valid_mask & pos_side.eq("SHORT")
+        other_mask = valid_mask & (~pos_side.isin(["LONG", "SHORT"]))
+        pnl_components.loc[long_mask] = (live_px[long_mask] - avg_px[long_mask]) * qty_abs[long_mask]
+        pnl_components.loc[short_mask] = (avg_px[short_mask] - live_px[short_mask]) * qty_abs[short_mask]
+        pnl_components.loc[other_mask] = (live_px[other_mask] - avg_px[other_mask]) * qty_abs[other_mask]
+        total_pnl = float(pnl_components.sum())
+        pnl_pct = (total_pnl / invested_amount * 100.0) if invested_amount > 0 else 0.0
+
+        st.markdown(
+            f"**Invested Amount:** ₹{invested_amount:,.2f}  |  **Current Amount:** ₹{current_amount:,.2f}"
+        )
+        st.markdown(
+            f"**Total P&L:** {total_pnl:+,.2f} ({pnl_pct:+.2f}%)"
+        )
         
         # Format numeric columns
         numeric_cols = ["Avg Qty", "Avg Price", "Stock LTP", "Option LTP", "SL", "T1", "T2"]
