@@ -13,9 +13,14 @@ def prox_color(val):
     if val == "-": return "color:#64748B;"
     return "color:#089981;" if float(val) > 0 else "color:#F23645;"
 
-def render_tv_chart(symbol):
+def render_tv_chart(symbol, exchange=None):
     tv_sym = str(symbol).split('-')[0].upper().replace("&", "_")
-    tv_ticker = f"NSE:{tv_sym}" if tv_sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"] else f"BSE:{tv_sym}"
+    exchange_value = str(exchange or "").strip().upper()
+    if exchange_value.startswith("BSE"):
+        tv_exchange = "BSE"
+    else:
+        tv_exchange = "NSE"
+    tv_ticker = f"{tv_exchange}:{tv_sym}"
     html = f"""
     <div class="tradingview-widget-container" style="height: 420px; width: 100%;">
       <div id="tv_chart" style="height: 420px; width: 100%;"></div>
@@ -241,7 +246,7 @@ def render(trade_data, intel_pool, daily_token, primary_watchlist_ws, sheet_head
         
         with st.container(border=True):
             st.markdown("**Interactive Chart**")
-            render_tv_chart(sym_key)
+            render_tv_chart(sym_key, trade_data.get("Exchange"))
     
     with tab_psych_exec:
         if sheet_row_id == -1:
