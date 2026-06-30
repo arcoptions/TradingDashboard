@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import gspread
+import base64
 from google.oauth2.service_account import Credentials
 import streamlit as st
 import threading
@@ -132,6 +133,28 @@ def _normalize_dhan_token(raw_token):
     return token
 
 
+def _extract_dhan_client_id(raw_token):
+    token = _normalize_dhan_token(raw_token)
+    parts = token.split('.')
+    if len(parts) < 2:
+        return ""
+
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        decoded_payload = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except Exception:
+        return ""
+    return str(decoded_payload.get("dhanClientId") or "").strip()
+
+
+def _resolve_dhan_client_id(raw_token=None, fallback_client_id=None):
+    token_client_id = _extract_dhan_client_id(raw_token)
+    if token_client_id:
+        return token_client_id
+    return str(fallback_client_id or st.secrets["dhan"].get("dhan_client_id", "")).strip()
+
+
 def _format_dhan_api_error(response, fallback_prefix="Dhan API request failed"):
     try:
         payload = response.json()
@@ -155,13 +178,14 @@ def _format_dhan_api_error(response, fallback_prefix="Dhan API request failed"):
     return f"{fallback_prefix} ({response.status_code})"
 
 
-def _build_dhan_headers(daily_token=None):
+def _build_dhan_headers(daily_token=None, fallback_client_id=None):
     token_to_use = _normalize_dhan_token(daily_token or st.secrets["dhan"].get("access_token", ""))
+    client_id_to_use = _resolve_dhan_client_id(token_to_use, fallback_client_id=fallback_client_id)
     return {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'access-token': token_to_use,
-        'client-id': st.secrets["dhan"]["dhan_client_id"],
+        'client-id': client_id_to_use,
     }
 
 
@@ -328,18 +352,11 @@ def fetch_dhan_orders(daily_token=None):
     try:
         settings = fetch_settings_dict()
         token_to_use = _normalize_dhan_token(daily_token or settings.get("Dhan Access Token", ""))
-        client_id = st.secrets["dhan"].get("dhan_client_id", "")
         if not token_to_use:
             return pd.DataFrame(), "Missing Dhan access token"
-        if not client_id:
+        headers = _build_dhan_headers(token_to_use)
+        if not headers.get("client-id"):
             return pd.DataFrame(), "Missing Dhan client ID"
-
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'access-token': token_to_use,
-            'client-id': client_id,
-        }
         response = requests.get("https://api.dhan.co/v2/orders", headers=headers, timeout=15)
         if response.status_code != 200:
             return pd.DataFrame(), f"Dhan orders API returned {response.status_code}: {response.text[:200]}"
@@ -371,18 +388,11 @@ def fetch_dhan_positions(daily_token=None):
     try:
         settings = fetch_settings_dict()
         token_to_use = _normalize_dhan_token(daily_token or settings.get("Dhan Access Token", ""))
-        client_id = st.secrets["dhan"].get("dhan_client_id", "")
         if not token_to_use:
             return pd.DataFrame(), "Missing Dhan access token"
-        if not client_id:
+        headers = _build_dhan_headers(token_to_use)
+        if not headers.get("client-id"):
             return pd.DataFrame(), "Missing Dhan client ID"
-
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'access-token': token_to_use,
-            'client-id': client_id,
-        }
         response = requests.get("https://api.dhan.co/v2/positions", headers=headers, timeout=15)
         if response.status_code != 200:
             return pd.DataFrame(), f"Dhan positions API returned {response.status_code}: {response.text[:200]}"
@@ -481,8 +491,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
     payload = {k: list(set(v)) for k, v in payload.items() if v}
     if not payload or (len(payload) == 1 and not payload.get("IDX_I")): return "No active sync rows mapped"
         
-    client_id_to_use = background_client_id if background_client_id else st.secrets["dhan"]["dhan_client_id"]
-    headers = {'Accept': 'application/json', 'Content-Type': 'application/json', 'access-token': daily_token, 'client-id': client_id_to_use}
+    headers = _build_dhan_headers(daily_token, fallback_client_id=background_client_id)
     
     try: response = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=headers, json=payload, timeout=15)
     except Exception as e: return f"HTTP Timeout: {e}"

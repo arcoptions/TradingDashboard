@@ -66,16 +66,9 @@ def render(intel_pool=None):
             try:
                 settings = fetch_settings_dict()
                 token = settings.get("Dhan Access Token", "")
-                client_id = st.secrets["dhan"].get("dhan_client_id", "")
-                if not token or not client_id:
+                headers = api._build_dhan_headers(token)
+                if not token or not headers.get("client-id"):
                     return {}
-
-                headers = {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "access-token": token,
-                    "client-id": client_id,
-                }
                 resp = requests.post(
                     "https://api.dhan.co/v2/marketfeed/quote",
                     headers=headers,
@@ -167,15 +160,9 @@ def render(intel_pool=None):
             try:
                 settings = fetch_settings_dict()
                 token = settings.get("Dhan Access Token", "")
-                client_id = st.secrets["dhan"].get("dhan_client_id", "")
-                if not token or not client_id:
+                headers = api._build_dhan_headers(token)
+                if not token or not headers.get("client-id"):
                     return {}
-                headers = {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "access-token": token,
-                    "client-id": client_id,
-                }
                 resp = requests.post(
                     "https://api.dhan.co/v2/marketfeed/quote",
                     headers=headers,
