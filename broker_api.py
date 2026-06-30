@@ -122,8 +122,38 @@ def resolve_instrument(parsed_sym):
         return str(row['SEM_TRADING_SYMBOL']), str(row['SEM_SMST_SECURITY_ID']), ret_exch
     return parsed_sym, "", "NSE_EQ"
 
+def _normalize_dhan_token(raw_token):
+    token = str(raw_token or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
+def _format_dhan_api_error(response, fallback_prefix="Dhan API request failed"):
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    details = ""
+    if isinstance(payload, dict):
+        for key in ("message", "remarks", "error", "errors", "status"):
+            value = payload.get(key)
+            if value:
+                details = str(value)
+                break
+
+    if not details:
+        details = (response.text or "").strip()
+
+    details = details[:200] if details else ""
+    if details:
+        return f"{fallback_prefix} ({response.status_code}): {details}"
+    return f"{fallback_prefix} ({response.status_code})"
+
+
 def _build_dhan_headers(daily_token=None):
-    token_to_use = daily_token or st.secrets["dhan"].get("access_token", "")
+    token_to_use = _normalize_dhan_token(daily_token or st.secrets["dhan"].get("access_token", ""))
     return {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
@@ -294,7 +324,7 @@ def get_option_chain_snapshot(asset_symbol, daily_token=None):
 def fetch_dhan_orders(daily_token=None):
     try:
         settings = fetch_settings_dict()
-        token_to_use = daily_token or settings.get("Dhan Access Token", "")
+        token_to_use = _normalize_dhan_token(daily_token or settings.get("Dhan Access Token", ""))
         client_id = st.secrets["dhan"].get("dhan_client_id", "")
         if not token_to_use:
             return pd.DataFrame(), "Missing Dhan access token"
@@ -337,7 +367,7 @@ def fetch_dhan_orders(daily_token=None):
 def fetch_dhan_positions(daily_token=None):
     try:
         settings = fetch_settings_dict()
-        token_to_use = daily_token or settings.get("Dhan Access Token", "")
+        token_to_use = _normalize_dhan_token(daily_token or settings.get("Dhan Access Token", ""))
         client_id = st.secrets["dhan"].get("dhan_client_id", "")
         if not token_to_use:
             return pd.DataFrame(), "Missing Dhan access token"
@@ -386,6 +416,7 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
             vals = robust_api_call(settings_sheet.get_all_values)
             s_dict = {str(r[0]).strip(): str(r[1]).strip() for r in vals if len(r)>=2}
             daily_token = s_dict.get("Dhan Access Token", "")
+        daily_token = _normalize_dhan_token(daily_token)
         if not daily_token: return "Missing dynamic authorization token"
     except Exception as e: return f"Database connection error: {e}"
     
@@ -532,7 +563,9 @@ def execute_core_sync(worksheet, scanner_sheet, settings_sheet, sheet_headers, s
 
         except Exception as e: return f"Sheets transmission exception: {e}"
         return "Success"
-    return f"API Status Failure Code: {response.status_code}"
+    if response.status_code == 401:
+        return _format_dhan_api_error(response, "Dhan authorization failed. Save a fresh access token in API & Sync Setup")
+    return _format_dhan_api_error(response, "Dhan marketfeed request failed")
 
 # --- FIXED: Only opens Google Connection once at start, reducing Read Quota completely! ---
 def background_sync_loop(gcp_creds_dict, dhan_client_id):
