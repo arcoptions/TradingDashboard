@@ -124,8 +124,11 @@ def resolve_instrument(parsed_sym):
 
 def _normalize_dhan_token(raw_token):
     token = str(raw_token or "").strip()
+    token = token.strip("'\"")
+    token = re.sub(r"^(access[-_ ]?token|token)\s*[:=]\s*", "", token, flags=re.IGNORECASE)
     if token.lower().startswith("bearer "):
         token = token[7:].strip()
+    token = " ".join(token.split())
     return token
 
 

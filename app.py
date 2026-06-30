@@ -211,9 +211,10 @@ def main():
             selected_sync = st.selectbox("Background Sync Speed:", list(sync_mapping.values()), index=list(sync_mapping.keys()).index(current_sync) if current_sync in sync_mapping else 1)
             
             if st.button("Save Settings", use_container_width=True):
+                normalized_token = api._normalize_dhan_token(new_token)
                 settings_ws.batch_update([
                     {'range': 'A2', 'values': [["Dhan Access Token"]]},
-                    {'range': 'B2', 'values': [[new_token]]},
+                    {'range': 'B2', 'values': [[normalized_token]]},
                     {'range': 'A8', 'values': [["Sync Interval"]]},
                     {'range': 'B8', 'values': [[rev_mapping[selected_sync]]]}
                 ])
