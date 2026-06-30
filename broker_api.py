@@ -163,10 +163,18 @@ def _format_dhan_api_error(response, fallback_prefix="Dhan API request failed"):
 
     details = ""
     if isinstance(payload, dict):
+        data_node = payload.get("data")
+        if isinstance(data_node, dict):
+            if data_node.get("806") == "Data APIs not Subscribed":
+                details = "Data APIs not subscribed for this Dhan account"
+            elif data_node:
+                details = "; ".join([f"{k}: {v}" for k, v in data_node.items()])
+
         for key in ("message", "remarks", "error", "errors", "status"):
             value = payload.get(key)
             if value:
-                details = str(value)
+                if not details or str(value).strip().lower() not in {"failed", "error"}:
+                    details = str(value)
                 break
 
     if not details:
