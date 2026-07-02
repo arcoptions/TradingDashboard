@@ -2,7 +2,10 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 import plotly.graph_objects as go
+from datetime import datetime, timezone
 
+from integrations.google_sheets import fetch_settings_dict
+import broker_api as api
 import local_db
 
 
@@ -45,6 +48,14 @@ def render(interval_seconds=60):
     )
     st.markdown("### Minute-by-minute OI Change")
     st.caption("Live Nifty and Sensex OI snapshots refresh automatically every minute.")
+
+    settings = fetch_settings_dict()
+    token = settings.get("Dhan Access Token", "")
+    token_expiry = api._get_dhan_token_expiry(token)
+    if not token:
+        st.warning("Paste a fresh Dhan access token in API & Sync Setup to start minute-by-minute OI collection.")
+    elif token_expiry and token_expiry <= datetime.now(timezone.utc):
+        st.warning(f"Dhan access token expired at {token_expiry.strftime('%d-%b %I:%M %p UTC')}. Save a fresh token to resume live OI collection.")
 
     for underlying in INDEX_UNDERLYINGS:
         st.markdown(f"#### {underlying} OI")

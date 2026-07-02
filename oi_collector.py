@@ -135,6 +135,10 @@ def background_oi_collector(gcp_creds_dict, dhan_client_id, sync_interval=60):
                 if not daily_token:
                     time.sleep(min(sync_interval, 10))
                     continue
+                if api._is_dhan_token_expired(daily_token):
+                    print("OI Collector: Dhan token expired; waiting for a fresh token in Settings.")
+                    time.sleep(min(sync_interval, 10))
+                    continue
 
                 df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
                 if df_watchlist.empty:

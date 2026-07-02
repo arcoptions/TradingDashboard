@@ -133,19 +133,40 @@ def _normalize_dhan_token(raw_token):
     return token
 
 
-def _extract_dhan_client_id(raw_token):
+def _decode_dhan_token_payload(raw_token):
     token = _normalize_dhan_token(raw_token)
-    parts = token.split('.')
+    parts = token.split(".")
     if len(parts) < 2:
-        return ""
+        return {}
 
     payload = parts[1]
     payload += "=" * (-len(payload) % 4)
     try:
         decoded_payload = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
     except Exception:
-        return ""
-    return str(decoded_payload.get("dhanClientId") or "").strip()
+        return {}
+    return decoded_payload if isinstance(decoded_payload, dict) else {}
+
+
+def _get_dhan_token_expiry(raw_token):
+    payload = _decode_dhan_token_payload(raw_token)
+    exp_value = payload.get("exp")
+    if not exp_value:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(int(exp_value), tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def _is_dhan_token_expired(raw_token):
+    expiry = _get_dhan_token_expiry(raw_token)
+    return bool(expiry and expiry <= datetime.datetime.now(timezone.utc))
+
+
+def _extract_dhan_client_id(raw_token):
+    payload = _decode_dhan_token_payload(raw_token)
+    return str(payload.get("dhanClientId") or "").strip()
 
 
 def _resolve_dhan_client_id(raw_token=None, fallback_client_id=None):
@@ -234,42 +255,78 @@ def _fetch_option_chain_payload(asset_symbol, daily_token=None):
     if scrip_df.empty:
         return contract_meta, None
 
-    underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_SEGMENT'] == 'E')]
-    if underlying_df.empty:
-        underlying_df = scrip_df[(scrip_df['SEM_TRADING_SYMBOL'] == underlying) & (scrip_df['SEM_EXM_EXCH_ID'] == 'IDX')]
-    if underlying_df.empty:
+    underlying_upper = str(underlying).strip().upper()
+    candidate_symbols = [underlying_upper]
+    if underlying_upper == "SENSEX":
+        candidate_symbols = ["SENSEX", "SENSEX1", "BSESENSEX"]
+
+    candidate_rows = scrip_df[scrip_df['SEM_TRADING_SYMBOL'].astype(str).str.upper().isin(candidate_symbols)].copy()
+    if candidate_rows.empty:
+        candidate_rows = scrip_df[scrip_df['SEM_TRADING_SYMBOL'].astype(str).str.upper().str.contains(underlying_upper, regex=False, na=False)].copy()
+
+    if candidate_rows.empty:
         return contract_meta, None
 
-    underlying_id = int(underlying_df.iloc[0]['SEM_SMST_SECURITY_ID'])
-    exch = underlying_df.iloc[0]['SEM_EXM_EXCH_ID']
-    underlying_seg = "IDX_I" if exch == 'IDX' else "NSE_EQ"
     headers = _build_dhan_headers(daily_token=daily_token)
+    seen_combinations = set()
 
-    valid_expiry = fallback_expiry
-    try:
-        exp_res = requests.post("https://api.dhan.co/v2/optionchain/expirylist", headers=headers, json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg}, timeout=5)
-        if exp_res.status_code == 200 and exp_res.json().get("data"):
-            exp_list = exp_res.json()["data"]
-            if fallback_expiry:
-                parsed_dt = datetime.datetime.strptime(fallback_expiry, "%Y-%m-%d")
-                matching_expiries = [e for e in exp_list if datetime.datetime.strptime(e, "%Y-%m-%d").year == parsed_dt.year and datetime.datetime.strptime(e, "%Y-%m-%d").month == parsed_dt.month]
-                if matching_expiries:
-                    valid_expiry = max(matching_expiries)
-            if not valid_expiry and exp_list:
-                valid_expiry = exp_list[0]
-    except Exception:
-        pass
+    for _, row in candidate_rows.iterrows():
+        underlying_id = int(row['SEM_SMST_SECURITY_ID'])
+        exch = str(row['SEM_EXM_EXCH_ID']).strip().upper()
+        seg = str(row['SEM_SEGMENT']).strip().upper()
+        if seg == 'I':
+            seg_candidates = ["IDX_I", "BSE_I", "NSE_I"]
+        elif exch == 'BSE':
+            seg_candidates = ["BSE_I", "IDX_I", "BSE_EQ"]
+        else:
+            seg_candidates = ["IDX_I", "NSE_EQ", "BSE_I"]
 
-    if not valid_expiry:
-        return contract_meta, None
+        for underlying_seg in seg_candidates:
+            combo_key = (underlying_id, underlying_seg)
+            if combo_key in seen_combinations:
+                continue
+            seen_combinations.add(combo_key)
 
-    try:
-        res = requests.post("https://api.dhan.co/v2/optionchain", headers=headers, json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg, "Expiry": valid_expiry}, timeout=10)
-        if res.status_code == 200 and res.json().get("data"):
-            contract_meta["expiry_date"] = valid_expiry
-            return contract_meta, res.json()["data"]
-    except Exception:
-        pass
+            valid_expiry = fallback_expiry
+            try:
+                exp_res = requests.post(
+                    "https://api.dhan.co/v2/optionchain/expirylist",
+                    headers=headers,
+                    json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg},
+                    timeout=5,
+                )
+                if exp_res.status_code == 200 and exp_res.json().get("data"):
+                    exp_list = exp_res.json()["data"]
+                    if fallback_expiry:
+                        parsed_dt = datetime.datetime.strptime(fallback_expiry, "%Y-%m-%d")
+                        matching_expiries = [
+                            e for e in exp_list
+                            if datetime.datetime.strptime(e, "%Y-%m-%d").year == parsed_dt.year
+                            and datetime.datetime.strptime(e, "%Y-%m-%d").month == parsed_dt.month
+                        ]
+                        if matching_expiries:
+                            valid_expiry = max(matching_expiries)
+                    if not valid_expiry and exp_list:
+                        valid_expiry = exp_list[0]
+            except Exception:
+                continue
+
+            if not valid_expiry:
+                continue
+
+            try:
+                res = requests.post(
+                    "https://api.dhan.co/v2/optionchain",
+                    headers=headers,
+                    json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg, "Expiry": valid_expiry},
+                    timeout=10,
+                )
+                if res.status_code == 200 and res.json().get("data"):
+                    contract_meta["expiry_date"] = valid_expiry
+                    return contract_meta, res.json()["data"]
+            except Exception:
+                continue
+
     return contract_meta, None
 
 
