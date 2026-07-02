@@ -10,6 +10,10 @@ import local_db
 
 
 INDEX_UNDERLYINGS = ["NIFTY", "SENSEX"]
+INDEX_FALLBACK_ALIASES = {
+    "NIFTY": ["NIFTY"],
+    "SENSEX": ["SENSEX", "SENSEX1", "SENSEX50", "BSESENSEX"],
+}
 
 
 def _format_lakhs(value):
@@ -33,6 +37,14 @@ def _build_index_chart(df_live, title):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     return fig
+
+
+def _load_latest_index_rows(underlying):
+    for alias in INDEX_FALLBACK_ALIASES.get(underlying, [underlying]):
+        rows = local_db.query_latest_oi_chain(alias)
+        if rows:
+            return rows, alias
+    return [], underlying
 
 
 def render(interval_seconds=60):
@@ -59,7 +71,7 @@ def render(interval_seconds=60):
 
     for underlying in INDEX_UNDERLYINGS:
         st.markdown(f"#### {underlying} OI")
-        latest_rows = local_db.query_latest_oi_chain(underlying)
+        latest_rows, matched_underlying = _load_latest_index_rows(underlying)
         if not latest_rows:
             st.info(f"No OI snapshots available yet for {underlying}.")
             continue
@@ -80,7 +92,10 @@ def render(interval_seconds=60):
             continue
 
         latest_ts = str(df_live["timestamp"].iloc[0]) if "timestamp" in df_live.columns else "-"
-        st.caption(f"Latest snapshot: {latest_ts} | Expiry: {expiry or '-'}")
+        if matched_underlying != underlying:
+            st.caption(f"Latest snapshot: {latest_ts} | Expiry: {expiry or '-'} | Source: {matched_underlying}")
+        else:
+            st.caption(f"Latest snapshot: {latest_ts} | Expiry: {expiry or '-'}")
 
         c1, c2 = st.columns([1.7, 1.3])
         with c1:
