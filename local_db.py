@@ -369,6 +369,69 @@ def query_oi_changes(underlying, expiry, strike, time_window="1h"):
             conn.close()
 
 
+def query_latest_oi_chain(underlying, expiry=None):
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            if expiry:
+                cur.execute(
+                    """
+                    SELECT strike, call_oi, put_oi, call_oi_change, put_oi_change, timestamp
+                    FROM oi_snapshots
+                    WHERE underlying = ? AND expiry = ?
+                    AND timestamp = (
+                        SELECT MAX(timestamp)
+                        FROM oi_snapshots
+                        WHERE underlying = ? AND expiry = ?
+                    )
+                    ORDER BY strike
+                    """,
+                    (underlying, expiry, underlying, expiry),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT expiry, strike, call_oi, put_oi, call_oi_change, put_oi_change, timestamp
+                    FROM oi_snapshots
+                    WHERE underlying = ?
+                    AND timestamp = (
+                        SELECT MAX(timestamp)
+                        FROM oi_snapshots
+                        WHERE underlying = ?
+                    )
+                    ORDER BY expiry, strike
+                    """,
+                    (underlying, underlying),
+                )
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def query_latest_oi_expiry(underlying):
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT expiry, MAX(timestamp) as latest_ts
+                FROM oi_snapshots
+                WHERE underlying = ? AND expiry != ''
+                GROUP BY expiry
+                ORDER BY latest_ts DESC
+                LIMIT 1
+                """,
+                (underlying,),
+            )
+            row = cur.fetchone()
+            return row["expiry"] if row else ""
+        finally:
+            conn.close()
+
+
 def save_signal_event(source_type, source_name, raw_text, parsed_symbol, parsed_trade_type, source_sl="", source_target_1="", source_target_2="", metadata=None):
     if metadata is None:
         metadata = {}

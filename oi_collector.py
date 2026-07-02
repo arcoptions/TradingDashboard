@@ -7,6 +7,18 @@ from core_engines.nlp_router import FNO_SYMBOLS
 import pandas as pd
 
 
+INDEX_TRACKERS = {
+    "NIFTY": {
+        "display": "Nifty",
+        "expiry_source": "NIFTY",
+    },
+    "SENSEX": {
+        "display": "Sensex",
+        "expiry_source": "SENSEX",
+    },
+}
+
+
 def collect_oi_for_symbols(watchlist_df, daily_token):
     """
     For all F&O items in the watchlist, fetch and store OI snapshots.
@@ -58,6 +70,46 @@ def collect_oi_for_symbols(watchlist_df, daily_token):
     return collected
 
 
+def _resolve_index_snapshot_symbol(index_symbol):
+    symbol = str(index_symbol or "").upper().strip()
+    if symbol == "SENSEX":
+        return "SENSEX"
+    return "NIFTY"
+
+
+def collect_index_oi_snapshots(daily_token):
+    collected = 0
+    for index_symbol in INDEX_TRACKERS.keys():
+        try:
+            expiry = local_db.query_latest_oi_expiry(index_symbol)
+            if not expiry:
+                expiry = ""
+
+            df_chain, meta = api.get_option_chain_snapshot(_resolve_index_snapshot_symbol(index_symbol), daily_token=daily_token)
+            if df_chain.empty:
+                continue
+
+            strikes_data = []
+            for _, chain_row in df_chain.iterrows():
+                strikes_data.append({
+                    "strike": chain_row["strike"],
+                    "call_oi": chain_row["call_oi"],
+                    "put_oi": chain_row["put_oi"],
+                    "call_oi_change": chain_row.get("call_oi_change", 0),
+                    "put_oi_change": chain_row.get("put_oi_change", 0),
+                })
+
+            snapshot_underlying = meta.get("underlying", index_symbol)
+            snapshot_expiry = meta.get("expiry", expiry)
+            local_db.save_oi_snapshot(snapshot_underlying, snapshot_expiry, strikes_data)
+            collected += 1
+        except Exception as e:
+            print(f"Index OI snapshot failed for {index_symbol}: {e}")
+            continue
+
+    return collected
+
+
 def background_oi_collector(gcp_creds_dict, dhan_client_id, sync_interval=60):
     """
     Background thread that periodically collects OI snapshots for F&O items.
@@ -86,11 +138,11 @@ def background_oi_collector(gcp_creds_dict, dhan_client_id, sync_interval=60):
 
                 df_watchlist = fetch_dataframe_safe("Sheet1", is_sheet1=True)
                 if df_watchlist.empty:
-                    last_collect_time = now_epoch
-                    time.sleep(min(sync_interval, 10))
-                    continue
+                    collected = 0
+                else:
+                    collected = collect_oi_for_symbols(df_watchlist, daily_token)
 
-                collected = collect_oi_for_symbols(df_watchlist, daily_token)
+                collected += collect_index_oi_snapshots(daily_token)
                 last_collect_time = now_epoch
                 if collected > 0:
                     print(f"OI Collector: Saved snapshots for {collected} underlying(s)")

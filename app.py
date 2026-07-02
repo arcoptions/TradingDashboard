@@ -19,9 +19,10 @@ import derivatives_engine as de
 import local_db
 import recommendation_engine as re
 from ui_components import tab_recommendations
+import oi_collector
 
 # UI COMPONENTS
-from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, tab_orders, trade_inspector
+from ui_components import tab_options, tab_stocks, tab_study, tab_telegram, tab_scanners, tab_orders, trade_inspector, tab_index_oi
 try:
     import modals
 except ImportError:
@@ -174,6 +175,12 @@ def main():
 
         # Daemon threads are cache-initialized once; avoid header reads on each rerun.
         api.start_cron_daemon_v12(watchlist_ws, scanner_ws, settings_ws, [], [])
+        if not st.session_state.get("oi_collector_started", False):
+            try:
+                oi_collector.start_oi_collector_daemon(st.secrets["gcp_service_account"], st.secrets["dhan"]["dhan_client_id"], sync_interval=60)
+                st.session_state["oi_collector_started"] = True
+            except Exception:
+                pass
         
     except Exception as e:
         st.error(f"Critical Systems Error: Could not connect to Google Data Core. {e}")
@@ -432,8 +439,8 @@ def main():
     }
     disabled_cols = ["Decision", "Score", "Recommendation", "Sector Strength %", "Base Asset", "Sector/Industry", "Live Price", "Vs Entry", "Target Status", "Entry vs Live %"]
 
-    t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_recs, t_tel = st.tabs([
-        "Options", "Stocks", "Dhan Positions", "Sector Heatmap", "Scanners", "Stocks to Study", "📊 Recommendations", "Telegram Data"
+    t_opt, t_stk, t_ord, t_htmap, t_scan, t_study, t_recs, t_tel, t_idxoi = st.tabs([
+        "Options", "Stocks", "Dhan Positions", "Sector Heatmap", "Scanners", "Stocks to Study", "📊 Recommendations", "Telegram Data", "Index OI"
     ])
 
     with t_opt: tab_options.render(watchlist_ws, filtered_df, sheet_headers, view_cols, table_column_config, disabled_cols)
@@ -503,6 +510,7 @@ def main():
 
     with t_study: tab_study.render()
     with t_tel: tab_telegram.render(sh, watchlist_symbols, sheet_headers)
+    with t_idxoi: tab_index_oi.render(interval_seconds=60)
 
 if __name__ == "__main__":
     main()
