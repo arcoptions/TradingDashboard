@@ -330,6 +330,99 @@ def _fetch_option_chain_payload(asset_symbol, daily_token=None):
     return contract_meta, None
 
 
+def get_index_option_chain_snapshot(index_symbol, daily_token=None):
+    underlying_upper = str(index_symbol or "").strip().upper()
+    if not underlying_upper:
+        return pd.DataFrame(), {}
+
+    scrip_df = get_dhan_scrip_master()
+    if scrip_df.empty:
+        return pd.DataFrame(), {}
+
+    candidate_symbols = [underlying_upper]
+    if underlying_upper == "SENSEX":
+        candidate_symbols = ["SENSEX1", "SENSEX", "BSESENSEX"]
+
+    candidate_rows = scrip_df[scrip_df['SEM_TRADING_SYMBOL'].astype(str).str.upper().isin(candidate_symbols)].copy()
+    if candidate_rows.empty:
+        candidate_rows = scrip_df[scrip_df['SEM_TRADING_SYMBOL'].astype(str).str.upper().str.contains(underlying_upper, regex=False, na=False)].copy()
+    if candidate_rows.empty:
+        return pd.DataFrame(), {}
+
+    headers = _build_dhan_headers(daily_token=daily_token)
+    seen_combinations = set()
+
+    for _, row in candidate_rows.iterrows():
+        underlying_id = int(row['SEM_SMST_SECURITY_ID'])
+        exch = str(row['SEM_EXM_EXCH_ID']).strip().upper()
+        seg = str(row['SEM_SEGMENT']).strip().upper()
+        if seg == 'I':
+            seg_candidates = ["IDX_I", "NSE_I", "BSE_I"]
+        elif exch == 'BSE':
+            seg_candidates = ["BSE_I", "IDX_I", "BSE_EQ"]
+        else:
+            seg_candidates = ["IDX_I", "NSE_EQ", "NSE_I"]
+
+        for underlying_seg in seg_candidates:
+            combo_key = (underlying_id, underlying_seg)
+            if combo_key in seen_combinations:
+                continue
+            seen_combinations.add(combo_key)
+
+            try:
+                exp_res = requests.post(
+                    "https://api.dhan.co/v2/optionchain/expirylist",
+                    headers=headers,
+                    json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg},
+                    timeout=5,
+                )
+                if exp_res.status_code != 200 or not exp_res.json().get("data"):
+                    continue
+                exp_list = exp_res.json()["data"]
+                if not exp_list:
+                    continue
+                valid_expiry = exp_list[0]
+
+                res = requests.post(
+                    "https://api.dhan.co/v2/optionchain",
+                    headers=headers,
+                    json={"UnderlyingScrip": underlying_id, "UnderlyingSeg": underlying_seg, "Expiry": valid_expiry},
+                    timeout=10,
+                )
+                if res.status_code == 200 and res.json().get("data"):
+                    data_obj = res.json()["data"]
+                    rows = []
+                    for strike_str, strike_data in data_obj.get("oc", {}).items():
+                        ce_node = strike_data.get("ce", {}) or {}
+                        pe_node = strike_data.get("pe", {}) or {}
+                        rows.append({
+                            "strike": float(strike_str),
+                            "call_oi": float(ce_node.get("oi", 0) or 0),
+                            "put_oi": float(pe_node.get("oi", 0) or 0),
+                            "call_oi_change": float(ce_node.get("oi_change", ce_node.get("change_in_oi", ce_node.get("previous_oi", 0))) or 0),
+                            "put_oi_change": float(pe_node.get("oi_change", pe_node.get("change_in_oi", pe_node.get("previous_oi", 0))) or 0),
+                        })
+
+                    df_chain = pd.DataFrame(rows)
+                    if df_chain.empty:
+                        return df_chain, {}
+
+                    df_chain = df_chain.sort_values(by="strike").reset_index(drop=True)
+                    meta = {
+                        "underlying": underlying_upper,
+                        "expiry": valid_expiry,
+                        "spot_price": float(data_obj.get("last_price", 0) or 0),
+                        "target_strike": 0.0,
+                        "max_call_oi_strike": float(df_chain.loc[df_chain["call_oi"].idxmax(), "strike"]),
+                        "max_put_oi_strike": float(df_chain.loc[df_chain["put_oi"].idxmax(), "strike"]),
+                    }
+                    return df_chain, meta
+            except Exception:
+                continue
+
+    return pd.DataFrame(), {}
+
+
 def get_option_chain_metrics(asset_symbol, daily_token=None):
     contract_meta, data_obj = _fetch_option_chain_payload(asset_symbol, daily_token=daily_token)
     if not contract_meta or not data_obj:

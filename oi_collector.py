@@ -81,11 +81,7 @@ def collect_index_oi_snapshots(daily_token):
     collected = 0
     for index_symbol in INDEX_TRACKERS.keys():
         try:
-            expiry = local_db.query_latest_oi_expiry(index_symbol)
-            if not expiry:
-                expiry = ""
-
-            df_chain, meta = api.get_option_chain_snapshot(_resolve_index_snapshot_symbol(index_symbol), daily_token=daily_token)
+            df_chain, meta = api.get_index_option_chain_snapshot(_resolve_index_snapshot_symbol(index_symbol), daily_token=daily_token)
             if df_chain.empty:
                 continue
 
@@ -100,7 +96,7 @@ def collect_index_oi_snapshots(daily_token):
                 })
 
             snapshot_underlying = meta.get("underlying", index_symbol)
-            snapshot_expiry = meta.get("expiry", expiry)
+            snapshot_expiry = meta.get("expiry", "")
             local_db.save_oi_snapshot(snapshot_underlying, snapshot_expiry, strikes_data)
             collected += 1
         except Exception as e:
