@@ -48,15 +48,25 @@ def render(interval_seconds=60):
 
     for underlying in INDEX_UNDERLYINGS:
         st.markdown(f"#### {underlying} OI")
-        expiry = local_db.query_latest_oi_expiry(underlying)
-        latest_rows = local_db.query_latest_oi_chain(underlying, expiry=expiry if expiry else None)
+        latest_rows = local_db.query_latest_oi_chain(underlying)
         if not latest_rows:
             st.info(f"No OI snapshots available yet for {underlying}.")
             continue
 
         df_live = pd.DataFrame(latest_rows)
+
+        expiry = ""
         if "expiry" in df_live.columns:
+            expiry_series = df_live["expiry"].fillna("").astype(str)
+            non_empty_expiries = expiry_series[expiry_series.str.strip() != ""]
+            if not non_empty_expiries.empty:
+                expiry = non_empty_expiries.iloc[0]
+                df_live = df_live[df_live["expiry"].fillna("").astype(str) == expiry].copy()
             df_live = df_live.drop(columns=["expiry"])
+
+        if df_live.empty:
+            st.info(f"No usable OI snapshots available yet for {underlying}.")
+            continue
 
         latest_ts = str(df_live["timestamp"].iloc[0]) if "timestamp" in df_live.columns else "-"
         st.caption(f"Latest snapshot: {latest_ts} | Expiry: {expiry or '-'}")
