@@ -339,15 +339,24 @@ def get_index_option_chain_snapshot(index_symbol, daily_token=None):
     if scrip_df.empty:
         return pd.DataFrame(), {}
 
-    candidate_symbols = [underlying_upper]
-    if underlying_upper == "SENSEX":
-        candidate_symbols = ["SENSEX1", "SENSEX", "BSESENSEX"]
+    exact_priority = {
+        "NIFTY": ["NIFTY"],
+        "SENSEX": ["SENSEX", "SENSEX1", "BSESENSEX"],
+    }
+    candidate_symbols = exact_priority.get(underlying_upper, [underlying_upper])
 
     candidate_rows = scrip_df[scrip_df['SEM_TRADING_SYMBOL'].astype(str).str.upper().isin(candidate_symbols)].copy()
     if candidate_rows.empty:
         candidate_rows = scrip_df[scrip_df['SEM_TRADING_SYMBOL'].astype(str).str.upper().str.contains(underlying_upper, regex=False, na=False)].copy()
     if candidate_rows.empty:
         return pd.DataFrame(), {}
+
+    if underlying_upper == "SENSEX":
+        candidate_rows = candidate_rows.assign(
+            _priority=candidate_rows['SEM_TRADING_SYMBOL'].astype(str).str.upper().map(
+                lambda symbol: 0 if symbol == 'SENSEX' else 1 if symbol == 'SENSEX1' else 2
+            )
+        ).sort_values(by=["_priority", "SEM_TRADING_SYMBOL"]).drop(columns=["_priority"])
 
     headers = _build_dhan_headers(daily_token=daily_token)
     seen_combinations = set()
@@ -357,7 +366,7 @@ def get_index_option_chain_snapshot(index_symbol, daily_token=None):
         exch = str(row['SEM_EXM_EXCH_ID']).strip().upper()
         seg = str(row['SEM_SEGMENT']).strip().upper()
         if seg == 'I':
-            seg_candidates = ["IDX_I", "NSE_I", "BSE_I"]
+            seg_candidates = ["NSE_I", "BSE_I", "IDX_I"] if underlying_upper == "NIFTY" else ["BSE_I", "IDX_I", "NSE_I"]
         elif exch == 'BSE':
             seg_candidates = ["BSE_I", "IDX_I", "BSE_EQ"]
         else:
