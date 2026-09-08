@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# --- Secrets: never commit ---
+.streamlit/secrets.toml
+*.token
+service_account*.json
+gcp_credentials*.json
+
+# --- Local databases ---
+*.db
+*.db-journal
+*.sqlite3
+
+# --- CAS predictor market-data cache (large, regenerable from Dhan) ---
+cas_predictor/cache/
+cas_analysis/data/*.csv
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
